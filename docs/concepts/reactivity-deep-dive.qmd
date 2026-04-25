@@ -292,6 +292,241 @@ def reconnect(self):
 
 React's model works for UI because components are cheap to re-render (virtual DOM diffs). Backend services are expensive — you don't want to re-create database connections because a config value changed. You want to update just the part that cares about that config value. That's what Effects do.
 
+## Identity Comparison: Why `is` Not `==`
+
+`Signal.set()` uses **identity** comparison, not equality:
+
+```python
+def set(self, value):
+    if value is self._value:     # ← identity, not ==
+        return
+    self._value = value
+    self._version += 1
+    self._notify_subscribers()
+```
+
+This is deliberate. If you mutate a dict in place and call `set()` with the same object,
+nothing happens — the Signal sees the same identity and skips notification. To trigger
+subscribers, you must create a **new object**:
+
+```python
+# WRONG — mutate in place, same identity, no notification
+data = signal.peek()
+data["key"] = "new_value"
+signal.set(data)            # data is data → skipped!
+
+# RIGHT — new dict, different identity, triggers notification
+data = dict(signal.peek())  # copy → new object
+data["key"] = "new_value"
+signal.set(data)            # new dict is not old dict → notifies!
+```
+
+This is exactly how ConfigProvider works. `config.set("key", value)` copies the dict,
+modifies the copy, then calls `self._state.set(new_dict)`. New identity → subscribers fire.
+
+
+## Two-Level Reactivity: The Config Chain
+
+This is the mechanism that makes most of the commercial patterns work. It's subtle
+and worth understanding fully.
+
+### Level 1: Service identity (kernel-managed)
+
+Every injected service is a Signal on the Runtime:
+
+```python
+# Inside Runtime.__getattr__:
+def __getattr__(self, name):
+    return self._signals[name].get()    # ← outer Signal: "which service is config?"
+```
+
+When you read `self.rt.config` inside an `@effect`, the outer Signal is tracked.
+If the kernel replaces the config service entirely (different object), the effect re-runs.
+
+### Level 2: Service state (provider-managed)
+
+The ConfigProvider has its own internal Signal for the config data:
+
+```python
+class ConfigProvider:
+    def activate(self):
+        self._state: Signal[dict] = Signal(data)     # ← inner Signal: "what data does config hold?"
+
+    def get(self, key, default=None):
+        data = self._state.get()    # ← reactive read of inner Signal
+        # ... traverse data for dotted key
+
+    def set(self, key, value):
+        data = dict(self._state.peek())   # copy (new identity)
+        self._set_in(data, key, value)
+        self._state.set(data)             # ← notify: data changed
+```
+
+### The two levels compose
+
+When a consumer reads config inside an `@effect`:
+
+```python
+@effect
+def on_config_change(self):
+    url = self.rt.config.get("my-app.url")
+    #     ^^^^^^^^^^^^^^ → Level 1: outer Signal.get() — tracks "config" service
+    #                    ^^^^^^^^^^^^^^^^^^^^^^^^^ → Level 2: inner Signal.get() — tracks config data
+```
+
+The effect is now subscribed to **both** Signals. It re-runs if:
+
+- The config service is replaced (Level 1 — e.g., hot_add a different ConfigProvider)
+- The config data changes (Level 2 — e.g., `config.set("my-app.url", "...")`)
+
+This is why `config.set()` triggers `@effect` and `@computed` on consumers —
+the internal Signal notification propagates through the reactive graph, even though
+the outer Signal (which service is injected) didn't change.
+
+### The credential chain
+
+Secret rotation works because the chain extends through CredentialProvider:
+
+```
+consumer @effect
+  └── reads self.rt.creds.get("api_key", target="prod")
+        └── _ScopedCredentials.get()
+              └── CredentialProvider.get()
+                    └── self._config.get("apps.db-client.targets.prod.api_key")
+                          └── ConfigProvider._state.get()   ← inner Signal tracked!
+```
+
+The consumer's `@effect` is the active consumer during the entire chain.
+`ConfigProvider._state.get()` at the bottom tracks it. When the config data
+changes (vault rotates a key), the Signal at the bottom notifies the effect at the top.
+
+No intermediate layers need to know about reactivity. CredentialProvider is a plain
+pass-through — it calls `self._config.get()` which calls `self._state.get()`.
+The tracking happens because `_active_consumer` is set at the top (the consumer's
+effect) and read at the bottom (the config Signal).
+
+
+## Component-Local Signals
+
+Signals aren't just for kernel-injected services. Components can create their own:
+
+```python
+@component("payment-svc")
+class PaymentService:
+    @lifecycle.activate
+    def activate(self):
+        self._state = Signal("closed")          # ← component-local Signal
+
+    @computed
+    def breaker_state(self):
+        return self._state.get()                # ← tracked by the reactive graph
+
+    @effect
+    def on_state_change(self):
+        state = self._state.get()               # ← also tracked
+        self.event_log.append(f"breaker:{state}")
+```
+
+When the component calls `self._state.set("open")`, the `@effect` re-runs
+and the `@computed` is marked dirty — same mechanics as kernel-injected Signals.
+
+This is how the circuit breaker pattern works. The breaker state is a Signal,
+so `@effect` logs transitions and `@computed` reflects the current state.
+No kernel involvement. The reactive primitives work identically everywhere.
+
+
+## The Reactive Propagation Pipeline
+
+When a service is hot-added or hot-removed, the kernel propagates the change
+to all consumers. Here's the full pipeline:
+
+```
+1. kernel.hot_add(GermanDict)
+   └── registry.provide("IDictionary", german_dict, "dict-de", props)
+       └── registry._listeners fire with event="provide"
+           └── kernel._on_global_service_change(event, entry)
+               │   for each active consumer that @requires("IDictionary"):
+               └── rt.inject("dicts", registry.require_all("IDictionary"))
+                   └── self._signals["dicts"].set([en, fr, de])   ← new list, new identity
+                       └── Signal._notify_subscribers()
+                           └── consumer Effect.run()
+                               └── @effect re-runs, sees new list
+```
+
+Key points:
+
+- `_on_global_service_change` is registered once at boot via `_setup_reactive_propagation()`
+- It fires on **every** registry change (provide/unprovide)
+- It re-injects services into all affected consumer Runtimes
+- The re-injection calls `Signal.set()` with a new object → triggers effects
+- This is Level 1 reactivity (service identity changed)
+
+For ConfigProvider's internal state changes (Level 2), the pipeline is shorter:
+
+```
+1. config.set("key", "value")
+   └── self._state.set(new_dict)       ← new dict, new identity
+       └── Signal._notify_subscribers()
+           └── consumer Effect.run()
+               └── @effect re-runs, reads new config value
+```
+
+No kernel involvement — the Signal notification goes directly from the
+ConfigProvider to the consumer's effect.
+
+
+## Async Effects and ContextVar
+
+Async effects need special handling. When `asyncio.create_task()` is called,
+it **copies** the current context — including `_active_consumer`:
+
+```python
+class Effect:
+    def run(self):
+        if self._is_async:
+            # Set context BEFORE create_task so the task inherits it
+            token = _active_consumer.set(self)
+
+            async def _tracked_async():
+                await self._fn()       # ← runs in the task's context copy
+                                       #   _active_consumer = self (inherited)
+
+            loop.create_task(_tracked_async())   # ← copies context here
+
+            # Reset in the CALLING context (not the task's)
+            _active_consumer.reset(token)
+```
+
+The key insight: `create_task()` copies the context at call time. So:
+
+1. We set `_active_consumer = self` in the calling context
+2. `create_task()` copies it — the task sees `_active_consumer = self`
+3. We immediately reset in the calling context — no leftover state
+4. The task runs independently with its own `_active_consumer`
+
+This means async effects track dependencies correctly even when multiple
+async effects run concurrently — each task has its own context copy.
+
+
+## peek() vs get(): Opting Out of Tracking
+
+Sometimes you want to read a Signal without creating a dependency:
+
+```python
+@effect
+def log_status(self):
+    config = self.rt.config            # tracked — re-runs when config changes
+    state = self._state.peek()         # NOT tracked — won't trigger re-run
+    print(f"state={state}")
+```
+
+`peek()` returns the value but skips the `_active_consumer` check. Use it when
+you want to read data without subscribing to changes — for logging, debugging,
+or one-time reads inside effects that shouldn't trigger on that particular signal.
+
+`self.rt.peek("config")` on the Runtime does the same for injected services.
+
+
 ## Batch: Grouping Changes
 
 Multiple Signal changes can be grouped. Effects fire once at the end:
