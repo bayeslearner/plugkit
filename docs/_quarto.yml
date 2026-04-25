@@ -36,6 +36,8 @@ website:
             href: patterns/circuit-breaker.qmd
           - text: "Audit Trail"
             href: patterns/audit-trail.qmd
+          - text: "Unit Testing"
+            href: patterns/unit-testing.qmd
       - text: "Reference"
         menu:
           - text: "Traits (L0-L3)"
@@ -75,6 +77,7 @@ website:
         - patterns/extension-bundle.qmd
         - patterns/circuit-breaker.qmd
         - patterns/audit-trail.qmd
+        - patterns/unit-testing.qmd
     - title: "Reference"
       contents:
         - ref/traits.qmd

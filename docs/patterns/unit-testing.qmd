@@ -1,0 +1,178 @@
+---
+title: "Unit Testing"
+subtitle: "Clean component isolation makes testing trivial — no mocking frameworks needed."
+---
+
+## The Problem
+
+Backend services are notoriously hard to unit test. Dependencies are tangled:
+the config system pulls from environment variables, the logger writes to stdout,
+the database client opens connections at import time. Testing one service means
+booting half the application.
+
+Mocking frameworks (unittest.mock, pytest-mock) patch over this mess, but they're
+brittle — mock the wrong thing, mock at the wrong level, and your test passes
+while production breaks.
+
+SignalPy components are isolated by construction: every dependency enters through
+`@requires` and is accessed via `self.rt`. This means you control every input.
+
+
+## The Three Strategies
+
+| Strategy | When to use | What you boot |
+|----------|------------|---------------|
+| **Minimal kernel** | Most unit tests | Real `ConfigProvider` + lightweight fakes |
+| **Reactive testing** | Testing `@computed`/`@effect` | Same, then call `config.set()` and assert |
+| **Bus event testing** | Testing publish/subscribe | Add an `EventCollector` component |
+
+
+## Strategy 1: Minimal Kernel
+
+Boot only what you need. The real `ConfigProvider` is a leaf (no deps, Signal-backed)
+so use it — you get reactive config for free. Only fake things with side effects.
+
+```python
+from signalpy.kernel import Kernel, component, provides, lifecycle
+from signalpy.providers.config import ConfigProvider
+
+# Fake logger — captures calls for assertion
+@component("fake-logger")
+@provides("ILogger")
+class FakeLogger:
+    @lifecycle.activate
+    def activate(self):
+        self.messages = []
+
+    def info(self, msg, **kw):
+        self.messages.append(("info", msg))
+
+    def warning(self, msg, **kw):
+        self.messages.append(("warning", msg))
+
+    def error(self, msg, **kw):
+        self.messages.append(("error", msg))
+
+    def debug(self, msg, **kw):
+        self.messages.append(("debug", msg))
+```
+
+The test boots a 3-component kernel:
+
+```python
+kernel = Kernel()
+kernel.discover([ConfigProvider, FakeLogger, OrderService])
+kernel.instantiate("config", properties={
+    "defaults": {"orders": {"tax_rate": 0.08}}  # <1>
+})
+await kernel.boot()
+
+result = await kernel.bus.invoke("order-service.place", {
+    "item": "Widget", "quantity": 3, "price": 10.0,
+})
+assert result["tax"] == 2.4  # 30 * 0.08 <2>
+
+logger = kernel.lifecycle.get_instance("fake-logger").instance
+assert any("0.08" in msg for _, msg in logger.messages)  # <3>
+```
+1. Test config injected as properties — no YAML files, no env vars.
+2. Business logic tested in isolation.
+3. Assert on fake logger — `@effect` fired and logged the tax rate.
+
+::: {.callout-tip}
+## Why use the real ConfigProvider?
+It has zero dependencies, it's Signal-backed (so `@computed` and `@effect` work),
+and it's 200 lines of code you don't need to fake. Use the real thing.
+Only fake what has side effects: loggers, storage, external APIs.
+:::
+
+
+## Strategy 2: Reactive Testing
+
+The kernel's reactivity is testable. Change config → assert that `@computed`
+recomputes and `@effect` re-runs:
+
+```python
+svc = kernel.lifecycle.get_instance("order-service").instance
+config = kernel.registry.require("IConfig")
+
+assert svc.tax_rate() == 0.1              # <1>
+
+config.set("orders.tax_rate", 0.15)        # <2>
+
+assert svc.tax_rate() == 0.15             # <3>
+
+logger = kernel.lifecycle.get_instance("fake-logger").instance
+assert any("0.15" in msg for _, msg in logger.messages)  # <4>
+```
+1. `@computed` returns the initial value.
+2. `config.set()` updates the internal Signal — new dict, new identity.
+3. `@computed` recomputed — it tracked the config Signal as a dependency.
+4. `@effect` re-ran — it also tracked the config Signal.
+
+This is synchronous. No waiting, no polling, no sleep. Signal notifications
+are immediate (unless inside a `batch()`).
+
+
+## Strategy 3: Bus Event Testing
+
+Add an `EventCollector` component that subscribes to events and captures them:
+
+```python
+@component("event-collector")
+class EventCollector:
+    @lifecycle.activate
+    def activate(self):
+        self.events = []
+
+    @subscribe("order.*", description="Capture all order events")
+    def on_order_event(self, event_type, data):
+        self.events.append({"type": event_type, "data": data})
+```
+
+Then assert on captured events:
+
+```python
+kernel.discover([ConfigProvider, FakeLogger, OrderService, EventCollector])
+await kernel.boot()
+
+await kernel.bus.invoke("order-service.place", {"item": "Test", ...})
+
+collector = kernel.lifecycle.get_instance("event-collector").instance
+assert len(collector.events) == 1
+assert collector.events[0]["type"] == "order.placed"
+```
+
+The `EventCollector` is a real component — it participates in the kernel lifecycle,
+gets wildcard subscription via `@subscribe("order.*")`, and captures events
+that the component under test publishes via `self.rt.publish()`.
+
+
+## What NOT to Fake
+
+| Real | Fake |
+|------|------|
+| `ConfigProvider` — leaf, Signal-backed, zero deps | `ILogger` — avoid stdout in tests |
+| `CredentialProvider` — reads from config (test config) | `IStorage` — avoid filesystem I/O |
+| Bus routing — it's the kernel, not a side effect | External API clients — avoid network |
+
+The kernel itself is not a mock. `Kernel()`, `discover()`, `boot()`, `bus.invoke()` are
+all real. You're testing the actual component lifecycle, actual reactive graph,
+actual bus dispatch. The only fakes are for I/O.
+
+
+## Running
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.unit_testing
+PYTHONPATH=src python -m pytest src/signalpy/tests/test_examples.py::TestUnitTestingPatterns -v
+```
+
+
+## Key Takeaway
+
+Components declare their dependencies with `@requires`. The kernel injects them
+via `self.rt`. In tests, you control what gets injected by choosing what to `discover()`.
+Use the real `ConfigProvider` (it's free), fake only I/O boundaries. The reactive
+graph works identically in tests and production — `config.set()` triggers `@effect`
+and `@computed` exactly the same way. No mocking framework needed.

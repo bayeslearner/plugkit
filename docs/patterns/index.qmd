@@ -17,10 +17,11 @@ Each pattern has a dedicated deep-dive page, a runnable example in `src/signalpy
 | 4 | [Extension Bundle](extension-bundle.qmd) | hot_add + @subscribe + bus calls = plugin system |
 | 5 | [Circuit Breaker](circuit-breaker.qmd) | Components create their own Signals for local reactive state |
 | 6 | [Audit Trail](audit-trail.qmd) | @subscribe wildcards + set_policy = cross-cutting concerns |
+| 7 | [Unit Testing](unit-testing.qmd) | Minimal kernel + fakes = isolated tests with real reactivity |
 
 ## The Thesis
 
-These six patterns span different domains — credential management, experimentation, multi-tenancy, plugin systems, resilience, and compliance. They use different kernel features — `@effect`, `@computed`, `@subscribe`, `hot_add`, `set_policy`, `instantiate()`, map injection, target routing.
+These seven patterns span different domains — credential management, experimentation, multi-tenancy, plugin systems, resilience, compliance, and testing. They use different kernel features — `@effect`, `@computed`, `@subscribe`, `hot_add`, `set_policy`, `instantiate()`, map injection, target routing.
 
 None of them required kernel changes. The kernel is 3 reactive primitives (Signal, Computed, Effect) + component wiring. The patterns are just components.
 

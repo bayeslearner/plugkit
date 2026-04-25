@@ -331,3 +331,71 @@ class TestAuditTrail:
         assert "bob" in notif.sent[0]
 
         await kernel.shutdown()
+
+
+# ══════════════════════════════════════════════════════════════════
+# Example 14: Unit Testing Patterns
+# ══════════════════════════════════════════════════════════════════
+
+class TestUnitTestingPatterns:
+    @pytest.mark.asyncio
+    async def test_minimal_kernel_with_fakes(self):
+        """Boot only the component under test + minimal fakes."""
+        from signalpy.examples.unit_testing import OrderService, FakeLogger
+
+        kernel = Kernel()
+        kernel.discover([ConfigProvider, FakeLogger, OrderService])
+        kernel.instantiate("config", properties={
+            "defaults": {"orders": {"tax_rate": 0.08}}
+        })
+        await kernel.boot()
+
+        r = await kernel.bus.invoke("order-service.place", {
+            "item": "Widget", "quantity": 2, "price": 25.0,
+        })
+        assert r["subtotal"] == 50.0
+        assert r["tax"] == 4.0  # 50 * 0.08
+        assert r["total"] == 54.0
+
+        await kernel.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_reactive_computed_updates_on_config_change(self):
+        """@computed reflects config changes instantly."""
+        from signalpy.examples.unit_testing import OrderService, FakeLogger
+
+        kernel = Kernel()
+        kernel.discover([ConfigProvider, FakeLogger, OrderService])
+        kernel.instantiate("config", properties={
+            "defaults": {"orders": {"tax_rate": 0.1}}
+        })
+        await kernel.boot()
+
+        svc = kernel.lifecycle.get_instance("order-service").instance
+        assert svc.tax_rate() == 0.1
+
+        config = kernel.registry.require("IConfig")
+        config.set("orders.tax_rate", 0.2)
+        assert svc.tax_rate() == 0.2
+
+        await kernel.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_bus_event_capture_with_collector(self):
+        """EventCollector captures bus events for assertion."""
+        from signalpy.examples.unit_testing import OrderService, FakeLogger, EventCollector
+
+        kernel = Kernel()
+        kernel.discover([ConfigProvider, FakeLogger, OrderService, EventCollector])
+        kernel.instantiate("config", properties={"defaults": {}})
+        await kernel.boot()
+
+        await kernel.bus.invoke("order-service.place", {
+            "item": "Test", "quantity": 1, "price": 10.0,
+        })
+
+        collector = kernel.lifecycle.get_instance("event-collector").instance
+        assert len(collector.events) == 1
+        assert collector.events[0]["type"] == "order.placed"
+
+        await kernel.shutdown()
