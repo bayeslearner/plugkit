@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.coverage
+docs/_site/
+docs/.quarto/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.claude/scheduled_tasks.lock

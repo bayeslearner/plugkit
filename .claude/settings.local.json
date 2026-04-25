@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p kernel_v1)",
+      "Bash(cp -r kernel/* kernel_v1/)",
+      "Bash(cp -r providers kernel_v1/providers)",
+      "Bash(cp -r adapters kernel_v1/adapters)",
+      "Bash(find kernel_v1/ -name \"*.py\" ! -path \"*__pycache__*\" -exec sed -i '' 's/from kernel import/from kernel_v1 import/g; s/from kernel\\\\./from kernel_v1./g; s/from providers\\\\./from kernel_v1.providers./g; s/from adapters\\\\./from kernel_v1.adapters./g' {} +)",
+      "Bash(find kernel_v1/ -name \"*.py\" ! -path \"*__pycache__*\" -exec sed -i '' 's/from kernel import/from kernel_v1 import/g' {} +)",
+      "Bash(find kernel_v1/ -name \"*.py\" ! -path \"*__pycache__*\" -exec sed -i '' 's/from kernel\\\\./from kernel_v1./g' {} +)",
+      "Bash(find kernel_v1/ -name \"*.py\" ! -path \"*__pycache__*\" -exec sed -i '' 's/from providers\\\\./from kernel_v1.providers./g' {} +)",
+      "Bash(find kernel_v1/ -name \"*.py\" ! -path \"*__pycache__*\" -exec sed -i '' 's/from adapters\\\\./from kernel_v1.adapters./g' {} +)",
+      "Bash(python3 -c ' *)",
+      "Bash(rm kernel/__pycache__/*.pyc)",
+      "Bash(rm -rf kernel/__pycache__)",
+      "Bash(ls kernel/*.py)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

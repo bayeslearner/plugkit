@@ -1,0 +1,93 @@
+---
+title: "1. Your First Component"
+subtitle: "A component is a plain Python class with one decorator."
+---
+
+## The Goal
+
+By the end of this page you'll have a class that the kernel manages — it instantiates it, activates it, and shuts it down. You write zero lifecycle plumbing.
+
+## One Decorator
+
+```python
+from reactpy.kernel import component
+
+@component("greeter")
+class Greeter:
+    pass
+```
+
+That's a component. The `@component("greeter")` decorator tells the kernel: "this class is a component factory named `greeter`." The kernel can instantiate it, track its state, and manage its lifecycle.
+
+The class is still a normal Python class. No base class, no metaclass, no framework inheritance.
+
+## Lifecycle
+
+Components have a lifecycle: the kernel creates them, activates them (your setup code runs), and later deactivates them (your cleanup code runs):
+
+```python
+from reactpy.kernel import component, lifecycle
+
+@component("greeter")
+class Greeter:
+    @lifecycle.activate
+    def activate(self):
+        print("Greeter is ready")
+
+    @lifecycle.deactivate
+    def deactivate(self):
+        print("Greeter shutting down")
+```
+
+The method names don't matter — call them `activate`, `start`, `setup`, whatever. The `@lifecycle.activate` decorator marks them.
+
+## Boot It
+
+```python
+import asyncio
+from reactpy.kernel import Kernel, component, lifecycle
+
+@component("greeter")
+class Greeter:
+    @lifecycle.activate
+    def activate(self):
+        print("Greeter is ready")
+
+    @lifecycle.deactivate
+    def deactivate(self):
+        print("Greeter shutting down")
+
+async def main():
+    kernel = Kernel()
+    kernel.discover([Greeter])     # tell the kernel about your class
+    await kernel.boot()            # instantiate + activate
+    await kernel.shutdown()        # deactivate
+
+asyncio.run(main())
+```
+
+```
+Greeter is ready
+Greeter shutting down
+```
+
+## What Happened
+
+Three lines of kernel code did this:
+
+1. `discover([Greeter])` — the kernel read the `@component` metadata, registered the factory
+2. `boot()` — the kernel instantiated `Greeter()`, called your `activate()`
+3. `shutdown()` — the kernel called your `deactivate()`
+
+::: {.callout-note}
+## The deal
+You declare (with decorators), the kernel executes (lifecycle, dependencies, wiring). Your class never calls the kernel. The kernel calls you.
+:::
+
+This seems trivial with one class. It gets powerful when you have 10 components with dependencies between them — the kernel resolves the dependency graph, activates them in the right order, and shuts them down in reverse.
+
+## Run It
+
+```bash
+PYTHONPATH=src python src/reactpy/examples/01_hello.py
+```

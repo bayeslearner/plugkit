@@ -1,0 +1,103 @@
+---
+title: "2. Give and Take"
+subtitle: "Components provide services and require services from other components."
+---
+
+## The Problem
+
+You want to build a spell checker. It needs a dictionary. Without a component system, you'd instantiate the dictionary yourself, pass it in, manage its lifecycle. With the kernel: the dictionary *provides* a service, the spell checker *requires* it, the kernel wires them together.
+
+## Providing a Service
+
+```python
+from reactpy.kernel import component, provides, lifecycle
+
+@component("dict-en")
+@provides("IDictionary")
+class EnglishDict:
+    @lifecycle.activate
+    def activate(self):
+        self.words = {"hello", "world", "welcome", "to", "the", "tutorial"}
+
+    def check_word(self, word: str) -> bool:
+        return word.lower() in self.words
+```
+
+::: {.callout-note}
+`@provides("IDictionary")` registers this component in the service registry under the contract name `"IDictionary"`. Any other component can now say "I need an IDictionary" and get this one.
+:::
+
+## Requiring a Service
+
+```python
+from reactpy.kernel import component, requires, lifecycle
+
+@component("checker")
+@requires(dictionary="IDictionary")
+class SpellChecker:
+    @lifecycle.activate
+    def activate(self):
+        print("Spell checker ready")
+
+    def check(self, text: str) -> list[str]:
+        return [w for w in text.split() if not self.rt.dictionary.check_word(w)]
+```
+
+::: {.callout-note}
+`@requires(dictionary="IDictionary")` tells the kernel: "before activating me, find a component that provides `IDictionary` and make it available as `self.rt.dictionary`."
+:::
+
+## Typed Contracts
+
+Strings work, but types are better. Define a Protocol and use it everywhere:
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class IDictionary(Protocol):
+    def check_word(self, word: str) -> bool: ...
+```
+
+```python
+@provides(IDictionary)                   # type, not string
+class EnglishDict: ...
+
+@requires(dictionary=IDictionary)        # type, not string
+class SpellChecker: ...
+```
+
+::: {.callout-tip}
+## Why types?
+No magic strings to typo. IDE "find all references" works. Import errors catch mismatches at load time. Both forms work — strings for backward compat, types for new code.
+:::
+
+## Unified @requires
+
+One decorator handles all injection modes. The type hint tells the kernel what you need:
+
+| Declaration | What `self.rt.X` is | Use case |
+|---|---|---|
+| `@requires(x=IContract)` | Single service (highest ranked) | One config, one logger |
+| `@requires(x=list[IContract])` | List of all matching | All dictionaries, all plugins |
+| `@requires(x=IContract, key="lang")` | Dict keyed by property | `{"EN": en, "FR": fr}` |
+| `@requires(x=IContract, optional=True)` | Single or `None` | Optional cache |
+
+## self.rt — The Reactive Runtime
+
+Every injected service lives under `self.rt`. This is the component's window into the kernel:
+
+```python
+self.rt.dictionary   # injected service (from @requires) — reactive!
+self.rt.config       # IConfig (if required)
+self.rt.logger       # ILogger (scoped to this component)
+self.rt.invoke(...)  # call another component's runnable
+self.rt.publish(...) # emit an event
+self.rt.spawn(...)   # create a child component
+self.rt.peek("config")  # read without reactive tracking
+```
+
+::: {.callout-note}
+## self.rt is reactive
+In v2, every read through `self.rt` is a reactive read. Inside `@effect` or `@computed`, the kernel tracks what you accessed. When it changes, your effect/computed re-runs automatically.
+:::

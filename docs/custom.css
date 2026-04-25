@@ -1,0 +1,27 @@
+/* ReactPy docs — custom overrides for Quarto darkly theme */
+
+.callout-note {
+  border-left-color: #6c8cff;
+}
+
+.callout-tip {
+  border-left-color: #4ade80;
+}
+
+.callout-warning {
+  border-left-color: #fbbf24;
+}
+
+/* Level tags for traits */
+.level-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 0.1em 0.5em;
+  border-radius: 4px;
+  font-weight: 700;
+  font-family: monospace;
+}
+.l0 { background: #6c8cff22; color: #6c8cff; border: 1px solid #6c8cff; }
+.l1 { background: #a78bfa22; color: #a78bfa; border: 1px solid #a78bfa; }
+.l2 { background: #4ade8022; color: #4ade80; border: 1px solid #4ade80; }
+.l3 { background: #fbbf2422; color: #fbbf24; border: 1px solid #fbbf24; }

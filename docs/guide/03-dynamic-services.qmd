@@ -1,0 +1,138 @@
+---
+title: "3. Dynamic Services"
+subtitle: "Services come and go. Your component reacts automatically."
+---
+
+## The Problem
+
+You have two dictionaries (English, French) and a spell checker. `@requires(dictionary=IDictionary)` injects *one* dictionary. But the spell checker needs *all* dictionaries — and it needs to handle new ones appearing and old ones disappearing at runtime.
+
+In v1, you'd write `@bind`/`@unbind` callbacks. In v2, you use `@requires(dicts=list[IDictionary])` + `@effect`. The reactive engine does the rest.
+
+## Aggregate Injection
+
+```python
+@component("checker")
+@requires(dictionaries=list[IDictionary])
+class SpellChecker:
+    @lifecycle.activate
+    def activate(self):
+        print(f"Checker ready with {len(self.rt.dictionaries)} dictionaries")
+```
+
+```
+Checker ready with 2 dictionaries
+```
+
+::: {.callout-note}
+`@requires(dictionaries=list[IDictionary])` injects a *list* of all services matching the contract. The `list[C]` type hint tells the kernel "I want all of them."
+:::
+
+## Reactive Effects
+
+An `@effect` is a method that re-runs whenever its tracked dependencies change. Read `self.rt.dictionaries` inside an effect → the reactive engine tracks that. When the list changes, the effect re-runs automatically.
+
+```python
+@component("checker")
+@requires(dictionaries=list[IDictionary])
+class SpellChecker:
+
+    @lifecycle.activate
+    def activate(self):
+        self.by_language = {}
+
+    @effect
+    def rebuild_index(self):
+        # Reads self.rt.dictionaries — tracked automatically.
+        # When the list changes, this method re-runs.
+        self.by_language = {}
+        for d in self.rt.dictionaries:
+            lang = getattr(d, "_language", "??")
+            self.by_language[lang] = d
+        print(f"  Index rebuilt: {list(self.by_language.keys())}")
+```
+
+```
+  Index rebuilt: ['EN', 'FR']
+```
+
+::: {.callout-tip}
+## @effect replaces @bind/@unbind
+Instead of separate add/remove callbacks, write one method that reads the current state. The reactive engine tracks what it reads and re-runs it when those values change.
+:::
+
+## Hot-Add at Runtime
+
+```python
+@component("dict-de")
+@provides(IDictionary)
+@prop("_language", "language", "DE")
+class GermanDict:
+    @lifecycle.activate
+    def activate(self):
+        self.words = {"hallo", "welt"}
+    def check_word(self, word):
+        return word.lower() in self.words
+
+await kernel.hot_add(GermanDict)
+```
+
+```
+  Index rebuilt: ['EN', 'FR', 'DE']
+```
+
+The spell checker's `@effect` fires automatically. Zero changes to the spell checker code.
+
+## Hot-Remove
+
+```python
+await kernel.hot_remove("dict-fr")
+```
+
+```
+  Index rebuilt: ['EN', 'DE']
+```
+
+::: {.callout-note}
+## Zero code changes in the spell checker
+It didn't know German was coming. It doesn't know French left. The `@effect` kept its index current automatically.
+:::
+
+## Computed Properties
+
+A `@computed` property caches its result and recomputes only when dependencies change:
+
+```python
+@computed
+def available_languages(self):
+    return [getattr(d, "_language", "?") for d in self.rt.dictionaries]
+```
+
+Read `self.available_languages()` — always current, cached until the dictionary list changes.
+
+## Batching Changes
+
+Multiple signal changes can be grouped. Effects fire once at the end:
+
+```python
+from reactpy.kernel import batch
+
+with batch():
+    await kernel.hot_add(GermanDict)
+    await kernel.hot_add(SpanishDict)
+# @effect runs ONCE here, not twice
+```
+
+## Properties & Ranking
+
+Properties are metadata attached to a service when it registers:
+
+```python
+@component("dict-en")
+@provides(IDictionary)
+@prop("_language", "language", "EN")          # property: language = "EN"
+@prop("_ranking",  "service.ranking", 0)      # priority: 0 = highest
+class EnglishDict: ...
+```
+
+The special property `service.ranking` controls priority. When multiple services match a single `@requires`, the one with the lowest ranking wins.

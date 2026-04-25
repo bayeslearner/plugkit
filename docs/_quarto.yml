@@ -1,0 +1,71 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "ReactPy Microkernel"
+  navbar:
+    left:
+      - text: "Tutorials"
+        menu:
+          - text: "1. First Component"
+            href: guide/01-first-component.qmd
+          - text: "2. Give and Take"
+            href: guide/02-give-and-take.qmd
+          - text: "3. Dynamic Services"
+            href: guide/03-dynamic-services.qmd
+          - text: "4. Runnables & API"
+            href: guide/04-runnables-and-api.qmd
+          - text: "5. Auth & Policy"
+            href: guide/05-auth-and-policy.qmd
+          - text: "6. Building a Provider"
+            href: guide/06-building-a-provider.qmd
+      - text: "Reference"
+        menu:
+          - text: "Traits (L0-L3)"
+            href: ref/traits.qmd
+          - text: "Decorators"
+            href: ref/decorators.qmd
+          - text: "Contracts"
+            href: ref/contracts.qmd
+          - text: "Kernel API"
+            href: ref/kernel-api.qmd
+      - text: "Concepts"
+        menu:
+          - text: "Architecture"
+            href: concepts/architecture.qmd
+          - text: "Bridging External Systems"
+            href: concepts/bridging.qmd
+          - text: "Deployment Scales"
+            href: concepts/deployment.qmd
+
+  sidebar:
+    - title: "Tutorials"
+      contents:
+        - guide/01-first-component.qmd
+        - guide/02-give-and-take.qmd
+        - guide/03-dynamic-services.qmd
+        - guide/04-runnables-and-api.qmd
+        - guide/05-auth-and-policy.qmd
+        - guide/06-building-a-provider.qmd
+    - title: "Reference"
+      contents:
+        - ref/traits.qmd
+        - ref/decorators.qmd
+        - ref/contracts.qmd
+        - ref/kernel-api.qmd
+    - title: "Concepts"
+      contents:
+        - concepts/architecture.qmd
+        - concepts/bridging.qmd
+        - concepts/deployment.qmd
+
+format:
+  html:
+    theme:
+      dark: darkly
+    css: custom.css
+    code-copy: true
+    code-overflow: wrap
+    toc: true
+    toc-depth: 3

@@ -1,0 +1,102 @@
+---
+title: "Bridging External Systems"
+subtitle: "How the kernel integrates with systems it doesn't own."
+---
+
+## The Problem
+
+Real apps integrate with PostgreSQL, Redis, Phoenix, Celery. Each has its own lifecycle, config, SDK. The kernel must make these trivially easy to wrap without reimplementing or fighting them.
+
+## The Bridge Pattern
+
+A bridge component has three responsibilities:
+
+```{mermaid}
+graph LR
+    subgraph External["External System"]
+        SDK[Native SDK/API]
+        LC[Native Lifecycle]
+        CFG[Native Config]
+    end
+
+    subgraph Bridge["Bridge Component"]
+        L[1. LIFECYCLE<br/>activate → start<br/>deactivate → stop]
+        S[2. SURFACE<br/>1-3 methods<br/>covers 90% of use]
+        E[3. ESCAPE HATCH<br/>.native/.pool/.client<br/>raw SDK access]
+    end
+
+    subgraph Kernel["Kernel Components"]
+        C[Via contract<br/>self.rt.tracer.span()]
+        N[Via native<br/>self.rt.tracer.native]
+        D[Via direct<br/>import opentelemetry]
+    end
+
+    Bridge --> External
+    Kernel --> Bridge
+```
+
+## Three Access Levels
+
+| Level | Example | Portable? | Full API? |
+|---|---|---|---|
+| **1. Via contract** (recommended) | `self.rt.tracer.span("work")` | Yes — works with any backend | No — surface only |
+| **2. Via escape hatch** | `self.rt.tracer.native` | No — backend-specific | Yes — raw SDK |
+| **3. Direct import** | `import opentelemetry` | No — bypasses kernel | Yes — full control |
+
+## Bridge Examples
+
+### PostgreSQL
+
+```python
+@component("postgres")
+@provides(IDatabase)
+@requires(config=IConfig)
+class PostgresProvider:
+    @lifecycle.activate
+    def activate(self):
+        import asyncpg
+        dsn = self.rt.config.get("database.dsn")
+        self._pool = asyncpg.create_pool(dsn)
+
+    def query(self, sql, *args):  # Surface (90% of use)
+        return self._pool.fetch(sql, *args)
+
+    @property
+    def pool(self):               # Escape hatch
+        return self._pool
+
+    @lifecycle.deactivate
+    def deactivate(self):
+        self._pool.close()
+```
+
+### Redis
+
+```python
+@component("redis")
+@provides(ICache)
+@requires(config=IConfig)
+class RedisProvider:
+    @lifecycle.activate
+    def activate(self):
+        import redis
+        self._client = redis.Redis.from_url(self.rt.config.get("cache.url"))
+
+    def get(self, key): return self._client.get(key)
+    def set(self, key, val, ttl=0): self._client.set(key, val, ex=ttl or None)
+
+    @property
+    def client(self): return self._client  # Escape hatch
+```
+
+## Bridge Rules
+
+| # | Rule | Why |
+|---|---|---|
+| 1 | **Lazy import** inside `activate()`, not at module top | Fails at activation with clear error, not at import crashing the kernel |
+| 2 | **Null implementation** when unavailable | Components don't crash in dev/test without the external system |
+| 3 | **Surface covers 90%** — 1-3 methods | Don't wrap every API method |
+| 4 | **Escape hatch always available** | `.native`, `.pool`, `.client` for the other 10% |
+| 5 | **Config from kernel** | `self.rt.config.get(...)`, not own env vars |
+| 6 | **Lifecycle is bidirectional** | activate starts, deactivate shuts down gracefully |
+| 7 | **Direct import always valid** | The bridge is convenience, not a gate |

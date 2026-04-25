@@ -1,0 +1,66 @@
+---
+title: "Traits (L0–L3)"
+subtitle: "23 traits across 4 levels. What each is, how you get it, what the kernel does with it."
+---
+
+Traits are computed from what a component declares. You don't label them — the kernel figures out what they *are* from what they *do*.
+
+## Summary
+
+| Trait | Level | Triggered by | Description |
+|---|---|---|---|
+| identifiable | L0 | `@component(name)` | Has a name, factory, version |
+| lifecycle | L0 | `@lifecycle.*` | Has activate/deactivate callbacks |
+| dependable | L0 | `@requires` | Declares dependencies |
+| registrable | L0 | `@provides`/`@requires` | Can provide/require services |
+| inspectable | L0 | `@lifecycle.health` | Has a health check |
+| factoryable | L0 | `@component` | Can be instantiated N times |
+| observable | L1 | `@requires(logger=ILogger)` | Has logging/tracing |
+| configurable | L1 | `@requires(config=IConfig)` | Has config |
+| secured | L1 | `@requires(auth=IAuth)` | Has auth/credentials |
+| storable | L1 | `@requires(storage=IStorage)` | Has storage |
+| communicable | L1 | has `@runnable` or `@subscribe` | Uses the bus |
+| exportable | L1 | `@exportable()` | Can be exported remotely |
+| runnable | L2 | `@runnable` | Has callable functions |
+| subscribable | L2 | `@subscribe` | Reacts to events |
+| kinded | L2 | `@kind` | Defines data schemas |
+| skillful | L2 | `@skill` | Provides AI knowledge |
+| routable | L2 | `@api` | Has API surface declarations |
+| reactive | L2 | `@computed` or `@effect` | Has reactive properties/effects |
+| adaptable | L2 | (aspirational) | Wraps external tools |
+| targeted | L3 | `properties.target` | Parameterized with a target |
+| scoped | L3 | (aspirational) | Workspace-scoped |
+| profiled | L3 | (aspirational) | Activation profile |
+| versioned | L3 | `version != "0.0.0"` | Has a version |
+
+## How Traits Are Computed
+
+The kernel reads `ComponentMeta` at discovery time and auto-infers traits:
+
+```python
+# This component...
+@component("search", version="1.0")
+@requires(config=IConfig, logger=ILogger)
+@api("rest", prefix="/search")
+class SearchApp:
+    @computed
+    def url(self): return self.rt.config.get("url")
+
+    @runnable("search", params=P, description="Search")
+    async def search(self, params): ...
+```
+
+...automatically gets these traits:
+
+- **L0:** identifiable, lifecycle, dependable, registrable, factoryable
+- **L1:** configurable, observable, communicable
+- **L2:** runnable, routable, **reactive**
+- **L3:** versioned
+
+Query at runtime:
+
+```python
+status = kernel.status()
+for comp in status["components"]:
+    print(f"{comp['name']}: {comp['traits']}")
+```

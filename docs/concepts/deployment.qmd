@@ -1,0 +1,100 @@
+---
+title: "Deployment Scales"
+subtitle: "Monolith → containers → Dapr → agent system. Same components, different deployment."
+---
+
+## Scale 1: Monolith
+
+One kernel, all in-process. Bus = direct function call. Zero serialization.
+
+```
+┌─────────────────────────────────────┐
+│              Kernel                 │
+│                                     │
+│  ConfigProvider  LoggingProvider     │
+│  SplunkApp       SystemApp          │
+│  RESTTransport   MCPTransport       │
+│  APIGateway                         │
+│                                     │
+│  Bus: invoke() = direct function    │
+│       call, zero serialization      │
+└─────────────────────────────────────┘
+```
+
+## Scale 2: Containers
+
+Each container runs a kernel. RemoteTransport (JSON-RPC + mDNS) for cross-process.
+
+```
+┌──────────────────┐    ┌──────────────────┐
+│ Container A      │    │ Container B      │
+│ Kernel           │    │ Kernel           │
+│  SplunkApp       │    │  SystemApp       │
+│  RemoteTransport │◄──►│  RemoteTransport │
+│  (JSON-RPC)      │    │  (JSON-RPC)      │
+└──────────────────┘    └──────────────────┘
+         │ mDNS discovery │
+         └────────────────┘
+```
+
+Consumer just `@requires` the contract — kernel finds it via discovery, injects a proxy. Code is identical whether local or remote.
+
+## Scale 3: Dapr
+
+Polyglot. DaprTransport replaces RemoteTransport. Python + Node.js + Go.
+
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Python App   │  │ Node.js App  │  │ Go App       │
+│ Kernel       │  │ (native)     │  │ (native)     │
+│ DaprTransport│  │              │  │              │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       │                 │                 │
+┌──────▼───────┐  ┌──────▼───────┐  ┌──────▼───────┐
+│ Dapr Sidecar │◄►│ Dapr Sidecar │◄►│ Dapr Sidecar │
+└──────────────┘  └──────────────┘  └──────────────┘
+```
+
+## Scale 4: Agent System
+
+Kernel = agent's tool provider. MCPTransport exposes runnables as MCP tools.
+
+```
+┌─────────────────────────────────────┐
+│              AI Agent               │
+│  (Claude, GPT, local LLM)          │
+│                                     │
+│  MCP client ──► MCPTransport        │
+│                    │                │
+│              ┌─────▼─────┐          │
+│              │  Kernel    │          │
+│              │  SplunkApp │          │
+│              │  GitLabApp │          │
+│              │  SystemApp │          │
+│              └───────────┘          │
+│                                     │
+│  Agent calls tools via MCP.         │
+│  Each tool = a runnable.            │
+│  Kernel manages auth, lifecycle,    │
+│  credentials — agent just calls.    │
+└─────────────────────────────────────┘
+```
+
+## Cross-Process Communication
+
+The Bus supports pluggable `BusTransport`. When `invoke()` can't find a local handler, it tries registered transports.
+
+`@exportable(transport="jsonrpc", discovery="mdns")` marks a component for remote export. A RemoteAdapter transport would read this metadata and register cross-process proxy handlers.
+
+```python
+# Machine A — provides
+@component("splunk")
+@provides("ISplunkQuery")
+@exportable(transport="jsonrpc", discovery="mdns")
+class SplunkApp: ...
+
+# Machine B — consumes (code identical to local)
+@component("system")
+@requires(splunk="ISplunkQuery")  # kernel finds via mDNS, injects proxy
+class SystemApp: ...
+```

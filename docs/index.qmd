@@ -1,0 +1,81 @@
+---
+title: "ReactPy Microkernel"
+subtitle: "A reactive, trait-based component kernel for backend services"
+---
+
+The microkernel is a ~2600-line core that manages components through reactive signals, traits, lifecycle, and a service registry. You write plain Python classes. Decorators declare what they give and take. The kernel does the rest — and when dependencies change at runtime, your components react automatically.
+
+```python
+from reactpy.kernel import Kernel, component, provides, requires, runnable, lifecycle, computed, effect
+from reactpy.kernel.contracts import IConfig
+
+@component("greeter")
+@requires(config=IConfig)
+class Greeter:
+
+    @computed                                        # cached, auto-recomputes
+    def greeting(self):
+        return self.rt.config.get("greeting", "Hello")
+
+    @effect                                          # re-runs when deps change
+    def log_greeting(self):
+        print(f"Greeting is now: {self.greeting()}")
+
+    @runnable("greet", params=GreetParams, description="Greet someone")
+    async def greet(self, params):
+        return {"message": f"{self.greeting()}, {params.name}!"}
+```
+
+## Learn
+
+Tutorials teach one concept at a time. Each builds on the last.
+
+| # | Tutorial | Concepts |
+|---|----------|----------|
+| 1 | [First Component](guide/01-first-component.qmd) | `@component`, `@lifecycle`, boot, shutdown |
+| 2 | [Give and Take](guide/02-give-and-take.qmd) | `@provides`, `@requires`, typed contracts, `self.rt` |
+| 3 | [Dynamic Services](guide/03-dynamic-services.qmd) | `list[C]` aggregate, `@effect`, `hot_add`/`hot_remove` |
+| 4 | [Runnables & API](guide/04-runnables-and-api.qmd) | `@runnable`, `@api`, bus invocation, transports |
+| 5 | [Auth & Policy](guide/05-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
+| 6 | [Building a Provider](guide/06-building-a-provider.qmd) | Write your own `ICache` or `IDatabase`, bridge pattern |
+
+## Reference
+
+| Page | What's in it |
+|------|-------------|
+| [Traits (L0–L3)](ref/traits.qmd) | 23 traits across 4 levels — what each is, how you get it, example |
+| [Decorators](ref/decorators.qmd) | All 13 decorators — signature, parameters, example |
+| [Contracts](ref/contracts.qmd) | 8 Protocol interfaces — methods, providers, usage |
+| [Kernel API](ref/kernel-api.qmd) | `Kernel`, `ServiceRegistry`, `Bus`, `Runtime`, `Signal`/`Computed`/`Effect` |
+
+## Concepts
+
+| Page | What it explains |
+|------|-----------------|
+| [Architecture](concepts/architecture.qmd) | Constitution, two-axis model, reactive foundation |
+| [Bridging External Systems](concepts/bridging.qmd) | Bridge pattern, three access levels, 7 rules |
+| [Deployment Scales](concepts/deployment.qmd) | Monolith → containers → Dapr → agent system |
+
+## Examples
+
+| Example | Domain | Run |
+|---------|--------|-----|
+| `01_hello.py` | — | `PYTHONPATH=src python src/reactpy/examples/01_hello.py` |
+| `02_give_and_take.py` | IoT/sensors | `PYTHONPATH=src python src/reactpy/examples/02_give_and_take.py` |
+| `03_reactive_config.py` | Data pipeline | `PYTHONPATH=src python src/reactpy/examples/03_reactive_config.py` |
+| `04_dynamic_plugins.py` | Alerting | `PYTHONPATH=src python src/reactpy/examples/04_dynamic_plugins.py` |
+| `05_auth_protected_api.py` | CMS | `PYTHONPATH=src python src/reactpy/examples/05_auth_protected_api.py` |
+| `06_multi_provider_ranking.py` | Database | `PYTHONPATH=src python src/reactpy/examples/06_multi_provider_ranking.py` |
+| `07_fastapi_full.py` | Web app | `PYTHONPATH=src python src/reactpy/examples/07_fastapi_full.py` |
+
+## At a Glance
+
+| | |
+|---|---|
+| Kernel core | ~2600 lines, 9 files, zero required dependencies |
+| Decorators | 13: `@component`, `@provides`, `@requires`, `@computed`, `@effect`, `@runnable`, `@api`, `@lifecycle.*`, `@prop`, `@kind`, `@skill`, `@subscribe`, `@exportable` |
+| Reactivity | Signal, Computed, Effect — Vue 3-style, zero dependencies |
+| Providers | 9: config, logging, credentials, storage, auth, tracing, workspace, gateway, configadmin |
+| Adapters | 3: REST (FastAPI), MCP, CLI (Click) |
+| Tests | 58 |
+| Traits | 23 across 4 levels (L0 Kernel, L1 Platform, L2 App, L3 Instance) |

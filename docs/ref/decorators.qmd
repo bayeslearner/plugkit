@@ -1,0 +1,216 @@
+---
+title: "Decorators"
+subtitle: "All 13 decorators — signature, parameters, example."
+---
+
+## Core
+
+### @component
+
+```python
+@component(name: str, *, namespace: str = "", version: str = "0.0.0", depends: list[str] | None = None)
+```
+
+Mark a class as a component factory.
+
+```python
+@component("greeter", version="1.0")
+class GreeterApp: ...
+```
+
+### @provides
+
+```python
+@provides(*contracts: str | type)
+```
+
+Declare services this component provides. Accepts types or strings.
+
+```python
+@provides(IDictionary)          # type
+@provides("IDictionary")        # string
+@provides(IDictionary, ICache)  # multiple
+```
+
+### @requires
+
+```python
+@requires(*, optional: bool = False, key: str = "", **deps: str | type)
+```
+
+Declare services this component requires. One decorator, three injection modes:
+
+```python
+@requires(config=IConfig)                   # single (highest-ranked)
+@requires(dicts=list[IDictionary])          # aggregate: all as list
+@requires(dicts=IDictionary, key="language") # map: dict keyed by property
+@requires(cache=ICache, optional=True)      # optional: None if missing
+```
+
+## Reactive
+
+### @computed
+
+```python
+@computed
+def method(self) -> T: ...
+```
+
+Reactive cached property. Reads from `self.rt.*` are tracked. Recomputes only when dependencies change.
+
+```python
+@computed
+def base_url(self):
+    return self.rt.config.get("url", "http://localhost")
+```
+
+Access: `self.base_url()` — always current, cached.
+
+### @effect
+
+```python
+@effect
+def method(self) -> None: ...
+```
+
+Reactive side effect. Reads from `self.rt.*` are tracked. Re-runs when dependencies change. Both `def` and `async def` work.
+
+```python
+@effect
+async def on_config_change(self):
+    url = self.rt.config.get("url")
+    await self._reconnect(url)
+```
+
+## Lifecycle
+
+### @lifecycle.activate
+
+```python
+@lifecycle.activate
+def method(self): ...
+```
+
+Called when the component is activated. Both `def` and `async def`.
+
+### @lifecycle.deactivate
+
+```python
+@lifecycle.deactivate
+def method(self): ...
+```
+
+Called when the component is deactivated. Both `def` and `async def`.
+
+### @lifecycle.health
+
+```python
+@lifecycle.health
+def method(self) -> dict: ...
+```
+
+Health check callback.
+
+## Surface
+
+### @runnable
+
+```python
+@runnable(name: str, *, params: type, returns: type | None = None,
+          description: str = "", timeout_s: float | None = None,
+          destructive: bool = False, internal: bool = False,
+          requires_action: str = "", requires_role: str = "")
+```
+
+Typed callable on the bus. Transport adapters auto-generate REST/MCP/CLI bindings.
+
+```python
+@runnable("search", params=SearchParams, description="Search")
+async def search(self, params):
+    return {"results": [...]}
+
+@runnable("delete", params=DeleteParams, requires_role="admin")
+async def delete(self, params): ...
+```
+
+### @api
+
+```python
+@api(transport: str, *, prefix: str = "", name: str = "", auth: bool = False,
+     version: str = "", rate_limit: str = "", include: list[str] | None = None,
+     exclude: list[str] | None = None)
+```
+
+Declare an API surface for a transport. Stack multiple for multi-transport.
+
+```python
+@api("rest", prefix="/search", version="v1")
+@api("mcp", name="search-tools")
+class SearchApp: ...
+```
+
+### @exportable
+
+```python
+@exportable(*, transport: str = "jsonrpc", discovery: str = "mdns")
+```
+
+Mark for remote service export (cross-process).
+
+## Metadata
+
+### @prop
+
+```python
+@prop(attr_name: str, prop_name: str, default: Any = None)
+```
+
+Mutable component property. Propagated to service registry. `service.ranking` controls priority.
+
+```python
+@prop("_language", "language", "EN")
+@prop("_ranking", "service.ranking", 0)
+class EnglishDict: ...
+```
+
+### @kind
+
+```python
+@kind(name: str, *, model: type, description: str = "")
+```
+
+Register a data schema.
+
+```python
+@kind("alert", model=AlertModel, description="Security alert")
+class SecurityApp: ...
+```
+
+### @skill
+
+```python
+@skill(name: str, *, content: str, triggers: list[str] | None = None, description: str = "")
+```
+
+AI knowledge bundle.
+
+```python
+@skill("spl-writer", content="# SPL Guide...", triggers=["splunk", "spl"])
+class SplunkApp: ...
+```
+
+## Events
+
+### @subscribe
+
+```python
+@subscribe(event_type: str, *, description: str = "")
+```
+
+Declare a bus event handler. Both `def` and `async def`.
+
+```python
+@subscribe("order.created", description="Handle new orders")
+async def on_order(self, event_type, data):
+    ...
+```

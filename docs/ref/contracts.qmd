@@ -1,0 +1,105 @@
+---
+title: "Contracts"
+subtitle: "8 Protocol interfaces — methods, providers, usage."
+---
+
+| Contract | Methods | Provider | `self.rt.*` |
+|---|---|---|---|
+| IConfig | `get(key, default)` | ConfigProvider | `self.rt.config` |
+| ILogger | `info/warning/error/debug(msg, **kw)` | LoggingProvider | `self.rt.logger` |
+| ICredentials | `get(key, target=)`, `for_target(t)`, `list_targets()` | CredentialProvider | `self.rt.creds` |
+| IStorage | `put/get/list/delete(key)` (async) | StorageProvider | `self.rt.storage` |
+| IAuth | `authenticate(token)`, `authorize(identity, action)` | AuthProvider | `self.rt.auth` |
+| ITracer | `span(name, **attrs)` → context manager | TracingProvider | `self.rt.tracer` |
+| IWorkspace | `.root` (Path), `.settings` (dict) | WorkspaceProvider | `self.rt.workspace` |
+| IConfigAdmin | `get_configuration(pid)`, `update(pid, props)`, `delete(pid)` | ConfigAdminProvider | bus: `configadmin.update` |
+
+## IConfig
+
+```python
+@runtime_checkable
+class IConfig(Protocol):
+    def get(self, key: str, default: Any = None) -> Any: ...
+```
+
+Layered: factory defaults → YAML file → env overrides (`KERNEL_CFG_*`). Dotted path access: `self.rt.config.get("apps.splunk.url")`.
+
+## ILogger
+
+```python
+@runtime_checkable
+class ILogger(Protocol):
+    def info(self, msg: str, **kwargs: Any) -> None: ...
+    def warning(self, msg: str, **kwargs: Any) -> None: ...
+    def error(self, msg: str, **kwargs: Any) -> None: ...
+    def debug(self, msg: str, **kwargs: Any) -> None: ...
+```
+
+Structurally scoped — each component gets a logger with its identity pre-bound.
+
+## ICredentials
+
+```python
+@runtime_checkable
+class ICredentials(Protocol):
+    def get(self, key: str, *, target: str | None = None) -> str: ...
+    def for_target(self, target: str) -> dict[str, str]: ...
+    def list_targets(self) -> list[str]: ...
+```
+
+Structurally scoped — each component can only see its own secrets.
+
+## IStorage
+
+```python
+@runtime_checkable
+class IStorage(Protocol):
+    async def put(self, key: str, data: bytes) -> None: ...
+    async def get(self, key: str) -> bytes | None: ...
+    async def list(self, prefix: str = "") -> list[str]: ...
+    async def delete(self, key: str) -> None: ...
+```
+
+Structurally scoped — each component gets its own prefix.
+
+## IAuth
+
+```python
+@runtime_checkable
+class IAuth(Protocol):
+    def authenticate(self, token: str) -> dict[str, Any]: ...
+    def authorize(self, identity: dict, action: str) -> bool: ...
+```
+
+Or use declarative auth on `@runnable`: `requires_action="docs.write"`, `requires_role="admin"`.
+
+## ITracer
+
+```python
+@runtime_checkable
+class ITracer(Protocol):
+    def span(self, name: str, **attributes: Any) -> Any: ...
+```
+
+## IWorkspace
+
+```python
+@runtime_checkable
+class IWorkspace(Protocol):
+    @property
+    def root(self) -> Path: ...
+    @property
+    def settings(self) -> dict[str, Any]: ...
+```
+
+## IConfigAdmin
+
+```python
+@runtime_checkable
+class IConfigAdmin(Protocol):
+    def get_configuration(self, pid: str) -> dict[str, Any]: ...
+    def update(self, pid: str, properties: dict[str, Any]) -> None: ...
+    def delete(self, pid: str) -> None: ...
+```
+
+Push config to managed services at runtime.
