@@ -1,5 +1,39 @@
 /* ReactPy docs — custom overrides for Quarto darkly theme */
 
+/* Fix Mermaid diagrams: light text on dark background */
+.mermaid {
+  background: #1a1d27 !important;
+}
+.mermaid text,
+.mermaid .nodeLabel,
+.mermaid .edgeLabel,
+.mermaid .label,
+.mermaid .cluster-label,
+.mermaid span {
+  color: #e2e4ea !important;
+  fill: #e2e4ea !important;
+}
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node polygon {
+  fill: #242836 !important;
+  stroke: #6c8cff !important;
+}
+.mermaid .edgePath .path {
+  stroke: #8b8fa3 !important;
+}
+.mermaid .arrowheadPath {
+  fill: #8b8fa3 !important;
+}
+.mermaid .cluster rect {
+  fill: #1a1d27 !important;
+  stroke: #2e3345 !important;
+}
+.mermaid .cluster-label .nodeLabel {
+  color: #a78bfa !important;
+  fill: #a78bfa !important;
+}
+
 .callout-note {
   border-left-color: #6c8cff;
 }

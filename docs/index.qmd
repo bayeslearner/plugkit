@@ -1,12 +1,18 @@
 ---
-title: "ReactPy Microkernel"
-subtitle: "A reactive, trait-based component kernel for backend services"
+title: "ReactPy Kernel"
+subtitle: "A reactive component kernel for backend services"
 ---
 
-The microkernel is a ~2600-line core that manages components through reactive signals, traits, lifecycle, and a service registry. You write plain Python classes. Decorators declare what they give and take. The kernel does the rest — and when dependencies change at runtime, your components react automatically.
+## The Idea
+
+Frontend frameworks like Vue and React changed how UIs work: you declare what depends on what, and when data changes, the framework updates everything automatically. No manual callbacks. No stale state.
+
+**ReactPy brings this model to backend services.**
+
+Your components declare dependencies. The kernel wraps every injected service in a reactive **Signal**. When you read `self.rt.config` inside an `@effect`, the kernel tracks that read. When the config service changes — new provider hot-added, config pushed, service ranking changed — your effect re-runs automatically.
 
 ```python
-from reactpy.kernel import Kernel, component, provides, requires, runnable, lifecycle, computed, effect
+from reactpy.kernel import component, requires, computed, effect, runnable
 from reactpy.kernel.contracts import IConfig
 
 @component("greeter")
@@ -24,6 +30,54 @@ class Greeter:
     @runnable("greet", params=GreetParams, description="Greet someone")
     async def greet(self, params):
         return {"message": f"{self.greeting()}, {params.name}!"}
+```
+
+No `@bind`. No `@unbind`. No manual event wiring. The reactive graph handles propagation.
+
+## How Reactivity Works
+
+Three primitives, implemented in 327 lines of pure Python:
+
+| Primitive | What it does | In the kernel |
+|---|---|---|
+| **Signal** | Holds a value. Reading tracks the caller. Writing notifies all readers. | Each `self.rt.config`, `self.rt.db` is a Signal |
+| **Computed** | Derives a value from Signals. Caches. Recomputes only when deps change. | `@computed` decorator on component methods |
+| **Effect** | Runs a function. Re-runs when any Signal it read changes. | `@effect` decorator on component methods |
+
+```{mermaid}
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#242836', 'primaryTextColor': '#e2e4ea', 'primaryBorderColor': '#6c8cff', 'lineColor': '#8b8fa3', 'secondaryColor': '#1a1d27', 'tertiaryColor': '#1a1d27'}}}%%
+sequenceDiagram
+    participant S as Signal (self.rt.config)
+    participant E as @effect method
+    participant C as @computed property
+
+    Note over S,C: Boot: effect runs once, tracks deps
+    E->>S: reads config → tracked
+    S-->>E: subscriber registered
+
+    Note over S,C: Later: config changes
+    S->>E: notify → effect re-runs
+    S->>C: notify → computed marked dirty
+    C->>C: next read → recomputes
+```
+
+When you write `self.rt.config.get("url")` inside an `@effect`:
+
+1. `self.rt.config` → calls `Signal.get()` → kernel records "this Effect depends on this Signal"
+2. Later, config changes → `Signal.set(new_config)` → kernel notifies all subscribers
+3. Your `@effect` re-runs automatically — reads the new config, does whatever it needs
+
+**This is Vue 3's reactivity model applied to service injection.** Same algorithm (dependency tracking via a context variable), same composability (Computed chains, Effects compose), different domain (backend services instead of DOM).
+
+## The 13 Decorators
+
+```
+@component  @provides  @requires           # core
+@computed   @effect                         # reactive
+@lifecycle.activate/deactivate/health       # lifecycle
+@runnable   @api   @exportable              # surface
+@prop   @kind   @skill                      # metadata
+@subscribe                                  # events
 ```
 
 ## Learn

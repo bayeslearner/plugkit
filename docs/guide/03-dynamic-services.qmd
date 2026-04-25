@@ -7,7 +7,22 @@ subtitle: "Services come and go. Your component reacts automatically."
 
 You have two dictionaries (English, French) and a spell checker. `@requires(dictionary=IDictionary)` injects *one* dictionary. But the spell checker needs *all* dictionaries — and it needs to handle new ones appearing and old ones disappearing at runtime.
 
-In v1, you'd write `@bind`/`@unbind` callbacks. In v2, you use `@requires(dicts=list[IDictionary])` + `@effect`. The reactive engine does the rest.
+In traditional frameworks (iPOPO, Spring), you'd write `@bind`/`@unbind` callbacks — manual wiring for every service that comes and goes. In ReactPy, you use `@requires(dicts=list[IDictionary])` + `@effect`. The reactive engine handles propagation automatically:
+
+```{mermaid}
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#242836', 'primaryTextColor': '#e2e4ea', 'primaryBorderColor': '#6c8cff', 'lineColor': '#8b8fa3', 'secondaryColor': '#1a1d27', 'tertiaryColor': '#1a1d27', 'actorTextColor': '#e2e4ea', 'actorBkg': '#242836', 'actorBorder': '#6c8cff'}}}%%
+sequenceDiagram
+    participant H as hot_add(GermanDict)
+    participant R as Registry
+    participant S as Signal (rt.dicts)
+    participant E as @effect rebuild_index
+
+    H->>R: provide(IDictionary, german)
+    R->>S: Signal.set([en, fr, de])
+    S->>E: notify: deps changed
+    E->>E: re-run → rebuilds index
+    Note over E: Index now has EN, FR, DE
+```
 
 ## Aggregate Injection
 
