@@ -1,0 +1,320 @@
+---
+title: "How Reactivity Works"
+subtitle: "The internals: Signals, tracking, and why it's different from React"
+---
+
+## The Problem Reactivity Solves
+
+Without reactivity, when data changes, you must manually notify everyone who cares:
+
+```python
+# Without reactivity — manual wiring
+class SpellChecker:
+    def on_dict_added(self, dict, props):    # you write this
+        self.index[props["lang"]] = dict
+    def on_dict_removed(self, dict, props):  # and this
+        del self.index[props["lang"]]
+    def on_config_changed(self, new_config):  # and this
+        self.url = new_config.get("url")
+```
+
+With reactivity, you write what you need, and the kernel figures out the wiring:
+
+```python
+# With reactivity — automatic tracking
+class SpellChecker:
+    @effect
+    def rebuild(self):
+        # kernel tracks: this effect reads self.rt.dicts and self.rt.config
+        self.index = {getattr(d, "lang", "?"): d for d in self.rt.dicts}
+        self.url = self.rt.config.get("url")
+    # When either dicts or config changes → rebuild() re-runs automatically
+```
+
+How does the kernel know what `rebuild()` read? That's the core trick.
+
+## The Trick: A Global "Who's Asking?" Variable
+
+Python has `contextvars.ContextVar` — a variable that's scoped to the current execution context (like thread-local storage, but works with `async`/`await`).
+
+The kernel maintains one:
+
+```python
+from contextvars import ContextVar
+
+_active_consumer: ContextVar[Effect | Computed | None] = ContextVar(
+    "_active_consumer", default=None
+)
+```
+
+This variable answers: **"who is currently executing?"** — which Effect or Computed is running right now.
+
+## How Signal.get() Tracks
+
+Every injected service (`self.rt.config`, `self.rt.db`) is a `Signal`. When you read it:
+
+```python
+class Signal:
+    def get(self):
+        # Step 1: Who's asking?
+        consumer = _active_consumer.get()    # ← check the context variable
+
+        # Step 2: If someone is asking, remember them
+        if consumer is not None:
+            consumer._deps.add(self)          # consumer records: "I depend on this Signal"
+            self._subscribers.add(consumer)   # Signal records: "this consumer reads me"
+
+        # Step 3: Return the value
+        return self._value
+```
+
+That's it. The entire tracking mechanism is three lines. If nobody is asking (`_active_consumer` is None), it's just a normal read. If an Effect or Computed is running, the dependency is recorded on both sides.
+
+## How Effect.run() Sets "Who's Asking"
+
+When an Effect runs, it tells the kernel "I'm the active consumer":
+
+```python
+class Effect:
+    def run(self):
+        # Clear old dependencies (I might read different things this time)
+        self._untrack_all()
+
+        # Set myself as the active consumer
+        token = _active_consumer.set(self)     # ← "I'm asking now"
+
+        try:
+            self._fn()                          # ← run the effect function
+            # During this call, every Signal.get() sees me as _active_consumer
+            # and registers the dependency
+        finally:
+            _active_consumer.reset(token)       # ← "I'm done asking"
+```
+
+So when your `@effect` method runs:
+
+```python
+@effect
+def rebuild(self):
+    dicts = self.rt.dicts       # Signal.get() → tracks: rebuild depends on dicts
+    url = self.rt.config.get("url")  # Signal.get() → tracks: rebuild depends on config
+```
+
+After `run()` completes:
+
+- `self._deps` = `{dicts_signal, config_signal}` — "I depend on these"
+- `dicts_signal._subscribers` = `{rebuild_effect}` — "this effect reads me"
+- `config_signal._subscribers` = `{rebuild_effect}` — "this effect reads me"
+
+## How Signal.set() Notifies
+
+When a Signal's value changes:
+
+```python
+class Signal:
+    def set(self, value):
+        if value is self._value:     # same object? skip
+            return
+        self._value = value
+        self._version += 1
+
+        # Notify everyone who reads me
+        for consumer in self._subscribers:
+            consumer._notify()        # ← "hey, I changed"
+```
+
+`_notify()` on an Effect calls `run()` again — which re-tracks dependencies (they might have changed) and re-runs the function.
+
+## The Full Cycle
+
+```
+1. Boot: kernel creates Effect for @effect method
+2. Effect.run() sets _active_consumer = self
+3. Effect function reads self.rt.dicts → Signal.get() → dependency tracked
+4. Effect function reads self.rt.config → Signal.get() → dependency tracked
+5. Effect.run() resets _active_consumer = None
+   Now: dicts_signal knows rebuild reads it. config_signal knows rebuild reads it.
+
+6. Later: hot_add(GermanDict) → registry adds new provider
+7. Kernel's reactive propagation → runtime.inject("dicts", [en, fr, de])
+8. runtime.inject() calls dicts_signal.set([en, fr, de])
+9. dicts_signal.set() → notifies rebuild effect
+10. Effect.run() again → re-tracks, re-runs function
+    Function sees the new list including German. Index rebuilt.
+```
+
+No callbacks. No event subscriptions. No manual wiring. The kernel figured it all out from step 3: "you read `self.rt.dicts`, so I'll tell you when it changes."
+
+## What Is ContextVar?
+
+`contextvars.ContextVar` is Python's answer to "thread-local, but for async."
+
+```python
+from contextvars import ContextVar
+
+current_user = ContextVar("current_user", default=None)
+
+# Set it
+token = current_user.set("Alice")
+print(current_user.get())   # "Alice"
+
+# Reset it
+current_user.reset(token)
+print(current_user.get())   # None
+```
+
+Why not just use a global variable? Because **async tasks need isolation**. If two `await` chains run concurrently, they each need their own value:
+
+```python
+# Without ContextVar — broken with async
+_global_consumer = None  # Task A and Task B would overwrite each other
+
+# With ContextVar — each task has its own copy
+_active_consumer = ContextVar("_active_consumer", default=None)
+# asyncio.create_task() copies the current context
+# Each task sees its own _active_consumer
+```
+
+This is why reactive tracking works correctly even with `async def` effects — each async task inherits its own copy of `_active_consumer`.
+
+## How a Component Becomes Reactive
+
+A component is **automatically** reactive. You don't opt in. The mechanism:
+
+1. `@requires(config=IConfig)` → during activation, kernel injects `config` as a `Signal` on `self.rt`
+2. Any method decorated with `@effect` gets wrapped in an `Effect` that calls `run()` at activation
+3. Any method decorated with `@computed` gets wrapped in a `Computed` that lazily evaluates on first read
+
+That's it. Every component that uses `self.rt.X` is reactive because `self.rt.X` is always a Signal. The reactive behavior activates when you add `@effect` or `@computed` — those are the consumers that trigger tracking.
+
+```python
+# This is NOT reactive — no @effect or @computed
+@component("basic")
+@requires(config=IConfig)
+class BasicApp:
+    @lifecycle.activate
+    def activate(self):
+        self.url = self.rt.config.get("url")  # reads Signal, but no one is tracking
+        # This is a one-time read. If config changes, self.url is stale.
+
+# This IS reactive — @effect tracks deps
+@component("reactive")
+@requires(config=IConfig)
+class ReactiveApp:
+    @effect
+    def track_config(self):
+        self.url = self.rt.config.get("url")  # reads Signal INSIDE an Effect
+        # kernel tracks: track_config depends on config Signal
+        # when config changes → track_config re-runs → self.url updated
+```
+
+The difference is one decorator. The component doesn't "become reactive" — the kernel is always reactive. You just choose whether to use `@effect` to subscribe to the reactive graph.
+
+## Computed: Lazy + Cached
+
+A `@computed` method is like an `@effect` but:
+
+- **Lazy**: doesn't run until you read it
+- **Cached**: if you read it twice and deps haven't changed, returns the cached value
+- **Chains**: a Computed can depend on other Computeds
+
+```python
+@component("app")
+@requires(config=IConfig)
+class App:
+    @computed
+    def base_url(self):
+        # Only runs when you call self.base_url()
+        # AND only if self.rt.config has changed since last call
+        return self.rt.config.get("url", "http://localhost")
+
+    @computed
+    def api_url(self):
+        # Depends on base_url, which depends on config
+        # Changes propagate: config → base_url → api_url
+        return f"{self.base_url()}/api/v1"
+
+    @runnable("info", params=BaseModel, description="Get URLs")
+    async def info(self, params):
+        return {"base": self.base_url(), "api": self.api_url()}
+```
+
+Internally, `Computed` is a consumer (it tracks what it reads) AND a Signal (others can depend on it):
+
+```
+config (Signal) ← base_url (Computed) ← api_url (Computed) ← info_effect (Effect)
+```
+
+When config changes: base_url is marked dirty → api_url is marked dirty → if anyone reads them, they recompute.
+
+## How This Differs from React
+
+React and ReactPy (Vue-style) both solve the same problem — keeping derived state in sync. But they use different mechanisms:
+
+### React: Explicit Dependency Arrays
+
+```javascript
+// React — YOU declare dependencies
+useEffect(() => {
+    reconnect(config.url, db.connection);
+}, [config, db]);   // ← you must list every dependency manually
+```
+
+- **You** maintain the dependency list
+- Miss one → stale closure bug (the #1 source of React bugs)
+- React doesn't know what you read inside the function
+- React re-runs the entire component function on every state change, then diffs the output
+
+### ReactPy (Vue model): Automatic Tracking
+
+```python
+# ReactPy — kernel tracks what you read
+@effect
+def reconnect(self):
+    url = self.rt.config.get("url")    # kernel tracks: depends on config
+    conn = self.rt.db.connection       # kernel tracks: depends on db
+```
+
+- **The kernel** builds the dependency list by watching what you read
+- Can't miss a dependency — if you read it, it's tracked
+- Only re-runs the specific Effect that depends on the changed Signal (not the whole component)
+- Components stay active — Effects update in place, no re-instantiation
+
+### The Tradeoff
+
+| | React | ReactPy (Vue) |
+|---|---|---|
+| Dependency tracking | Manual (you list deps) | Automatic (kernel watches reads) |
+| Re-execution | Entire component function | Only the specific Effect |
+| Component lifecycle | Re-render = re-call function | Activate once, Effects update in place |
+| Designed for | UI rendering (stateless functions) | Backend services (long-lived objects) |
+| Mental model | "What should the output be given this state?" | "What should happen when this dependency changes?" |
+
+React's model works for UI because components are cheap to re-render (virtual DOM diffs). Backend services are expensive — you don't want to re-create database connections because a config value changed. You want to update just the part that cares about that config value. That's what Effects do.
+
+## Batch: Grouping Changes
+
+Multiple Signal changes can be grouped. Effects fire once at the end:
+
+```python
+from reactpy.kernel import batch
+
+with batch():
+    await kernel.hot_add(GermanDict)
+    await kernel.hot_add(SpanishDict)
+# @effect runs ONCE here with both new dicts, not twice
+```
+
+Without batching: each `hot_add` would fire the Effect separately. With batching: changes accumulate, then all pending Effects run once when the batch exits. This is the same as Vue's `nextTick` or React's batched state updates.
+
+## Summary
+
+| Concept | What it is | Why it matters |
+|---|---|---|
+| **Signal** | Reactive value wrapper | Every `self.rt.X` is one |
+| **ContextVar** | "Who's asking?" tracker | Async-safe, zero globals |
+| **Effect** | Function that re-runs on dep change | Replaces all manual callbacks |
+| **Computed** | Lazy cached derived value | Efficient, chains automatically |
+| **Tracking** | Signal.get() records the caller | You never declare deps — kernel figures it out |
+| **Notification** | Signal.set() tells all subscribers | Changes propagate through the graph |
+| **Batch** | Group changes, fire once | Prevents redundant re-runs |

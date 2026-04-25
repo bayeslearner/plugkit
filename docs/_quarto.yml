@@ -32,6 +32,8 @@ website:
             href: ref/kernel-api.qmd
       - text: "Concepts"
         menu:
+          - text: "How Reactivity Works"
+            href: concepts/reactivity-deep-dive.qmd
           - text: "Architecture"
             href: concepts/architecture.qmd
           - text: "Bridging External Systems"
@@ -56,6 +58,7 @@ website:
         - ref/kernel-api.qmd
     - title: "Concepts"
       contents:
+        - concepts/reactivity-deep-dive.qmd
         - concepts/architecture.qmd
         - concepts/bridging.qmd
         - concepts/deployment.qmd
