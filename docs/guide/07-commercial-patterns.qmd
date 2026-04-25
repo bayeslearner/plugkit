@@ -1,0 +1,197 @@
+---
+title: "7. Commercial Patterns"
+subtitle: "Six production patterns that work with zero kernel changes."
+---
+
+## The Point
+
+All six patterns below work on the stock kernel. No patches, no hooks, no monkey-patching. The reactive graph (Signal + `@effect` + `@computed`) handles propagation automatically. This is the kernel's generality thesis made concrete.
+
+Each pattern has a runnable example in `src/signalpy/examples/` and a matching test.
+
+| Pattern | Example file | Kernel features used |
+|---------|-------------|---------------------|
+| Secret Rotation | `secret_rotation.py` | `@effect`, credential propagation |
+| A/B Testing | `ab_testing.py` | `@computed`, map injection, `@prop` |
+| Multi-Tenant | `multi_tenant.py` | `kernel.instantiate()`, L3 targeted, bus routing |
+| Extension Bundle | `extension_bundle.py` | `hot_add` / `hot_remove`, `@subscribe`, bus calls |
+| Circuit Breaker | `circuit_breaker.py` | `Signal`, `@computed`, `@effect`, config thresholds |
+| Audit Trail | `audit_trail.py` | `@subscribe`, `set_policy`, bus event capture |
+
+
+## Secret Rotation
+
+**Problem:** API keys are rotated by an external vault. Consumers must reconnect without restarts.
+
+**How it works:** The vault pushes a new key into config via `config.set()`. The config provider's internal Signal notifies. The database client's `@effect` -- which reads credentials -- re-runs and reconnects with the new key.
+
+```python
+@component("db-client", version="1.0", depends=["config", "credentials"])
+@requires(config="IConfig", creds="ICredentials")
+class DatabaseClient:
+
+    @effect
+    def on_credential_change(self):
+        """Reconnect when credentials change."""
+        key = self.rt.creds.get("api_key", target="prod")
+        if key and key != self._connected_key:
+            self._connected_key = key
+            masked = key[:4] + "****" + key[-4:]
+            self.connection_log.append(f"connected:{masked}")
+```
+
+**Takeaway:** The chain is `config.set()` -> Signal -> `@effect` -> reconnect. No event wiring. No callback registration. The reactive graph propagates the change.
+
+
+## A/B Testing
+
+**Problem:** Route traffic between two search backends (v1 keyword, v2 semantic) based on a config-driven split percentage.
+
+**How it works:** Both backends `@provides("ISearch")` with different `@prop` versions. The A/B router uses map injection (`key="version"`) to access both, and a `@computed` to read the split percentage from config. Deterministic hashing on `user_id` gives consistent bucketing.
+
+```python
+@component("search-router", version="1.0", depends=["config", "search-v1", "search-v2"])
+@requires(config="IConfig")
+@requires(backends="ISearch", key="version")
+class ABRouter:
+
+    @computed
+    def v2_percentage(self):
+        """Reactive: recomputes when config changes."""
+        return self.rt.config.get("ab.search.v2_percent", 0)
+
+    def _pick_variant(self, user_id: str) -> str:
+        bucket = int(hashlib.md5(user_id.encode()).hexdigest(), 16) % 100
+        return "v2" if bucket < self.v2_percentage() else "v1"
+```
+
+Change the split at runtime with `config.set("ab.search.v2_percent", 50)` -- the `@computed` recomputes immediately.
+
+**Takeaway:** Map injection (`key="version"`) + `@computed` for config reads = runtime-adjustable A/B routing with consistent user bucketing. Zero application-level event handling.
+
+
+## Multi-Tenant Isolation
+
+**Problem:** Same service factory, but each tenant needs its own config, credentials, and storage scope.
+
+**How it works:** `kernel.instantiate()` creates per-tenant instances with a `target` property. The kernel structurally scopes credentials and storage per instance. Bus calls route by target.
+
+```python
+# Create per-tenant instances of the same factory
+kernel.instantiate("tenant-db", "tenant-db-acme", {"target": "acme"})
+kernel.instantiate("tenant-db", "tenant-db-globex", {"target": "globex"})
+kernel.instantiate("tenant-db", "tenant-db-initech", {"target": "initech"})
+
+# Route by target
+await kernel.bus.invoke("tenant-db.query", {"table": "invoices", "target": "acme"})
+```
+
+Config changes propagate per-tenant via `@computed`:
+
+```python
+@computed
+def db_url(self):
+    target = self.rt.properties.get("target", "unknown")
+    return self.rt.config.get(f"tenants.{target}.db_url", f"postgres://localhost/{target}")
+```
+
+**Takeaway:** L3 targeted is not a special feature -- it falls out of `instantiate()` + properties + structural scoping. The kernel treats every instance as a first-class component.
+
+
+## Extension Bundle
+
+**Problem:** Install a "Slack integration" that brings three components at once. Remove the bundle -- all three go away.
+
+**How it works:** Three components (`SlackNotifier`, `SlackWebhookReceiver`, `SlackCommandHandler`) are hot-added as a group. They communicate via bus events and cross-component calls. The command handler uses `@subscribe` to react to core app events and `self.rt.invoke()` to call the notifier.
+
+```python
+SLACK_BUNDLE = [SlackNotifier, SlackWebhookReceiver, SlackCommandHandler]
+
+# Install
+for cls in SLACK_BUNDLE:
+    await kernel.hot_add(cls)
+
+# Now core events automatically trigger Slack notifications
+@subscribe("core.work_completed", description="Auto-notify Slack when core work completes")
+async def on_work_completed(self, event_type, data):
+    await self.rt.invoke("slack-notifier.notify", {
+        "channel": "ops",
+        "message": f"Work completed: {data.get('result', '?')}",
+    })
+
+# Remove
+for name in ["slack-commands", "slack-webhook", "slack-notifier"]:
+    await kernel.hot_remove(name)
+```
+
+**Takeaway:** `hot_add` / `hot_remove` + `@subscribe` + bus calls = a plugin system. No plugin API. No extension points. Components are the extension mechanism.
+
+
+## Circuit Breaker
+
+**Problem:** A payment service depends on a flaky external API. Requests should fail fast when the API is down, and recover when it comes back.
+
+**How it works:** The breaker state (`closed` / `open` / `half-open`) is a `Signal`. The failure threshold comes from config via `@computed`. An `@effect` logs state transitions. The payment runnable checks breaker state, probes on recovery, and updates the Signal.
+
+```python
+@component("payment-svc", version="1.0", depends=["config", "ext-api"])
+@requires(config="IConfig", api="IExternalAPI")
+class PaymentService:
+
+    @lifecycle.activate
+    def activate(self):
+        self._consecutive_failures = 0
+        self._state = Signal("closed")
+
+    @computed
+    def failure_threshold(self):
+        """Config-driven. Change at runtime."""
+        return self.rt.config.get("circuit.failure_threshold", 3)
+
+    @effect
+    def on_state_change(self):
+        """Log transitions automatically."""
+        state = self._state.get()
+        self.event_log.append(f"breaker:{state}")
+```
+
+**Takeaway:** `Signal` is not just for kernel internals -- components create their own Signals for local reactive state. The same `@effect` / `@computed` machinery works for both injected services and application-level state.
+
+
+## Audit Trail
+
+**Problem:** Every financial transaction must be logged for compliance. The audit mechanism should not require changes to business components.
+
+**How it works:** Business components publish events (`self.rt.publish("account.transfer", data)`). An audit trail component uses `@subscribe("account.*")` to capture all matching events. Policy enables invoke-level logging via `kernel.set_policy("accounts", {"audit": True})`.
+
+```python
+@component("audit-trail", version="1.0", depends=["config"])
+@requires(config="IConfig")
+class AuditTrail:
+
+    @subscribe("account.*", description="Audit all account events")
+    def on_account_event(self, event_type, data):
+        entry = {"event": event_type, "data": data}
+        self.entries.append(entry)
+```
+
+Policy is set at boot time, orthogonal to the components:
+
+```python
+kernel.set_policy("accounts", {"audit": True})
+kernel.set_policy("notifications", {"audit": True})
+```
+
+**Takeaway:** `@subscribe` with wildcard patterns + `set_policy` = cross-cutting audit without touching business logic. The audit component is just another component -- add it, remove it, replace it.
+
+
+## Running the Examples
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.secret_rotation
+PYTHONPATH=src python -m signalpy.examples.ab_testing
+PYTHONPATH=src python -m signalpy.examples.multi_tenant
+PYTHONPATH=src python -m signalpy.examples.extension_bundle
+PYTHONPATH=src python -m signalpy.examples.circuit_breaker
+PYTHONPATH=src python -m signalpy.examples.audit_trail
+```

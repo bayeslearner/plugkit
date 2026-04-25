@@ -20,6 +20,8 @@ website:
             href: guide/05-auth-and-policy.qmd
           - text: "6. Building a Provider"
             href: guide/06-building-a-provider.qmd
+          - text: "7. Commercial Patterns"
+            href: guide/07-commercial-patterns.qmd
       - text: "Reference"
         menu:
           - text: "Traits (L0-L3)"
@@ -50,6 +52,7 @@ website:
         - guide/04-runnables-and-api.qmd
         - guide/05-auth-and-policy.qmd
         - guide/06-building-a-provider.qmd
+        - guide/07-commercial-patterns.qmd
     - title: "Reference"
       contents:
         - ref/traits.qmd

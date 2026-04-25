@@ -92,6 +92,7 @@ Tutorials teach one concept at a time. Each builds on the last.
 | 4 | [Runnables & API](guide/04-runnables-and-api.qmd) | `@runnable`, `@api`, bus invocation, transports |
 | 5 | [Auth & Policy](guide/05-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
 | 6 | [Building a Provider](guide/06-building-a-provider.qmd) | Write your own `ICache` or `IDatabase`, bridge pattern |
+| 7 | [Commercial Patterns](guide/07-commercial-patterns.qmd) | Secret rotation, A/B testing, multi-tenant, extension bundles, circuit breaker, audit trail |
 
 ## Reference
 
@@ -122,6 +123,12 @@ Tutorials teach one concept at a time. Each builds on the last.
 | `05_auth_protected_api.py` | CMS | `PYTHONPATH=src python src/signalpy/examples/05_auth_protected_api.py` |
 | `06_multi_provider_ranking.py` | Database | `PYTHONPATH=src python src/signalpy/examples/06_multi_provider_ranking.py` |
 | `07_fastapi_full.py` | Web app | `PYTHONPATH=src python src/signalpy/examples/07_fastapi_full.py` |
+| `secret_rotation.py` | Credential mgmt | `PYTHONPATH=src python -m signalpy.examples.secret_rotation` |
+| `ab_testing.py` | Experimentation | `PYTHONPATH=src python -m signalpy.examples.ab_testing` |
+| `multi_tenant.py` | SaaS / multi-tenant | `PYTHONPATH=src python -m signalpy.examples.multi_tenant` |
+| `extension_bundle.py` | Plugin system | `PYTHONPATH=src python -m signalpy.examples.extension_bundle` |
+| `circuit_breaker.py` | Resilience | `PYTHONPATH=src python -m signalpy.examples.circuit_breaker` |
+| `audit_trail.py` | Compliance | `PYTHONPATH=src python -m signalpy.examples.audit_trail` |
 
 ## At a Glance
 
