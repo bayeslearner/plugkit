@@ -10,7 +10,7 @@ By the end of this page you'll have a class that the kernel manages — it insta
 ## One Decorator
 
 ```python
-from reactpy.kernel import component
+from signalpy.kernel import component
 
 @component("greeter")
 class Greeter:
@@ -26,7 +26,7 @@ The class is still a normal Python class. No base class, no metaclass, no framew
 Components have a lifecycle: the kernel creates them, activates them (your setup code runs), and later deactivates them (your cleanup code runs):
 
 ```python
-from reactpy.kernel import component, lifecycle
+from signalpy.kernel import component, lifecycle
 
 @component("greeter")
 class Greeter:
@@ -45,7 +45,7 @@ The method names don't matter — call them `activate`, `start`, `setup`, whatev
 
 ```python
 import asyncio
-from reactpy.kernel import Kernel, component, lifecycle
+from signalpy.kernel import Kernel, component, lifecycle
 
 @component("greeter")
 class Greeter:
@@ -89,5 +89,5 @@ This seems trivial with one class. It gets powerful when you have 10 components 
 ## Run It
 
 ```bash
-PYTHONPATH=src python src/reactpy/examples/01_hello.py
+PYTHONPATH=src python src/signalpy/examples/01_hello.py
 ```

@@ -249,7 +249,7 @@ When config changes: base_url is marked dirty → api_url is marked dirty → if
 
 ## How This Differs from React
 
-React and ReactPy (Vue-style) both solve the same problem — keeping derived state in sync. But they use different mechanisms:
+React and SignalPy (Vue-style) both solve the same problem — keeping derived state in sync. But they use different mechanisms:
 
 ### React: Explicit Dependency Arrays
 
@@ -265,10 +265,10 @@ useEffect(() => {
 - React doesn't know what you read inside the function
 - React re-runs the entire component function on every state change, then diffs the output
 
-### ReactPy (Vue model): Automatic Tracking
+### SignalPy (Vue model): Automatic Tracking
 
 ```python
-# ReactPy — kernel tracks what you read
+# SignalPy — kernel tracks what you read
 @effect
 def reconnect(self):
     url = self.rt.config.get("url")    # kernel tracks: depends on config
@@ -282,7 +282,7 @@ def reconnect(self):
 
 ### The Tradeoff
 
-| | React | ReactPy (Vue) |
+| | React | SignalPy (Vue) |
 |---|---|---|
 | Dependency tracking | Manual (you list deps) | Automatic (kernel watches reads) |
 | Re-execution | Entire component function | Only the specific Effect |
@@ -297,7 +297,7 @@ React's model works for UI because components are cheap to re-render (virtual DO
 Multiple Signal changes can be grouped. Effects fire once at the end:
 
 ```python
-from reactpy.kernel import batch
+from signalpy.kernel import batch
 
 with batch():
     await kernel.hot_add(GermanDict)

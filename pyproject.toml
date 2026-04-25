@@ -42,7 +42,7 @@ all = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["kernel", "providers", "adapters", "entries"]
+packages = ["src/signalpy"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

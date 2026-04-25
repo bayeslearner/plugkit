@@ -11,7 +11,7 @@ So far, other Python code calls `checker.check()` directly. But what if you want
 
 ```python
 from pydantic import BaseModel
-from reactpy.kernel import runnable
+from signalpy.kernel import runnable
 
 class CheckParams(BaseModel):
     text: str

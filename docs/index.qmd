@@ -1,5 +1,5 @@
 ---
-title: "ReactPy Kernel"
+title: "SignalPy Kernel"
 subtitle: "A reactive component kernel for backend services"
 ---
 
@@ -7,13 +7,13 @@ subtitle: "A reactive component kernel for backend services"
 
 Frontend frameworks like Vue and React changed how UIs work: you declare what depends on what, and when data changes, the framework updates everything automatically. No manual callbacks. No stale state.
 
-**ReactPy brings this model to backend services.**
+**SignalPy brings this model to backend services.**
 
 Your components declare dependencies. The kernel wraps every injected service in a reactive **Signal**. When you read `self.rt.config` inside an `@effect`, the kernel tracks that read. When the config service changes — new provider hot-added, config pushed, service ranking changed — your effect re-runs automatically.
 
 ```python
-from reactpy.kernel import component, requires, computed, effect, runnable
-from reactpy.kernel.contracts import IConfig
+from signalpy.kernel import component, requires, computed, effect, runnable
+from signalpy.kernel.contracts import IConfig
 
 @component("greeter")
 @requires(config=IConfig)
@@ -115,13 +115,13 @@ Tutorials teach one concept at a time. Each builds on the last.
 
 | Example | Domain | Run |
 |---------|--------|-----|
-| `01_hello.py` | — | `PYTHONPATH=src python src/reactpy/examples/01_hello.py` |
-| `02_give_and_take.py` | IoT/sensors | `PYTHONPATH=src python src/reactpy/examples/02_give_and_take.py` |
-| `03_reactive_config.py` | Data pipeline | `PYTHONPATH=src python src/reactpy/examples/03_reactive_config.py` |
-| `04_dynamic_plugins.py` | Alerting | `PYTHONPATH=src python src/reactpy/examples/04_dynamic_plugins.py` |
-| `05_auth_protected_api.py` | CMS | `PYTHONPATH=src python src/reactpy/examples/05_auth_protected_api.py` |
-| `06_multi_provider_ranking.py` | Database | `PYTHONPATH=src python src/reactpy/examples/06_multi_provider_ranking.py` |
-| `07_fastapi_full.py` | Web app | `PYTHONPATH=src python src/reactpy/examples/07_fastapi_full.py` |
+| `01_hello.py` | — | `PYTHONPATH=src python src/signalpy/examples/01_hello.py` |
+| `02_give_and_take.py` | IoT/sensors | `PYTHONPATH=src python src/signalpy/examples/02_give_and_take.py` |
+| `03_reactive_config.py` | Data pipeline | `PYTHONPATH=src python src/signalpy/examples/03_reactive_config.py` |
+| `04_dynamic_plugins.py` | Alerting | `PYTHONPATH=src python src/signalpy/examples/04_dynamic_plugins.py` |
+| `05_auth_protected_api.py` | CMS | `PYTHONPATH=src python src/signalpy/examples/05_auth_protected_api.py` |
+| `06_multi_provider_ranking.py` | Database | `PYTHONPATH=src python src/signalpy/examples/06_multi_provider_ranking.py` |
+| `07_fastapi_full.py` | Web app | `PYTHONPATH=src python src/signalpy/examples/07_fastapi_full.py` |
 
 ## At a Glance
 

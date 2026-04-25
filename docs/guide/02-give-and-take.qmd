@@ -10,7 +10,7 @@ You want to build a spell checker. It needs a dictionary. Without a component sy
 ## Providing a Service
 
 ```python
-from reactpy.kernel import component, provides, lifecycle
+from signalpy.kernel import component, provides, lifecycle
 
 @component("dict-en")
 @provides("IDictionary")
@@ -30,7 +30,7 @@ class EnglishDict:
 ## Requiring a Service
 
 ```python
-from reactpy.kernel import component, requires, lifecycle
+from signalpy.kernel import component, requires, lifecycle
 
 @component("checker")
 @requires(dictionary="IDictionary")

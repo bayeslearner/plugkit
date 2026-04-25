@@ -24,8 +24,8 @@ class ICache(Protocol):
 
 ```python
 import time
-from reactpy.kernel import component, provides, requires, lifecycle
-from reactpy.kernel.contracts import IConfig
+from signalpy.kernel import component, provides, requires, lifecycle
+from signalpy.kernel.contracts import IConfig
 
 @component("cache", version="1.0")
 @provides(ICache)

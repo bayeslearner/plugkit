@@ -1,14 +1,15 @@
-# Bayeslearner Microkernel v2 (Reactive)
+# SignalPy Microkernel v2 (Reactive)
 
 ## What this is
 
-A Vue 3-style reactive component kernel for backend services. 13 decorators,
-2,661 lines across 9 files. Source-embeddable package. Two-axis architecture:
+A Signal-based reactive component kernel for backend services. 13 decorators,
+~2,600 lines across 9 files. Source-embeddable package. Two-axis architecture:
 
-- **Axis 1** (`kernel/`) -- the irreplaceable mechanism: reactivity engine,
-  lifecycle, registry with ref counting, bus, runtime, component model, traits
-- **Axis 2** (`providers/`, `adapters/`) -- replaceable vocabulary: config,
-  logging, credentials, storage, auth, workspace, tracing, gateway,
+- **Axis 1** (`src/signalpy/kernel/`) -- the irreplaceable mechanism: reactivity
+  engine, lifecycle, registry with ref counting, bus, runtime, component model,
+  traits
+- **Axis 2** (`src/signalpy/providers/`, `adapters/`) -- replaceable vocabulary:
+  config, logging, credentials, storage, auth, workspace, tracing, gateway,
   REST/MCP/CLI transport adapters
 
 **v2 core idea:** reactivity IS the foundation. Services are wrapped in
@@ -49,11 +50,11 @@ replace manual dependency callbacks.
 
 ```python
 from pydantic import BaseModel
-from kernel import (
+from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
     computed, effect, api, subscribe, kind, skill,
 )
-from kernel.contracts import IConfig, ILogger
+from signalpy.kernel.contracts import IConfig, ILogger
 
 class SearchParams(BaseModel):
     query: str
@@ -133,6 +134,21 @@ async def on_config_change(self):
 @computed
 def base_url(self):
     return self.rt.config.get("my-app.url", "http://localhost")
+```
+
+**Signal-backed config.** The ConfigProvider stores its state in a Signal.
+`config.get()` is a reactive read. `config.set()` creates a new dict and
+notifies all subscribers. No re-injection hack needed:
+
+```python
+config = kernel.registry.require("IConfig")
+config.set("scraper.url", "http://production.com")
+# All @effect/@computed that read scraper.url re-run automatically
+```
+
+ConfigProvider also provides IConfigAdmin for managed service patterns:
+```python
+await rt.invoke("config.update", {"pid": "printer", "properties": {"width": 80}})
 ```
 
 **`self.rt` is the component's window.** All kernel services are namespaced
@@ -233,7 +249,7 @@ No manual wiring needed.
 
 **Batch updates.** Group multiple signal changes so effects fire once:
 ```python
-from kernel import batch
+from signalpy.kernel import batch
 
 with batch():
     name_signal.set("Alice")
@@ -261,14 +277,16 @@ await kernel.shutdown()
 
 | Contract | Methods | Provider |
 |----------|---------|----------|
-| IConfig | `get(key, default)` | ConfigProvider |
+| IConfig | `get(key, default)`, `set(key, value)`, `all()` | ConfigProvider |
+| IConfigAdmin | `get_configuration(pid)`, `update(pid, props)`, `delete(pid)` | ConfigProvider |
 | ILogger | `info/warning/error/debug(msg, **kwargs)` | LoggingProvider |
 | ICredentials | `get(key, target=)`, `for_target(t)`, `list_targets()` | CredentialProvider |
 | IStorage | `put/get/list/delete(key)` (async) | StorageProvider |
 | IAuth | `authenticate(token)`, `authorize(identity, action)` | AuthProvider |
 | ITracer | `span(name, **attrs)` context manager | TracingProvider |
 | IWorkspace | `.root` (Path), `.settings` (dict) | WorkspaceProvider |
-| IConfigAdmin | `get_configuration(pid)`, `update(pid, props)`, `delete(pid)` | ConfigAdminProvider |
+| IManagedService | `updated(properties)` | (consumer protocol) |
+| IManagedServiceFactory | `updated(pid, props)`, `deleted(pid)` | (consumer protocol) |
 
 ## Trait levels
 
@@ -282,38 +300,34 @@ await kernel.shutdown()
 ## Project layout
 
 ```
-kernel/                  Axis 1 -- reactive kernel v2 (2,661 lines, 9 files)
-  reactive.py              Signal, Computed, Effect, batch (327 lines)
-  component.py             13 decorators + metadata (673 lines)
-  runtime.py               ReactiveRuntime with signal-backed injection (151 lines)
-  registry.py              ServiceRegistry with ref counting (199 lines)
-  bus.py                   invoke/publish/subscribe (155 lines)
-  lifecycle_manager.py     state machine + effect lifecycle (270 lines)
-  traits.py                L0-L3 trait system (173 lines)
-  contracts.py             Protocol interfaces (74 lines)
-  __init__.py              Kernel orchestrator (639 lines)
-kernel_v1/               original v1 kernel (preserved)
-providers/               Axis 2 -- platform components
-adapters/                Axis 2 -- transport adapters (REST, MCP, CLI)
-entries/                 Bootstrap templates (fastapi_entry.py, cli_entry.py)
-tests/                   Test suite
-examples/                Deployment examples (library, FastAPI, Django, CLI, MCP, Tauri)
+src/signalpy/
+  kernel/                  Axis 1 -- reactive kernel v2 (~2,600 lines, 9 files)
+    reactive.py              Signal, Computed, Effect, batch
+    component.py             13 decorators + metadata
+    runtime.py               ReactiveRuntime with signal-backed injection
+    registry.py              ServiceRegistry with ref counting
+    bus.py                   invoke/publish/subscribe
+    lifecycle_manager.py     state machine + effect lifecycle
+    traits.py                L0-L3 trait system
+    contracts.py             Protocol interfaces
+    __init__.py              Kernel orchestrator
+  providers/               Axis 2 -- platform components
+  adapters/                Axis 2 -- transport adapters (REST, MCP, CLI)
+  tests/                   Test suite (253 tests)
+  examples/                Progressive examples (01-07)
 ```
 
 ## Running
 
 ```bash
-PYTHONPATH=. python examples/full_demo.py   # 10 components, all transports
-PYTHONPATH=. python examples/as_library.py  # plain library + hot_add/hot_remove
-PYTHONPATH=. python examples/as_tauri.py    # Tauri/PyO3 blue-green upgrade sim
-pytest tests/test_reactive_kernel.py        # 34 tests for v2
-pytest tests/                               # full test suite
+PYTHONPATH=src python -m signalpy.examples.03_reactive_config  # Signal-backed config
+PYTHONPATH=src python -m pytest src/signalpy/tests/             # 253 tests
 ```
 
 ## Dependencies
 
 - `kernel/` has ZERO required dependencies
-- `providers/` needs: pyyaml (config)
+- `providers/` needs: pyyaml (config YAML loading, optional)
 - `adapters/rest` needs: fastapi
 - `adapters/cli` needs: click
 - `adapters/mcp` needs: (MCP SDK when pinned)

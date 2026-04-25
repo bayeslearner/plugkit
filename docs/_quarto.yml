@@ -3,7 +3,7 @@ project:
   output-dir: _site
 
 website:
-  title: "ReactPy Microkernel"
+  title: "SignalPy Microkernel"
   navbar:
     left:
       - text: "Tutorials"

@@ -1,27 +1,31 @@
 # Next Session Roadmap
 
-## Context from this conversation
+## Done (this session)
+
+- **Renamed `reactpy` → `signalpy`** — Signal is the core primitive, avoids
+  ReactPy namespace conflict. All imports, docs, pyproject.toml updated.
+- **Merged ConfigProvider + ConfigAdmin** — single component provides both
+  IConfig and IConfigAdmin. Config state stored in a Signal — `config.get()`
+  is a reactive read, `config.set()` triggers all subscribers. No re-injection
+  hack needed. Deleted configadmin.py.
+- **Cleaned up v1 test code** — removed all references to `@requires_aggregate`,
+  `@requires_map`, `@requires_best`, `@bind`, `@unbind`, `@platform_app`.
+  All 253 tests pass using v2 decorators.
+
+## Context
 
 The kernel is just **Signal + Computed + Effect + component lifecycle**. Everything
 else (config, logging, auth, bus, gateway) is components built on top.
 
 Key insight: every backend developer faces the same problem as frontend — state changes
 in one place need to propagate to all dependents. Signal handles this. No notify(), no
-manual callbacks. `self._state.value = new_val` IS the notification.
-
-## Must do: merge ConfigProvider + ConfigAdmin
-
-They're the same thing. A config component that:
-- Loads initial config (YAML, env vars) at boot
-- Accepts runtime updates (push new config via runnable)
-- Stores state in Signal so changes propagate reactively to all consumers
-- Persists to JSON file
+manual callbacks. `config.set("key", value)` IS the notification.
 
 ## Must do: rewrite docs around the core model
 
-The docs should lead with: "the kernel is 3 reactive primitives + component wiring.
-Everything else is components." Current docs still explain features as if they're
-kernel mechanisms. They're not — they're components.
+The Quarto docs should lead with: "the kernel is 3 reactive primitives + component
+wiring. Everything else is components." Current docs still explain features as if
+they're kernel mechanisms. They're not — they're components.
 
 ## 10 commercial software patterns to demo
 
@@ -29,8 +33,8 @@ Each pattern should be a runnable example + test + doc section.
 
 ### 1. Feature Flags (reactive config)
 Frontend API call toggles a flag → all backend services react.
-Shows: Signal-backed state, @effect, API → bus → propagation.
-**Example 03 already demos this. Expand with the feature flag provider.**
+Shows: Signal-backed config, @effect, `config.set()` → propagation.
+**Example 03 demos this now with Signal-backed config.**
 
 ### 2. Plugin/Extension System
 Hot-add/remove components at runtime. list[C] aggregate injection.
@@ -72,16 +76,9 @@ Reload a module, restart affected components, preserve state.
 Shows: hot_update (not yet implemented), state snapshot/restore.
 **This one requires kernel changes — add hot_update method.**
 
-## Architecture simplification
+## Architecture next steps
 
-Consider merging these v1 leftovers:
-- ConfigProvider + ConfigAdmin → one component with Signal state
-- Gateway + Transport → could the gateway BE the transport?
 - Consider: should Bus be a component instead of a kernel primitive?
-
-## Open questions for user
-
-- Package name: `reactpy` might conflict with ReactPy (the Python→React UI framework).
-  Consider: `reactpy-kernel`, `reaktor`, `signalbus`, or similar.
-- Should we publish to PyPI?
-- License?
+- Consider: Gateway + Transport — could the gateway BE the transport?
+- PyPI publish planning (package name: `signalpy`)
+- License decision
