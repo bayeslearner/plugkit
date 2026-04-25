@@ -1,0 +1,208 @@
+---
+title: "Multi-Tenant Isolation"
+subtitle: "Same factory, structurally isolated per-tenant instances."
+---
+
+## The Problem
+
+SaaS backends serve many tenants from one codebase. Each tenant needs its own
+database URL, credentials, and storage prefix -- with a guarantee that tenant A
+cannot read tenant B's data. Naming conventions (`config.get(f"tenants.{id}.db_url")`)
+work until someone forgets the prefix. What you want is **structural isolation**:
+the kernel enforces scoping so a tenant instance *cannot* see another tenant's
+resources, even if the application code tries.
+
+## Architecture
+
+The multi-tenant pattern uses three kernel features, none of which were built
+for multi-tenancy specifically:
+
+| Feature | Role |
+|---------|------|
+| `kernel.instantiate(factory, name, {"target": t})` | Creates a named instance with properties |
+| Bus target routing | `factory.runnable` + `target` param routes to `instance.runnable` |
+| Structural scoping | Credentials and storage are auto-scoped per component name |
+
+One factory, three `kernel.instantiate()` calls, three isolated instances with
+their own reactive config, credential namespace, and bus handlers.
+
+```
+kernel.instantiate("tenant-db", "tenant-db-acme",    {"target": "acme"})
+kernel.instantiate("tenant-db", "tenant-db-globex",   {"target": "globex"})
+kernel.instantiate("tenant-db", "tenant-db-initech",  {"target": "initech"})
+```
+
+The bus treats these as three distinct components. `tenant-db.query` with
+`{"target": "acme"}` routes to `tenant-db-acme.query`. Direct instance calls
+also work.
+
+## How It Works
+
+### The factory component
+
+From `src/signalpy/examples/multi_tenant.py`:
+
+```python
+class QueryParams(BaseModel):
+    table: str = "users"
+    limit: int = 10
+
+@component("tenant-db", version="1.0", depends=["config", "credentials"])
+@requires(config="IConfig", creds="ICredentials")
+class TenantDatabase:
+
+    @lifecycle.activate
+    def activate(self):
+        self._target = self.rt.properties.get("target", "unknown")  # <1>
+        self._db_url = self.rt.config.get(
+            f"tenants.{self._target}.db_url",
+            f"postgres://localhost/{self._target}"
+        )
+        self.query_log = []
+
+    @computed
+    def db_url(self):                                                # <2>
+        target = self.rt.properties.get("target", "unknown")
+        return self.rt.config.get(
+            f"tenants.{target}.db_url", f"postgres://localhost/{target}"
+        )
+
+    @runnable("query", params=QueryParams, description="Query tenant database")
+    async def query(self, params):
+        self.query_log.append(params.table)
+        return {"tenant": self._target, "db_url": self.db_url(),     # <3>
+                "table": params.table, "rows": [{"id": 1, "tenant": self._target}]}
+
+    @runnable("status", params=BaseModel, description="Tenant DB status")
+    async def status(self, params):
+        return {"tenant": self._target, "db_url": self.db_url(),
+                "queries": len(self.query_log)}
+```
+
+1. `self.rt.properties` holds the instance-specific properties passed to
+   `kernel.instantiate()`. The `target` property identifies which tenant this
+   instance serves.
+2. `@computed` makes `db_url` reactive. If someone calls
+   `config.set("tenants.acme.db_url", "postgres://new-host/acme")`, this
+   recomputes automatically -- only for the acme instance.
+3. `self.db_url()` is a computed call. It returns the cached value unless a
+   dependency changed.
+
+### Instantiation and boot
+
+```python
+kernel = Kernel()
+kernel.discover([ConfigProvider, LoggingProvider, CredentialProvider, TenantDatabase])
+
+kernel.instantiate("config", properties={
+    "defaults": {
+        "tenants": {
+            "acme":    {"db_url": "postgres://db1.prod/acme"},
+            "globex":  {"db_url": "postgres://db2.prod/globex"},
+            "initech": {"db_url": "postgres://db3.prod/initech"},
+        }
+    }
+})
+
+kernel.instantiate("tenant-db", "tenant-db-acme",    {"target": "acme"})
+kernel.instantiate("tenant-db", "tenant-db-globex",   {"target": "globex"})
+kernel.instantiate("tenant-db", "tenant-db-initech",  {"target": "initech"})
+await kernel.boot()
+```
+
+Each instance gets its own `Runtime` with `component_name` set to the instance
+name (e.g. `"tenant-db-acme"`), its own reactive Signals, and its own
+`properties` dict.
+
+### Target routing in the bus
+
+When the kernel activates an instance whose name differs from its factory and
+the instance has a `target` property, it registers a target route (from
+`kernel/__init__.py`):
+
+```python
+target_value = ci.properties.get("target")
+if target_value and ci.name != ci.meta.factory_name:
+    factory_handler = f"{ci.meta.factory_name}.{rd.name}"
+    self.bus.register_target_route(factory_handler, target_value, handler_name)
+```
+
+This means `tenant-db.query` with `{"target": "acme"}` resolves to
+`tenant-db-acme.query`. The routing order in `Bus.invoke()` is:
+
+1. **Exact match** -- `tenant-db-acme.query` hits the handler directly.
+2. **Target route** -- `tenant-db.query` + `target` param looks up the route map.
+3. **Remote transports** -- falls through to cross-process transports if no local match.
+
+Use direct instance calls when you know the name; factory + target calls for
+dynamic routing.
+
+### Reactive config changes
+
+Because `db_url` is `@computed`, a runtime config change propagates immediately:
+
+```python
+config = kernel.registry.require("IConfig")
+config.set("tenants.globex.db_url", "postgres://db-new.prod/globex-migrated")
+
+r = await kernel.bus.invoke("tenant-db.query", {"table": "users", "target": "globex"})
+assert r["db_url"] == "postgres://db-new.prod/globex-migrated"
+```
+
+The chain: `config.set()` updates the Signal, the globex `@computed` recomputes,
+and subsequent `self.db_url()` calls return the new value. Acme and initech are
+unaffected -- their computeds track different config keys.
+
+## Running It
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.multi_tenant
+```
+
+The demo creates three tenants, queries them via direct and target-routed calls,
+live-migrates Globex to a new database URL, then prints status for all three.
+You will see each tenant resolve to its own `db_url`, and the Globex migration
+reflected immediately via `@computed` reactivity.
+
+Tests: `pytest src/signalpy/tests/test_examples.py::TestMultiTenant`
+
+## Production Considerations
+
+**Tenant onboarding.** New tenants are a `kernel.instantiate()` call at runtime.
+If the kernel is already booted, use `hot_add` semantics or re-instantiate and
+activate the new instance. Seed the tenant's config section before activation so
+the `@computed` picks up the right values on first run.
+
+**Tenant offboarding.** `kernel.hot_remove("tenant-db-acme")` deactivates the
+instance, unregisters its bus handlers, removes target routes, and releases
+ref counts. The factory stays registered -- other tenants are unaffected.
+
+**Resource limits.** The kernel does not enforce per-tenant quotas. Add a
+rate-limiter component that checks `self.rt.properties["target"]` and enforces
+limits before delegating. It is a component, so it participates in the reactive
+graph like everything else.
+
+**Cross-tenant queries.** Each instance only sees its own config scope. For
+cross-tenant analytics, use a dedicated admin component that reads the global
+config directly -- keep it separate from tenant-scoped instances.
+
+**Tenant-specific providers.** If tenants need different implementations, not
+just different config, instantiate different factories under the same target
+routing scheme:
+
+```python
+kernel.instantiate("postgres-db", "tenant-db-acme",  {"target": "acme"})
+kernel.instantiate("mysql-db",    "tenant-db-globex", {"target": "globex"})
+```
+
+The bus routes by target regardless of which factory created the instance.
+
+## Key Takeaway
+
+L3 targeted is not a special multi-tenancy feature. It falls out of three
+general mechanisms: `kernel.instantiate()` creates named instances from
+factories, `properties` carry per-instance data like `target`, and the bus
+routes `factory.runnable` + `target` param to `instance.runnable`. Structural
+scoping for credentials and storage is enforced by the kernel per component
+name -- not per tenant, not per role, just per component. Multi-tenancy is a
+consequence of the component model, not an addition to it.

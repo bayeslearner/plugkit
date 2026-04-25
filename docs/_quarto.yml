@@ -20,8 +20,22 @@ website:
             href: guide/05-auth-and-policy.qmd
           - text: "6. Building a Provider"
             href: guide/06-building-a-provider.qmd
-          - text: "7. Commercial Patterns"
-            href: guide/07-commercial-patterns.qmd
+      - text: "Patterns"
+        menu:
+          - text: "Overview"
+            href: patterns/index.qmd
+          - text: "Secret Rotation"
+            href: patterns/secret-rotation.qmd
+          - text: "A/B Testing"
+            href: patterns/ab-testing.qmd
+          - text: "Multi-Tenant Isolation"
+            href: patterns/multi-tenant.qmd
+          - text: "Extension Bundle"
+            href: patterns/extension-bundle.qmd
+          - text: "Circuit Breaker"
+            href: patterns/circuit-breaker.qmd
+          - text: "Audit Trail"
+            href: patterns/audit-trail.qmd
       - text: "Reference"
         menu:
           - text: "Traits (L0-L3)"
@@ -52,7 +66,15 @@ website:
         - guide/04-runnables-and-api.qmd
         - guide/05-auth-and-policy.qmd
         - guide/06-building-a-provider.qmd
-        - guide/07-commercial-patterns.qmd
+    - title: "Patterns"
+      contents:
+        - patterns/index.qmd
+        - patterns/secret-rotation.qmd
+        - patterns/ab-testing.qmd
+        - patterns/multi-tenant.qmd
+        - patterns/extension-bundle.qmd
+        - patterns/circuit-breaker.qmd
+        - patterns/audit-trail.qmd
     - title: "Reference"
       contents:
         - ref/traits.qmd

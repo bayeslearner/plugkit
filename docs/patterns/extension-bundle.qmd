@@ -1,0 +1,204 @@
+---
+title: "Extension Bundle"
+subtitle: "Multi-component integrations at runtime without a plugin API."
+---
+
+## The Problem
+
+Plugin systems are infrastructure. They introduce extension-point interfaces,
+plugin loaders, dependency resolvers, lifecycle hooks, and version negotiation --
+all before a single line of business logic runs. Frameworks like OSGi, Stevedore,
+and WordPress plugins each define their own vocabulary for "how to extend."
+
+The question is: if you already have a component kernel with hot-add, a bus for
+cross-component calls, and `@subscribe` for event fan-out, do you need any of
+that? The Extension Bundle pattern says no. Components *are* the plugin
+mechanism. A bundle is just a list of classes.
+
+
+## Architecture
+
+The example models a core application that publishes domain events, and a Slack
+integration bundle that adds three components at runtime:
+
+```
+    CoreApp                SlackNotifier         SlackCommandHandler
+    @runnable do_work      @runnable notify      @subscribe "core.work_completed"
+         |                       ^                     |
+         | publish               | rt.invoke           |
+         | "core.work_completed" | "slack-notifier.    |
+         +-----> bus ------+     |  notify"            |
+                           |     +---------------------+
+                           v
+                    SlackWebhookReceiver
+                    @runnable receive
+```
+
+**CoreApp** publishes `"core.work_completed"` via the bus. It knows nothing
+about Slack. **SlackNotifier** exposes a `notify` runnable. **SlackWebhookReceiver**
+accepts inbound webhooks and publishes `"slack.webhook_received"` events.
+**SlackCommandHandler** is the glue -- it `@subscribe`s to core events *and*
+calls the notifier via `self.rt.invoke()`, bridging the two domains without
+either side knowing about the other.
+
+All three are hot-added as a group and removed as a group.
+
+
+## How It Works
+
+### Step 1: Boot the core
+
+The kernel starts with only the platform providers and `CoreApp`:
+
+```python
+kernel = Kernel()
+kernel.discover([ConfigProvider, LoggingProvider, CoreApp])
+kernel.instantiate("config", properties={"defaults": {}})
+await kernel.boot()
+```
+
+At this point, `kernel.bus.has_handler("slack-notifier.notify")` is `False`.
+CoreApp can publish events, but nobody is listening.
+
+
+### Step 2: Hot-add the bundle
+
+The bundle is a plain Python list:
+
+```python
+SLACK_BUNDLE = [SlackNotifier, SlackWebhookReceiver, SlackCommandHandler]
+```
+
+Installation is a loop:
+
+```python
+for cls in SLACK_BUNDLE:
+    await kernel.hot_add(cls)
+```
+
+Each `hot_add()` call does the full lifecycle: register the factory, instantiate,
+resolve dependencies, build the reactive runtime, activate, and register bus
+handlers. Order matters -- `SlackCommandHandler` declares
+`depends=["config", "slack-notifier"]`, so it must be added after `SlackNotifier`.
+
+
+### Step 3: @subscribe wires up automatically
+
+`SlackCommandHandler` declares a subscription on the `core.work_completed` event.
+The kernel registers this subscription during activation -- no manual wiring:
+
+```python
+@component("slack-commands", version="1.0", depends=["config", "slack-notifier"])
+@requires(config="IConfig")
+class SlackCommandHandler:
+
+    @subscribe("core.work_completed",
+               description="Auto-notify Slack when core work completes")
+    async def on_work_completed(self, event_type, data):
+        self.handled.append(("work_completed", data))
+        # Cross-component call: notify Slack about the work
+        await self.rt.invoke("slack-notifier.notify", {
+            "channel": "ops",
+            "message": f"Work completed: {data.get('result', '?')}",
+        })
+```
+
+This is the most interesting component in the bundle. It demonstrates two
+integration patterns at once:
+
+1. **Event subscription** (`@subscribe`) -- reacts to core domain events
+   without CoreApp knowing it exists.
+2. **Cross-component invocation** (`self.rt.invoke()`) -- calls the notifier
+   through the bus, which means auth policies, audit trails, and any other
+   bus-level concerns apply automatically.
+
+When `CoreApp.do_work()` publishes `"core.work_completed"`, the bus fans the
+event out to all subscribers. `SlackCommandHandler.on_work_completed` fires,
+which in turn calls `slack-notifier.notify` through the bus.
+
+
+### Step 4: Clean removal
+
+Removal is the mirror of installation, in reverse dependency order:
+
+```python
+for name in ["slack-commands", "slack-webhook", "slack-notifier"]:
+    await kernel.hot_remove(name)
+```
+
+Each `hot_remove()` unregisters bus handlers, unprovides services, releases ref
+counts, deactivates the component, and disposes any reactive effects. After
+removal, `kernel.bus.has_handler("slack-notifier.notify")` is `False` again.
+CoreApp continues running, publishing events into the void.
+
+
+## Running It
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.extension_bundle
+```
+
+Expected output:
+
+```
+  === Core app running (no extensions) ===
+    No Slack handler registered yet.
+
+  === Installing Slack bundle (3 components) ===
+    Handlers now: ['slack-notifier.notify', 'slack-webhook.receive', 'slack-commands.handle']
+
+  === Core app does work -> auto-notifies Slack ===
+    [slack-notifier] #ops: Work completed: ok
+    Notifier sent: ['#ops: Work completed: ok']
+    Commands handled: [('work_completed', {'result': 'ok'})]
+
+  === Direct Slack calls ===
+    [slack-notifier] #dev: Deploy successful
+
+  === Removing Slack bundle ===
+    Slack handlers removed.
+
+  Extension bundle demo complete.
+```
+
+Tests: `pytest src/signalpy/tests/test_examples.py::TestExtensionBundle -v`
+
+
+## Production Considerations
+
+**Dependency ordering.** `SlackCommandHandler` declares
+`depends=["config", "slack-notifier"]`, so it must be added after `SlackNotifier`.
+In production, sort the bundle topologically before calling `hot_add()`. The
+kernel's own `_resolve_order()` does this at boot -- a bundle installer should
+reuse the same logic.
+
+**Partial install rollback.** If a mid-bundle `hot_add()` fails, earlier
+components are already running. Wrap the loop with rollback:
+
+```python
+installed = []
+try:
+    for cls in SLACK_BUNDLE:
+        ci = await kernel.hot_add(cls)
+        installed.append(ci.name)
+except Exception:
+    for name in reversed(installed):
+        await kernel.hot_remove(name)
+    raise
+```
+
+**Bundle manifests.** `SLACK_BUNDLE` is a list literal. A production system
+would use a manifest (YAML, dataclass) declaring classes, install order, required
+kernel version, and config defaults. The kernel does not need to know about
+manifests -- they are a convention on top of `hot_add()`.
+
+**Version compatibility.** Bundles that depend on specific runnables break if
+the target renames them. Use `kernel.bus.has_handler()` as a pre-check.
+
+
+## Key Takeaway
+
+`hot_add()` + `@subscribe` + bus calls = a plugin system. No plugin API needed.
+Components are the extension mechanism. The same lifecycle, dependency resolution,
+bus routing, and reactive propagation that run at boot time also run at runtime.
+A bundle is just a list of component classes and a `for` loop.

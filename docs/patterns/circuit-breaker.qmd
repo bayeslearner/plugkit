@@ -1,0 +1,186 @@
+---
+title: "Circuit Breaker"
+subtitle: "Fail fast, recover automatically — with reactive state."
+---
+
+## The Problem
+
+When a dependency goes down, callers pile up waiting for timeouts. Each pending request holds a thread or coroutine, exhausting connection pools and cascading the failure upstream. The service that was merely *slow* is now taking your entire system down with it.
+
+The circuit breaker pattern addresses this with three ideas:
+
+1. **Fail fast.** After N consecutive failures, stop calling the dependency entirely.
+2. **Probe periodically.** Let a single request through to check if the dependency recovered.
+3. **Resume automatically.** If the probe succeeds, close the breaker and restore normal traffic.
+
+In most frameworks, implementing this requires timers, callbacks, and manual state management. In SignalPy, the breaker state is a `Signal`. State transitions propagate through `@effect`. The failure threshold comes from `@computed` reading config. The entire state machine is reactive.
+
+## Architecture
+
+Two components, zero kernel changes.
+
+**ExternalAPI** simulates a dependency that can go up or down. Its health is a `Signal(True)` — calling `set_health(False)` simulates an outage, and runnables check `_healthy.peek()` before processing.
+
+**PaymentService** wraps the external API with a circuit breaker. It tracks consecutive failures and manages a three-state machine (`closed` / `open` / `half-open`) stored as a `Signal`. The failure threshold is a `@computed` that reads from config — change the config at runtime and the threshold updates immediately.
+
+```
+                ┌──────────────┐
+                │  ExternalAPI │
+                │  _healthy: Signal(bool)
+                └──────┬───────┘
+                       │ bus: ext-api.call
+                ┌──────┴───────┐
+                │PaymentService│
+                │  _state: Signal("closed"|"open"|"half-open")
+                │  failure_threshold: @computed (from config)
+                │  on_state_change: @effect (logs transitions)
+                └──────────────┘
+```
+
+## How It Works
+
+### The State Machine
+
+The breaker has three states:
+
+- **closed** — normal operation. Every request goes through to the external API.
+- **open** — the API is assumed down. Requests fail immediately with `"circuit open"` without touching the API.
+- **half-open** — a single probe request is sent to check if the API recovered.
+
+Transitions:
+
+```
+closed ──[N failures]──► open ──[next call = probe]──► half-open
+   ▲                                                        │
+   └──────────────[probe succeeds]──────────────────────────┘
+                   [probe fails] ──► open
+```
+
+### Breaker State as a Signal
+
+The key insight is that `_state` is a `Signal`, not a plain string:
+
+```python
+@lifecycle.activate
+def activate(self):
+    self._consecutive_failures = 0
+    self._state = Signal("closed")  # closed | open | half-open
+    self.event_log = []
+```
+
+Because it is a Signal, any `@effect` or `@computed` that reads it will automatically re-run when the state changes. The component logs every transition with zero manual wiring:
+
+```python
+@effect
+def on_state_change(self):
+    """Log circuit breaker state transitions."""
+    state = self._state.get()           # reactive read — tracked
+    self.event_log.append(f"breaker:{state}")
+    print(f"    [circuit-breaker] State: {state}")
+```
+
+Every time `self._state.set("open")` or `self._state.set("closed")` is called anywhere in the component, `on_state_change` re-runs. No event bus subscription. No observer pattern boilerplate.
+
+### Config-Driven Threshold
+
+The failure threshold is a `@computed` that reads from the kernel's config:
+
+```python
+@computed
+def failure_threshold(self):
+    """Max failures before opening. Reactive — config-driven."""
+    return self.rt.config.get("circuit.failure_threshold", 3)
+```
+
+This is cached and only recomputes when `self.rt.config` changes. An ops team can change the threshold at runtime via `config.set("circuit.failure_threshold", 5)` and the breaker adapts without restart.
+
+### The Pay Runnable
+
+The full `pay` method shows the state machine in action:
+
+```python
+@runnable("pay", params=PayParams, description="Process a payment")
+async def pay(self, params):
+    state = self._state.peek()              # <1>
+
+    if state == "open":
+        self._state.set("half-open")        # <2>
+        try:
+            await self.rt.invoke("ext-api.call", {})
+            self._consecutive_failures = 0  # <3>
+            self._state.set("closed")
+        except Exception:
+            self._state.set("open")         # <4>
+            return {"error": "circuit open", "amount": params.amount}
+
+    try:
+        await self.rt.invoke("ext-api.call", {})
+        self._consecutive_failures = 0
+        return {"paid": True, "amount": params.amount}
+    except Exception:
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.failure_threshold():  # <5>
+            self._state.set("open")
+        return {"error": "api_failure", "failures": self._consecutive_failures}
+```
+
+1. `peek()` reads without tracking — we are in a runnable, not an effect.
+2. Transition to `half-open` fires `on_state_change` immediately.
+3. Probe succeeded — reset failures and close the breaker.
+4. Probe failed — back to `open`.
+5. `failure_threshold()` calls the `@computed`, which reads config reactively. If the threshold is met, the breaker opens.
+
+Note the distinction between `peek()` and `get()`. Inside a runnable, we use `peek()` because runnables are not reactive contexts — we just want the current value. Inside `@effect` and `@computed`, we use `get()` to establish tracking.
+
+### The Test
+
+The test in `TestCircuitBreaker` (from `test_examples.py`) sets the threshold to 2 and walks through the full cycle:
+
+```python
+# Normal operation
+r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+assert r["paid"] is True
+assert svc.breaker_state() == "closed"
+
+# Take API down — 2 failures opens the breaker
+await kernel.bus.invoke("ext-api.set_health", {"healthy": False})
+await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+assert svc.breaker_state() == "open"
+
+# Next call fails fast
+r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+assert r["error"] == "circuit open"
+
+# Recover API — probe closes the breaker
+await kernel.bus.invoke("ext-api.set_health", {"healthy": True})
+r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+assert r["paid"] is True
+assert svc.breaker_state() == "closed"
+```
+
+## Running It
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.circuit_breaker
+```
+
+You will see `[circuit-breaker] State: closed`, then normal payments succeeding. After the API goes down, failures accumulate until `State: open`. Subsequent calls fail fast. When the API recovers, the next call probes (`State: half-open`) and on success closes the breaker. The `[circuit-breaker] State:` lines come from the `@effect` firing on each state transition — you never call it.
+
+## Production Considerations
+
+The example demonstrates the pattern. Production implementations would extend it:
+
+**Exponential backoff for probes.** The example probes on the next incoming request after the breaker opens. In production, you would add a delay that grows exponentially (1s, 2s, 4s, ...) to avoid hammering a recovering service. Store the next-probe timestamp as a Signal too — an `@effect` could schedule the probe timer reactively.
+
+**Per-endpoint breakers.** A single external API may have multiple endpoints with different reliability profiles. Use a `dict[str, Signal]` of breaker states keyed by endpoint path, or instantiate multiple `PaymentService` instances via `kernel.instantiate()` with different `target` properties (L3 targeted).
+
+**Metrics and alerting on state transitions.** The `on_state_change` effect is the natural hook. Replace `print()` with `self.rt.logger.warning()` or push to a metrics system. Because it is an `@effect`, it fires on every transition with zero additional wiring.
+
+**Sliding window vs. consecutive count.** The example tracks `_consecutive_failures` — one success resets the counter. A sliding window (e.g., "5 failures in 60 seconds") is more resilient to intermittent errors. Store the window as a `deque` of timestamps; the `@computed` threshold check stays the same.
+
+**Half-open concurrency.** The example lets one probe through in half-open state. Production breakers often limit half-open to a single concurrent request and queue or reject the rest until the probe resolves.
+
+## Key Takeaway
+
+Signal is not just for kernel internals. Components create their own Signals for local reactive state — `Signal("closed")` for breaker state, `Signal(True)` for API health. The same `@effect` and `@computed` machinery that tracks `self.rt.config` works identically on component-owned Signals. There is one reactive system, and it works everywhere.

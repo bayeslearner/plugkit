@@ -92,7 +92,7 @@ Tutorials teach one concept at a time. Each builds on the last.
 | 4 | [Runnables & API](guide/04-runnables-and-api.qmd) | `@runnable`, `@api`, bus invocation, transports |
 | 5 | [Auth & Policy](guide/05-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
 | 6 | [Building a Provider](guide/06-building-a-provider.qmd) | Write your own `ICache` or `IDatabase`, bridge pattern |
-| 7 | [Commercial Patterns](guide/07-commercial-patterns.qmd) | Secret rotation, A/B testing, multi-tenant, extension bundles, circuit breaker, audit trail |
+| 7 | [Commercial Patterns](patterns/index.qmd) | Secret rotation, A/B testing, multi-tenant, extension bundles, circuit breaker, audit trail |
 
 ## Reference
 

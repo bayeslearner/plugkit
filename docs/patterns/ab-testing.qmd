@@ -1,0 +1,183 @@
+---
+title: "A/B Testing"
+subtitle: "Runtime traffic splitting with map injection, @computed, and deterministic hashing."
+---
+
+## The Problem
+
+You have two versions of a search backend -- v1 (keyword matching) and v2 (semantic matching). You need to:
+
+- Route a configurable percentage of traffic to v2 while v1 handles the rest.
+- Change the split at runtime (0% -> 50% -> 100%) without restarts or redeployments.
+- Guarantee that the same user always sees the same variant (consistent bucketing).
+
+Traditional approaches require a feature-flag service, a routing proxy, or custom middleware. In SignalPy, it falls out of three kernel primitives: `@prop` for tagging providers, map injection for accessing them by key, and `@computed` for reactive config reads.
+
+## Architecture
+
+```
+                         +-----------+
+      config.set()  ---->| IConfig   |
+                         +-----------+
+                               |
+                     @computed recomputes
+                               |
+                               v
+   +----------+     +---------------------+     +----------+
+   | SearchV1 |<----| ABRouter            |---->| SearchV2 |
+   | @prop v1 |     | @requires(backends= |     | @prop v2 |
+   | ISearch  |     |   "ISearch",        |     | ISearch  |
+   +----------+     |   key="version")    |     +----------+
+                    +---------------------+
+                               |
+                    _pick_variant(user_id)
+                    hash(user_id) % 100
+```
+
+Three components, one contract (`ISearch`), zero kernel changes:
+
+| Component | Role | Key decorator |
+|-----------|------|---------------|
+| `SearchV1` | Legacy keyword search | `@provides("ISearch")`, `@prop("_version", "version", "v1")` |
+| `SearchV2` | New semantic search | `@provides("ISearch")`, `@prop("_version", "version", "v2")` |
+| `ABRouter` | Routes requests by split % | `@requires(backends="ISearch", key="version")` |
+
+Both search components provide the same contract. The `@prop` decorator tags each with a `version` property that the registry tracks. The router never names the backends directly -- it receives them as a map keyed by their `version` property.
+
+## How It Works
+
+### Step 1: Two providers, one contract
+
+Each search backend declares `@provides("ISearch")` and tags itself with `@prop`:
+
+```python
+@component("search-v1", version="1.0")
+@provides("ISearch")
+@prop("_version", "version", "v1")              # <1>
+class SearchV1:
+    @runnable("search", params=SearchParams, description="Search v1")
+    async def search(self, params):
+        return {"engine": "v1-keyword", "query": params.query,
+                "results": ["legacy-result"]}
+```
+1. `@prop("_version", "version", "v1")` -- stores `"v1"` as the `version` property on this service in the registry. The first argument (`_version`) is the Python attribute name; the second (`version`) is the registry property key.
+
+`SearchV2` is identical except it sets `version` to `"v2"` and returns semantic results.
+
+### Step 2: Map injection
+
+The router declares a map-style `@requires`:
+
+```python
+@requires(backends="ISearch", key="version")     # <1>
+class ABRouter:
+    ...
+```
+1. `key="version"` tells the kernel to inject all `ISearch` providers as a `dict` keyed by their `version` property. At runtime, `self.rt.backends` yields `{"v1": <SearchV1>, "v2": <SearchV2>}`.
+
+This is not a list -- it is a keyed map. The router looks up a specific variant by key, which makes routing O(1).
+
+### Step 3: Reactive split percentage
+
+The split percentage lives in config and is read through `@computed`:
+
+```python
+@computed
+def v2_percentage(self):
+    """Reactive: recomputes when config changes."""
+    return self.rt.config.get("ab.search.v2_percent", 0)
+```
+
+Because `@computed` tracks reactive reads, calling `config.set("ab.search.v2_percent", 50)` invalidates the cached value. The next call to `self.v2_percentage()` recomputes from the new config -- no event subscription, no callback registration.
+
+### Step 4: Deterministic hashing
+
+Consistent bucketing ensures the same `user_id` always routes to the same variant for a given split percentage:
+
+```python
+def _pick_variant(self, user_id: str) -> str:
+    bucket = int(hashlib.md5(user_id.encode()).hexdigest(), 16) % 100
+    return "v2" if bucket < self.v2_percentage() else "v1"
+```
+
+The MD5 hash maps each `user_id` to a stable bucket in `[0, 99]`. If the bucket is below the v2 percentage, the user gets v2. At 0%: all v1. At 50%: buckets 0-49 get v2. At 100%: all v2. The same user always lands in the same bucket.
+
+### Step 5: Routing the request
+
+The `search` runnable ties it all together:
+
+```python
+@runnable("search", params=SearchParams, description="A/B routed search")
+async def search(self, params):
+    variant = self._pick_variant(params.user_id)     # <1>
+    backends = self.rt.backends                       # <2>
+    backend = backends.get(variant)                   # <3>
+    if backend is None:
+        return {"error": f"No backend for variant {variant}"}
+    result = await backend.search(params)             # <4>
+    self.route_log.append(variant)
+    result["variant"] = variant
+    return result
+```
+1. Hash the user into a variant (`"v1"` or `"v2"`).
+2. Read the injected map (reactive -- tracked if inside `@effect`/`@computed`).
+3. Look up the backend by variant key.
+4. Delegate to the selected backend's `search` runnable directly.
+
+The complete `ABRouter` source is in `src/signalpy/examples/ab_testing.py` -- the five steps above cover every line.
+
+## Running It
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.ab_testing
+```
+
+Expected output:
+
+```
+  === Phase 1: 0% v2 ===
+    alice: v1 (v1-keyword)
+    bob: v1 (v1-keyword)
+    charlie: v1 (v1-keyword)
+    dave: v1 (v1-keyword)
+    eve: v1 (v1-keyword)
+  v1 calls: 5, v2 calls: 0
+
+  === Phase 2: 50% v2 (config.set) ===
+    alice: v2 (v2-semantic)
+    bob: v1 (v1-keyword)
+    charlie: v2 (v2-semantic)
+    dave: v1 (v1-keyword)
+    eve: v2 (v2-semantic)
+  v1 calls: 2, v2 calls: 3
+
+  === Phase 3: 100% v2 ===
+    alice: v2 (v2-semantic)
+    bob: v2 (v2-semantic)
+    charlie: v2 (v2-semantic)
+    dave: v2 (v2-semantic)
+    eve: v2 (v2-semantic)
+  v1 calls: 0, v2 calls: 5
+
+  A/B testing demo complete.
+```
+
+Phase 2 variant assignments depend on each user's MD5 hash bucket. The split is deterministic.
+
+The test suite (`TestABTesting` in `src/signalpy/tests/test_examples.py`) validates split routing (0% -> all v1, 100% -> all v2) and consistent bucketing (same `user_id` at 50% always returns the same variant).
+
+## Production Considerations
+
+**Feature flag services.** The example reads split percentages from `IConfig`. In production, swap the config source for a feature-flag service (LaunchDarkly, Unleash, Flagsmith). The `@computed` still recomputes when the flag value changes -- the router does not care where the value comes from.
+
+**Experiment tracking.** The `route_log` in the example is a placeholder. Production systems should emit structured events per routing decision (user, variant, timestamp) to an analytics pipeline for significance testing.
+
+**Metrics per variant.** Instrument each backend with latency, error rate, and business metrics. Compare v1 vs v2 outcomes before ramping up. The kernel's bus makes it straightforward to add a metrics `@subscribe` handler without modifying the backends.
+
+**Gradual ramp.** The pattern supports any ramp schedule: 1% -> 5% -> 25% -> 50% -> 100%. Each step is a single `config.set()` call. If v2 degrades, set the percentage back to 0 -- the `@computed` recomputes and all subsequent requests route to v1 immediately.
+
+**Multiple experiments.** Run parallel experiments by adding more `@prop` dimensions or separate router components. Each router reads its own config key, so experiments do not interfere.
+
+## Key Takeaway
+
+A/B testing requires three things: multiple implementations of the same contract, a way to select between them at runtime, and reactive config to change the selection without restarts. SignalPy provides all three as composable kernel primitives -- `@prop` + map injection + `@computed` -- with no A/B-specific code in the kernel itself.
