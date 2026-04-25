@@ -1,0 +1,183 @@
+---
+title: "Hot Code Update"
+subtitle: "Replace running components with new versions — state preserved, zero downtime."
+---
+
+## The Problem
+
+You deploy a new version of a service. The old version has state: an in-memory
+index, a connection pool, a query counter. Traditional approaches:
+
+- **Restart the process** — lose all state, brief downtime.
+- **Blue-green deployment** — spin up a new process, drain traffic, shut down old. Works
+  but requires infrastructure orchestration.
+- **In-place module reload** — `importlib.reload()` replaces the class, but existing
+  instances still reference the old class. State is orphaned.
+
+SignalPy's `hot_update()` is an in-process blue-green: snapshot state, swap the
+class, restore state. The kernel handles the lifecycle. No orchestration needed.
+
+::: {.callout-important}
+## The only pattern that required kernel changes
+All other patterns worked with the stock kernel. Hot update required adding:
+
+- `kernel.hot_update(new_cls)` method
+- `@lifecycle.snapshot` and `@lifecycle.restore` hooks
+- `LifecycleManager.replace_factory()` and `remove_instance()`
+:::
+
+
+## Architecture
+
+The hot update sequence:
+
+```
+V1 running (index=3 docs, queries=1)
+    │
+    ├── 1. Snapshot: call @lifecycle.snapshot → {"index": {...}, "query_count": 1}
+    ├── 2. Tear down: unregister bus, unprovide, deactivate
+    ├── 3. Replace factory: SearchV1 class → SearchV2 class
+    ├── 4. Create + activate: new instance, same name, same properties
+    └── 5. Restore: call @lifecycle.restore(snapshot_data)
+
+V2 running (index=3 docs, queries=1, new search algorithm)
+```
+
+
+## How It Works
+
+### The snapshot/restore hooks
+
+Components declare what state to preserve:
+
+```python
+@component("search", version="1.0", depends=["config"])
+@requires(config="IConfig")
+@provides("ISearch")
+class SearchV1:
+
+    @lifecycle.activate
+    def activate(self):
+        self._index = {}
+        self._query_count = 0
+
+    @lifecycle.snapshot                    # <1>
+    def snapshot(self):
+        return {
+            "index": dict(self._index),
+            "query_count": self._query_count,
+        }
+
+    @lifecycle.restore                     # <2>
+    def restore(self, state):
+        self._index = state.get("index", {})
+        self._query_count = state.get("query_count", 0)
+```
+1. Called before teardown. Returns a dict of state to preserve.
+2. Called after activation of the new version. Receives the preserved dict.
+
+Both hooks are optional. Without them, `hot_update` falls back to copying
+`instance.__dict__` (excluding `rt` and kernel internals).
+
+
+### The kernel method
+
+```python
+new_instances = await kernel.hot_update(SearchV2)
+```
+
+This does five things atomically (per instance):
+
+1. **Snapshot** — `@lifecycle.snapshot` or `__dict__` fallback
+2. **Tear down** — unregister bus handlers, unprovide services, deactivate, remove
+3. **Replace factory** — swap the class in the factory registry
+4. **Create + activate** — new instance, same name, same properties, full lifecycle
+5. **Restore** — `@lifecycle.restore` or `__dict__` merge
+
+All instances of the factory are updated. If you have L3 targeted instances
+(`search-prod`, `search-dev`), all of them get the new class.
+
+
+### The new version
+
+V2 has the same component name, same runnables, same snapshot/restore — but
+a different search algorithm:
+
+```python
+@component("search", version="2.0", depends=["config"])
+@requires(config="IConfig")
+@provides("ISearch")
+class SearchV2:
+    """Adds relevance scoring and prefix matching."""
+
+    @runnable("search", params=SearchParams, description="Search (v2)")
+    async def search(self, params):
+        self._query_count += 1
+        query = params.query.lower()
+        results = []
+        for doc_id, text in self._index.items():
+            text_lower = text.lower()
+            if query in text_lower:
+                score = 1.0
+                if text_lower.startswith(query):
+                    score += 0.5                # prefix bonus
+                if query == text_lower:
+                    score += 1.0                # exact match bonus
+                results.append({"id": doc_id, "text": text, "score": score})
+        results.sort(key=lambda r: r["score"], reverse=True)
+        return {"engine": "v2-scored", "results": results, ...}
+```
+
+
+## Running
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.hot_update
+```
+
+Expected output:
+
+```
+V1 search 'python': 2 results, engine=v1-keyword
+Queries so far: 1
+
+Hot update: V1 → V2
+Updated 1 instance(s)
+Status after update: version=2.0, docs=3, queries=1
+
+V2 search 'python': 2 results, engine=v2-scored
+  1: Python programming language (score=1.5)
+  2: Python snake species (score=1.5)
+Queries after update: 2
+```
+
+The index (3 docs) and query count (1) survived the upgrade.
+
+Tests: `TestHotUpdate` in `src/signalpy/tests/test_examples.py`.
+
+
+## Production Considerations
+
+**Schema migration.** V2 might expect different state keys than V1. The `@lifecycle.restore`
+method should handle missing keys gracefully with defaults.
+
+**Incompatible contracts.** If V2 changes its `@provides` or `@requires`, consumers
+may break. Version your contracts or use adapter patterns.
+
+**Multi-instance updates.** `hot_update` replaces ALL instances of a factory. For
+gradual rollouts, combine with L3 targeted: update one tenant at a time.
+
+**Async snapshot.** Both `@lifecycle.snapshot` and `@lifecycle.restore` can be async —
+useful for flushing pending writes before snapshot.
+
+**State size.** The snapshot lives in memory during the swap. For large state
+(e.g., a 100MB index), consider snapshotting to disk via storage.
+
+
+## Key Takeaway
+
+`hot_update()` is snapshot → teardown → replace → activate → restore. The kernel
+manages the lifecycle transitions. Components declare what state matters via
+`@lifecycle.snapshot`/`@lifecycle.restore`. Without those hooks, `__dict__` copying
+works as a reasonable fallback. This is the only pattern that required kernel
+changes — and the change was 80 lines.

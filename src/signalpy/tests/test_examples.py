@@ -399,3 +399,97 @@ class TestUnitTestingPatterns:
         assert collector.events[0]["type"] == "order.placed"
 
         await kernel.shutdown()
+
+
+# ══════════════════════════════════════════════════════════════════
+# Example 15: Hot Code Update
+# ══════════════════════════════════════════════════════════════════
+
+class TestHotUpdate:
+    @pytest.mark.asyncio
+    async def test_hot_update_preserves_state(self):
+        """hot_update replaces the class but preserves snapshot state."""
+        from signalpy.examples.hot_update import SearchV1, SearchV2
+
+        kernel = Kernel()
+        kernel.discover([ConfigProvider, LoggingProvider, SearchV1])
+        kernel.instantiate("config", properties={"defaults": {}})
+        await kernel.boot()
+
+        # Build state in V1
+        await kernel.bus.invoke("search.index_doc", {"id": "a", "text": "hello world"})
+        await kernel.bus.invoke("search.index_doc", {"id": "b", "text": "hello there"})
+        await kernel.bus.invoke("search.search", {"query": "hello"})
+
+        status = await kernel.bus.invoke("search.status", {})
+        assert status["version"] == "1.0"
+        assert status["docs"] == 2
+        assert status["queries"] == 1
+
+        # Hot update to V2
+        await kernel.hot_update(SearchV2)
+
+        # State preserved, version changed
+        status = await kernel.bus.invoke("search.status", {})
+        assert status["version"] == "2.0"
+        assert status["docs"] == 2       # index preserved
+        assert status["queries"] == 1    # count preserved
+
+        # V2 search returns scored results
+        r = await kernel.bus.invoke("search.search", {"query": "hello"})
+        assert r["engine"] == "v2-scored"
+        assert len(r["results"]) == 2
+        assert all("score" in hit for hit in r["results"])
+        assert r["total_queries"] == 2   # count continued
+
+        await kernel.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_hot_update_fallback_dict_snapshot(self):
+        """Without @lifecycle.snapshot, hot_update uses __dict__ fallback."""
+        @component("simple-svc", version="1.0")
+        @provides("ISimple")
+        class SimpleV1:
+            @lifecycle.activate
+            def activate(self):
+                self.counter = 0
+                self.data = {"key": "v1"}
+
+            @runnable("inc", params=BaseModel, description="Increment")
+            async def inc(self, params):
+                self.counter += 1
+                return {"counter": self.counter}
+
+        @component("simple-svc", version="2.0")
+        @provides("ISimple")
+        class SimpleV2:
+            @lifecycle.activate
+            def activate(self):
+                self.counter = 0
+                self.data = {}
+
+            @runnable("inc", params=BaseModel, description="Increment v2")
+            async def inc(self, params):
+                self.counter += 10  # v2 increments by 10
+                return {"counter": self.counter}
+
+        kernel = Kernel()
+        kernel.discover([SimpleV1])
+        await kernel.boot()
+
+        await kernel.bus.invoke("simple-svc.inc", {})
+        await kernel.bus.invoke("simple-svc.inc", {})
+        # counter = 2, data = {"key": "v1"}
+
+        await kernel.hot_update(SimpleV2)
+
+        # __dict__ fallback should have preserved counter and data
+        svc = kernel.lifecycle.get_instance("simple-svc").instance
+        assert svc.counter == 2
+        assert svc.data == {"key": "v1"}
+
+        # V2 behavior (increments by 10)
+        r = await kernel.bus.invoke("simple-svc.inc", {})
+        assert r["counter"] == 12  # 2 + 10
+
+        await kernel.shutdown()

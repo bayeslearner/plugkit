@@ -543,6 +543,110 @@ class Kernel:
             gw._rebuild()
         log.info("Hot-removed: %s", name)
 
+    # ── Hot update (blue-green) ───────────────────────────────────
+
+    async def hot_update(self, new_cls: type) -> list[ComponentInstance]:
+        """Replace a running component with a new version, preserving state.
+
+        1. Snapshot state from each running instance (via @lifecycle.snapshot
+           or __dict__ fallback)
+        2. Tear down old instances (unregister bus, unprovide, deactivate)
+        3. Replace the factory class
+        4. Create new instances with same names and properties
+        5. Activate and restore state (via @lifecycle.restore or __dict__)
+        6. Re-register bus handlers, gateway rebuild
+
+        Returns the new ComponentInstance objects.
+        """
+        if not has_meta(new_cls):
+            raise TypeError(f"{new_cls.__name__} is not a @component")
+
+        new_meta = get_meta(new_cls)
+        factory_name = new_meta.factory_name
+
+        if factory_name not in self.lifecycle.factories:
+            raise KeyError(f"No factory {factory_name!r} to update — use hot_add for new components")
+
+        # Find all running instances of this factory
+        old_instances = [
+            ci for ci in self.lifecycle.all_instances()
+            if ci.meta.factory_name == factory_name and ci.state == State.ACTIVE
+        ]
+        if not old_instances:
+            raise KeyError(f"No active instances of {factory_name!r}")
+
+        # ── Phase 1: Snapshot ──────────────────────────────────
+        snapshots: dict[str, dict] = {}
+        for ci in old_instances:
+            if ci.instance is None:
+                continue
+            if ci.meta.snapshot_fn:
+                result = ci.meta.snapshot_fn(ci.instance)
+                if ci.meta.snapshot_is_async:
+                    result = await result
+                snapshots[ci.name] = result
+            else:
+                # Fallback: capture instance __dict__ minus kernel internals
+                snapshots[ci.name] = {
+                    k: v for k, v in ci.instance.__dict__.items()
+                    if k != "rt" and not k.startswith("_computed_")
+                }
+            log.info("Snapshot: %s (%d keys)", ci.name, len(snapshots[ci.name]))
+
+        # Save instance metadata before teardown
+        instance_specs = [
+            (ci.name, dict(ci.properties))
+            for ci in old_instances
+        ]
+
+        # ── Phase 2: Tear down old instances ───────────────────
+        for ci in old_instances:
+            for rd in ci.meta.runnables:
+                self.bus.unregister_handler(f"{ci.name}.{rd.name}")
+            for entry in self.registry.query():
+                if entry.provider_name == ci.name:
+                    self.registry.unprovide(entry)
+            for attr_name, contract in ci.meta.requires.items():
+                self.registry.release(contract, ci.name)
+            await self.lifecycle.deactivate(ci.name, self._build_runtime)
+            self.lifecycle.remove_instance(ci.name)
+
+        # ── Phase 3: Replace factory ───────────────────────────
+        self.lifecycle.replace_factory(new_cls)
+        log.info("Factory replaced: %s → %s", factory_name, new_cls.__name__)
+
+        # ── Phase 4: Create + activate + restore ───────────────
+        new_instances = []
+        for inst_name, props in instance_specs:
+            ci = self.lifecycle.instantiate(factory_name, inst_name, props)
+            ci.state = State.RESOLVED
+            await self.lifecycle.activate(ci.name, self._build_runtime)
+            self._register_component_bus(ci)
+
+            # Restore state
+            if ci.instance is not None and inst_name in snapshots:
+                state = snapshots[inst_name]
+                if ci.meta.restore_fn:
+                    result = ci.meta.restore_fn(ci.instance, state)
+                    if ci.meta.restore_is_async:
+                        await result
+                else:
+                    # Fallback: merge into __dict__
+                    for k, v in state.items():
+                        if k != "rt" and not k.startswith("_computed_"):
+                            setattr(ci.instance, k, v)
+                log.info("Restored: %s (%d keys)", ci.name, len(state))
+
+            new_instances.append(ci)
+
+        # Gateway rebuild
+        gw = self.registry.require_optional("IGateway")
+        if gw and hasattr(gw, "_rebuild"):
+            gw._rebuild()
+
+        log.info("Hot-updated: %s (%d instances)", factory_name, len(new_instances))
+        return new_instances
+
     # ── Retry errored ───────────────────────────────────────────
 
     async def retry_erroneous(self, name: str) -> ComponentInstance:

@@ -63,6 +63,21 @@ class LifecycleManager:
         log.debug("Factory registered: %s", meta.factory_name)
         return meta
 
+    def replace_factory(self, cls: type) -> ComponentMeta:
+        """Replace an existing factory with a new class (same factory name)."""
+        meta = _finalize_meta(cls)
+        if meta.factory_name not in self._factories:
+            raise ValueError(f"Factory {meta.factory_name!r} not registered — use register_factory")
+        self._factories[meta.factory_name] = cls
+        log.debug("Factory replaced: %s", meta.factory_name)
+        return meta
+
+    def remove_instance(self, name: str) -> None:
+        """Remove an instance from tracking (after deactivation)."""
+        self._instances.pop(name, None)
+        if name in self._activation_order:
+            self._activation_order.remove(name)
+
     # ── Instantiation ───────────────────────────────────────────────
 
     def instantiate(

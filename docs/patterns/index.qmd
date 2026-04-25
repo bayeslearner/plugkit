@@ -18,6 +18,7 @@ Each pattern has a dedicated deep-dive page, a runnable example in `src/signalpy
 | 5 | [Circuit Breaker](circuit-breaker.qmd) | Components create their own Signals for local reactive state |
 | 6 | [Audit Trail](audit-trail.qmd) | @subscribe wildcards + set_policy = cross-cutting concerns |
 | 7 | [Unit Testing](unit-testing.qmd) | Minimal kernel + fakes = isolated tests with real reactivity |
+| 8 | [Hot Code Update](hot-update.qmd) | snapshot → teardown → replace → activate → restore (kernel change) |
 
 ## The Thesis
 

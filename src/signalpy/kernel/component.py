@@ -171,6 +171,10 @@ class ComponentMeta:
     deactivate_fn: Callable | None = None
     deactivate_is_async: bool = False
     health_fn: Callable | None = None
+    snapshot_fn: Callable | None = None
+    snapshot_is_async: bool = False
+    restore_fn: Callable | None = None
+    restore_is_async: bool = False
     properties: dict[str, Any] = field(default_factory=dict)
     exportable: dict[str, str] | None = None  # {transport, discovery}
     dependencies: list[str] = field(default_factory=list)  # factory names
@@ -563,6 +567,18 @@ class lifecycle:
         fn.__lifecycle__ = "health"
         return fn
 
+    @staticmethod
+    def snapshot(fn: Callable) -> Callable:
+        """Mark a method that returns state to preserve across hot_update."""
+        fn.__lifecycle__ = "snapshot"
+        return fn
+
+    @staticmethod
+    def restore(fn: Callable) -> Callable:
+        """Mark a method that receives preserved state after hot_update."""
+        fn.__lifecycle__ = "restore"
+        return fn
+
 
 def _finalize_meta(cls: type) -> ComponentMeta:
     """Scan a decorated class and collect all metadata into ComponentMeta.
@@ -652,6 +668,12 @@ def _finalize_meta(cls: type) -> ComponentMeta:
             meta.deactivate_is_async = inspect.iscoroutinefunction(obj)
         elif lc == "health":
             meta.health_fn = obj
+        elif lc == "snapshot":
+            meta.snapshot_fn = obj
+            meta.snapshot_is_async = inspect.iscoroutinefunction(obj)
+        elif lc == "restore":
+            meta.restore_fn = obj
+            meta.restore_is_async = inspect.iscoroutinefunction(obj)
 
     # Auto-infer dependencies from @requires contracts
     # Convention: IConfig → "config", ILogger → "logging", etc.

@@ -38,6 +38,8 @@ website:
             href: patterns/audit-trail.qmd
           - text: "Unit Testing"
             href: patterns/unit-testing.qmd
+          - text: "Hot Code Update"
+            href: patterns/hot-update.qmd
       - text: "Reference"
         menu:
           - text: "Traits (L0-L3)"
@@ -78,6 +80,7 @@ website:
         - patterns/circuit-breaker.qmd
         - patterns/audit-trail.qmd
         - patterns/unit-testing.qmd
+        - patterns/hot-update.qmd
     - title: "Reference"
       contents:
         - ref/traits.qmd
