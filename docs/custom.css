@@ -1,8 +1,56 @@
-/* SignalPy docs — custom overrides for Quarto darkly theme */
+/* SignalPy docs — custom overrides for Quarto darkly theme
+ *
+ * The darkly theme body bg is ~#222. We push code blocks lighter (#2d333b)
+ * with a visible left accent border so they pop against the page.
+ */
 
-/* ── Mermaid diagrams: high contrast on dark background ────────── */
+/* ── Page body: true dark ──────────────────────────────────────── */
+body {
+  background-color: #1a1a2e !important;
+  color: #e2e8f0 !important;
+}
+
+/* ── Code blocks: lighter than body, accent border ─────────────── */
+div.sourceCode,
+pre.sourceCode {
+  background-color: #2d333b !important;
+  border: 1px solid #444c56 !important;
+  border-left: 4px solid #58a6ff !important;
+  border-radius: 6px !important;
+  padding: 0.8em 1em !important;
+}
+
+/* Inline code: subtle highlight */
+code:not(.sourceCode) {
+  background-color: #2d333b !important;
+  color: #e6edf3 !important;
+  padding: 0.15em 0.4em !important;
+  border-radius: 4px !important;
+  font-size: 0.9em !important;
+}
+
+/* Code text color: bright */
+div.sourceCode code,
+pre.sourceCode code {
+  color: #e6edf3 !important;
+}
+
+/* ── ASCII art / pre blocks (non-code): distinct from body ──── */
+pre:not(.sourceCode) {
+  background-color: #2d333b !important;
+  color: #e6edf3 !important;
+  border: 1px solid #444c56 !important;
+  border-left: 4px solid #3fb950 !important;
+  border-radius: 6px !important;
+  padding: 1em !important;
+}
+
+/* ── Mermaid diagrams: high contrast ───────────────────────────── */
 .mermaid {
-  background: #0d1117 !important;
+  background: #161b22 !important;
+  border: 1px solid #444c56 !important;
+  border-radius: 8px !important;
+  padding: 1em !important;
 }
 .mermaid text,
 .mermaid .nodeLabel,
@@ -17,7 +65,7 @@
 .mermaid .node rect,
 .mermaid .node circle,
 .mermaid .node polygon {
-  fill: #1c2333 !important;
+  fill: #2d333b !important;
   stroke: #58a6ff !important;
   stroke-width: 2px !important;
 }
@@ -29,8 +77,8 @@
   fill: #8b949e !important;
 }
 .mermaid .cluster rect {
-  fill: #161b22 !important;
-  stroke: #58a6ff44 !important;
+  fill: #1c2128 !important;
+  stroke: #58a6ff66 !important;
   stroke-width: 2px !important;
   rx: 8px !important;
 }
@@ -41,39 +89,50 @@
   font-weight: 600 !important;
 }
 
-/* ── Callout borders ───────────────────────────────────────────── */
+/* ── Callout blocks ────────────────────────────────────────────── */
+.callout {
+  background-color: #2d333b !important;
+  border-radius: 6px !important;
+}
 .callout-note {
-  border-left-color: #58a6ff;
+  border-left-color: #58a6ff !important;
 }
 .callout-tip {
-  border-left-color: #3fb950;
+  border-left-color: #3fb950 !important;
 }
 .callout-warning {
-  border-left-color: #d29922;
+  border-left-color: #d29922 !important;
 }
 .callout-important {
-  border-left-color: #f85149;
+  border-left-color: #f85149 !important;
 }
 
-/* ── Code blocks: slightly lighter background for contrast ──── */
-div.sourceCode {
-  background-color: #0d1117 !important;
-  border: 1px solid #21262d !important;
-}
-
-/* ── Tables: readable borders and header ───────────────────── */
+/* ── Tables: readable borders and header ───────────────────────── */
 .table, table {
-  border-color: #30363d !important;
+  border-color: #444c56 !important;
 }
 .table thead th, table thead th {
   border-bottom: 2px solid #58a6ff !important;
   color: #f0f3f6 !important;
+  background-color: #2d333b !important;
 }
 .table td, table td {
-  border-color: #21262d !important;
+  border-color: #2d333b !important;
+}
+.table tr:nth-child(even) td {
+  background-color: #22272e !important;
 }
 
-/* ── Level tags for traits ──────────────────────────────────── */
+/* ── Sidebar + navbar: slightly different shade ────────────────── */
+.sidebar, .quarto-sidebar {
+  background-color: #161b22 !important;
+}
+.navbar {
+  background-color: #161b22 !important;
+  border-bottom: 1px solid #444c56 !important;
+}
+
+/* ── Level tags for traits ──────────────────────────────────────── */
 .level-tag {
   display: inline-block;
   font-size: 0.75rem;
@@ -87,10 +146,10 @@ div.sourceCode {
 .l2 { background: #3fb95022; color: #3fb950; border: 1px solid #3fb950; }
 .l3 { background: #d2992222; color: #d29922; border: 1px solid #d29922; }
 
-/* ── ASCII art / pre blocks: ensure readable ────────────────── */
-pre:not(.sourceCode) {
-  background-color: #0d1117 !important;
-  color: #c9d1d9 !important;
-  border: 1px solid #21262d !important;
-  padding: 1em !important;
+/* ── Links ──────────────────────────────────────────────────────── */
+a {
+  color: #58a6ff !important;
+}
+a:hover {
+  color: #79c0ff !important;
 }
