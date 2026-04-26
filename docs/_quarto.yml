@@ -58,6 +58,8 @@ website:
             href: concepts/reactivity-deep-dive.qmd
           - text: "Reactive Engine: Line by Line"
             href: concepts/reactive-line-by-line.qmd
+          - text: "Context, ContextVar, Active Consumer"
+            href: concepts/contextvar-and-tracking.qmd
           - text: "Architecture"
             href: concepts/architecture.qmd
           - text: "Bridging External Systems"
@@ -96,6 +98,7 @@ website:
       contents:
         - concepts/reactivity-deep-dive.qmd
         - concepts/reactive-line-by-line.qmd
+        - concepts/contextvar-and-tracking.qmd
         - concepts/architecture.qmd
         - concepts/bridging.qmd
         - concepts/deployment.qmd
