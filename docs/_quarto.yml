@@ -16,9 +16,11 @@ website:
             href: guide/03-dynamic-services.qmd
           - text: "4. Runnables & API"
             href: guide/04-runnables-and-api.qmd
-          - text: "5. Auth & Policy"
+          - text: "5. Gateway & Transports"
+            href: guide/05-gateway-and-transports.qmd
+          - text: "6. Auth & Policy"
             href: guide/05-auth-and-policy.qmd
-          - text: "6. Building a Provider"
+          - text: "7. Building a Provider"
             href: guide/06-building-a-provider.qmd
       - text: "Patterns"
         menu:
@@ -68,6 +70,7 @@ website:
         - guide/02-give-and-take.qmd
         - guide/03-dynamic-services.qmd
         - guide/04-runnables-and-api.qmd
+        - guide/05-gateway-and-transports.qmd
         - guide/05-auth-and-policy.qmd
         - guide/06-building-a-provider.qmd
     - title: "Patterns"
