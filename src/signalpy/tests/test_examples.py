@@ -493,3 +493,47 @@ class TestHotUpdate:
         assert r["counter"] == 12  # 2 + 10
 
         await kernel.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_plugin_loader_discovers_and_hot_updates(self):
+        """PluginLoader scans directory, imports .py files, hot_adds and hot_updates."""
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from signalpy.providers.plugin_loader import PluginLoader
+
+        here = Path(__file__).parent.parent / "examples" / "hot_update_demo"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plugin_dir = Path(tmpdir)
+
+            kernel = Kernel()
+            kernel.discover([ConfigProvider, LoggingProvider, PluginLoader])
+            kernel.instantiate("config", properties={"defaults": {}})
+            kernel.instantiate("plugin-loader", properties={
+                "plugin_dir": str(plugin_dir),
+                "kernel": kernel,
+            })
+            await kernel.boot()
+
+            # Deploy v1
+            shutil.copy2(here / "search_v1.py", plugin_dir / "search.py")
+            await kernel.bus.invoke("plugin-loader.scan", {})
+
+            await kernel.bus.invoke("search.index_doc", {"id": "1", "text": "hello"})
+            await kernel.bus.invoke("search.search", {"query": "hello"})
+            status = await kernel.bus.invoke("search.status", {})
+            assert status["version"] == "1.0"
+            assert status["docs"] == 1
+            assert status["queries"] == 1
+
+            # Deploy v2 (overwrite)
+            shutil.copy2(here / "search_v2.py", plugin_dir / "search.py")
+            await kernel.bus.invoke("plugin-loader.scan", {})
+
+            status = await kernel.bus.invoke("search.status", {})
+            assert status["version"] == "2.0"
+            assert status["docs"] == 1      # preserved
+            assert status["queries"] == 1   # preserved
+
+            await kernel.shutdown()

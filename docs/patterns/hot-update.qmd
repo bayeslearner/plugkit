@@ -156,6 +156,61 @@ The index (3 docs) and query count (1) survived the upgrade.
 Tests: `TestHotUpdate` in `src/signalpy/tests/test_examples.py`.
 
 
+## The Real Flow: PluginLoader + File on Disk
+
+The simple `kernel.hot_update(SearchV2)` example assumes you already have the
+class in memory. In production, the new code arrives as a `.py` file — deployed
+to a plugins directory, pulled from a package registry, or pushed via CI.
+
+The `PluginLoader` provider (`src/signalpy/providers/plugin_loader.py`) handles
+the full flow: scan directory → `importlib` import → find `@component` classes
+→ `hot_add` (new) or `hot_update` (existing factory name).
+
+The self-contained demo at `src/signalpy/examples/hot_update_demo/` shows it end-to-end:
+
+```
+hot_update_demo/
+├── __main__.py       # boots kernel, copies files, triggers scans
+├── search_v1.py      # V1 component (deployed first)
+├── search_v2.py      # V2 component (overwrites V1 to trigger hot_update)
+└── plugins/          # temp directory watched by PluginLoader
+```
+
+The sequence:
+
+```python
+# 1. Boot kernel with PluginLoader
+kernel.instantiate("plugin-loader", properties={
+    "plugin_dir": str(plugin_dir),
+    "kernel": kernel,
+})
+await kernel.boot()
+
+# 2. Deploy V1: copy search_v1.py into plugins/
+shutil.copy2(SEARCH_V1, plugin_dir / "search.py")
+await kernel.bus.invoke("plugin-loader.scan", {})
+# → scan finds search.py, imports it, hot_adds SearchV1
+
+# 3. Index data, run queries (state accumulates in V1)
+
+# 4. Deploy V2: overwrite search.py with the new version
+shutil.copy2(SEARCH_V2, plugin_dir / "search.py")
+await kernel.bus.invoke("plugin-loader.scan", {})
+# → scan re-imports search.py, sees factory "search" already loaded
+# → calls kernel.hot_update() → snapshot → teardown → replace → restore
+```
+
+Run it:
+
+```bash
+PYTHONPATH=src python -m signalpy.examples.hot_update_demo
+```
+
+The PluginLoader itself is a component — you can `hot_remove` it when you
+don't need dynamic loading, or replace it with a version that polls
+automatically or watches via `watchdog`.
+
+
 ## Production Considerations
 
 **Schema migration.** V2 might expect different state keys than V1. The `@lifecycle.restore`
