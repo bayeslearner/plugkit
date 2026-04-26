@@ -226,7 +226,14 @@ This handles the ordering problem — transports need gateway, which needs
 all apps to be registered first.
 
 
-## Example: Full Stack
+## Two Modes: Container vs Library
+
+SignalPy supports both deployment patterns:
+
+### Container mode — SignalPy is the runtime
+
+SignalPy boots, creates and manages the FastAPI app (or MCP server) as a component.
+Good for microservices where SignalPy IS the application.
 
 ```python
 from signalpy.kernel import Kernel
@@ -241,19 +248,76 @@ kernel.discover([
     APIGateway,
     SplunkApp,        # @api("rest", prefix="/splunk", version="v1")
     SpellChecker,     # @api("rest", prefix="/spell")
-    RESTTransport,
+    RESTTransport,    # ← creates and owns the FastAPI app
 ])
 await kernel.boot()
 
-# RESTTransport.app is now a FastAPI app with routes:
-#   POST /api/v1/splunk/query
-#   POST /api/spell/check
-#   GET  /health
-
-# Serve it:
-import uvicorn
-uvicorn.run(rest_transport.get_app(), port=8000)
+# Get the app SignalPy created
+app = kernel.registry.require("IRestAPI").get_app()
+uvicorn.run(app, port=8000)
 ```
+
+### Library mode — mount into your existing app
+
+You already have a FastAPI app or FastMCP server. SignalPy mounts its runnables
+into it. Good for adding kernel-managed services to existing applications.
+
+```python
+from fastapi import FastAPI
+from signalpy.kernel import Kernel
+from signalpy.adapters.rest import mount_rest           # <1>
+
+# Your existing app
+app = FastAPI(title="My App")
+
+@app.get("/my-custom-endpoint")
+async def custom():
+    return {"custom": True}
+
+# Boot the kernel (no RESTTransport needed)
+kernel = Kernel()
+kernel.discover([ConfigProvider, LoggingProvider, APIGateway, SplunkApp])
+await kernel.boot()
+
+# Mount kernel runnables as routes on YOUR app
+mount_rest(app, kernel)                                  # <2>
+
+# Now your app has both custom routes AND kernel routes:
+#   GET  /my-custom-endpoint       → your code
+#   POST /api/v1/splunk/query      → bus.invoke("splunk.query", body)
+#   GET  /health                   → kernel health
+```
+1. `mount_rest` is a function, not a component. No Gateway or Transport component needed.
+2. Reads the gateway surface (if available) or falls back to all bus handlers.
+
+Same for MCP:
+
+```python
+from fastmcp import FastMCP
+from signalpy.adapters.mcp import mount_mcp
+
+server = FastMCP("my-server")
+
+# Your own tools
+@server.tool()
+def my_custom_tool(query: str) -> str:
+    return "custom result"
+
+# Mount kernel runnables as MCP tools
+mount_mcp(server, kernel)
+
+# Now the server has both your tools AND kernel runnables as tools
+```
+
+### When to use which
+
+| Mode | When | What you discover |
+|------|------|------------------|
+| **Container** | SignalPy IS the app (microservice) | `RESTTransport` / `MCPTransport` components |
+| **Library** | Adding to existing FastAPI/FastMCP | Call `mount_rest()` / `mount_mcp()` functions |
+
+Both read from the same gateway surface. Both generate the same routes/tools.
+The difference is who owns the framework instance.
 
 
 ## What Happens Without Gateway or Transports?
@@ -268,19 +332,21 @@ The `@api` declarations are just metadata. If no gateway is discovered,
 they're ignored. If no REST transport is discovered, no routes are generated.
 The component works identically either way — it's still a bus handler.
 
+The `mount_rest()` / `mount_mcp()` functions also work without a gateway — they
+fall back to exposing all bus handlers directly.
+
 This is the separation: **runnables are capabilities. @api is presentation.
 The bus works without presentation.**
 
 
 ## Writing a Custom Transport
 
-A transport adapter is just a component that reads from the gateway:
+As a component (container mode):
 
 ```python
 @component("grpc-transport", depends=["gateway"])
 @requires(gateway="IGateway")
 class GRPCTransport:
-
     @lifecycle.activate
     def activate(self):
         surface = self.rt.gateway.get_surface("grpc")
@@ -289,5 +355,15 @@ class GRPCTransport:
                 self._register_grpc_method(entry)
 ```
 
-Components would declare `@api("grpc", ...)` and this transport picks them up.
-No kernel changes. No gateway changes. Just another component.
+As a mount function (library mode):
+
+```python
+def mount_grpc(server, kernel):
+    gateway = kernel.registry.require_optional("IGateway")
+    surface = gateway.get_surface("grpc") if gateway else None
+    for entry in (surface.entries if surface else []):
+        server.add_method(entry.runnable_name, lambda args: kernel.bus.invoke(...))
+```
+
+Components declare `@api("grpc", ...)` and either approach picks them up.
+No kernel changes. No gateway changes.
