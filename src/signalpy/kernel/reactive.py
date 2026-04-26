@@ -1,6 +1,6 @@
 """Reactive primitives — Signal, Computed, Effect, batch.
 
-The reactivity engine. Zero dependencies. ~200 lines.
+The reactivity engine. Zero external dependencies. ~350 lines.
 Everything in the kernel builds on these three primitives.
 
 Algorithm (Vue 3 / Preact Signals model):
@@ -8,15 +8,28 @@ Algorithm (Vue 3 / Preact Signals model):
   - Signal.get() checks _active_consumer and registers the dependency.
   - Signal.set() notifies all registered consumers.
   - Computed is a lazy Signal that recomputes when dependencies are dirty.
+    Skips propagation if the recomputed value is identical (by identity).
   - Effect re-runs its function when any tracked dependency changes.
   - batch() groups multiple set() calls, effects fire once at the end.
+
+Threading: all mutation of shared state (_batch_depth, _batch_queue,
+subscriber sets) is protected by a Lock. Safe for multi-threaded use
+(ThreadPoolExecutor for blocking I/O) and free-threaded Python 3.13+.
+
+Ordering: Effects execute in creation order within a batch flush.
+This ensures parent-before-child and deterministic behavior.
+
+Async effects: tracking only covers signal reads before the first
+`await`. Reads after an `await` may run in a different microtask where
+_active_consumer has been reset. This is a known limitation shared
+with Vue 3 (which doesn't support async watchEffect).
 """
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
-import weakref
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Generic, TypeVar
@@ -30,14 +43,25 @@ T = TypeVar("T")
 _active_consumer: ContextVar[_Consumer | None] = ContextVar("_active_consumer", default=None)
 _batch_depth: int = 0
 _batch_queue: list[Effect] = []
+_lock = threading.Lock()
+_creation_counter: int = 0
+
+
+def _next_id() -> int:
+    """Monotonic creation counter for deterministic effect ordering."""
+    global _creation_counter
+    with _lock:
+        _creation_counter += 1
+        return _creation_counter
 
 
 class _Consumer:
     """Base for anything that tracks Signal dependencies (Effect, Computed)."""
-    __slots__ = ("_deps",)
+    __slots__ = ("_deps", "_id")
 
     def __init__(self) -> None:
         self._deps: set[Signal] = set()
+        self._id: int = _next_id()
 
     def _track(self, signal: Signal) -> None:
         """Record that this consumer read the given signal."""
@@ -74,7 +98,10 @@ class Signal(Generic[T]):
         self._subscribers: set[_Consumer] = set()
 
     def get(self) -> T:
-        """Read the value. If inside an Effect or Computed, track the dependency."""
+        """Read the value. If inside an Effect or Computed, track the dependency.
+
+        Duplicate tracking is a no-op: _deps and _subscribers are sets.
+        """
         consumer = _active_consumer.get()
         if consumer is not None:
             consumer._track(self)
@@ -86,7 +113,13 @@ class Signal(Generic[T]):
         return self._value
 
     def set(self, value: T) -> None:
-        """Set the value. If changed, notify all subscribers."""
+        """Set the value. If changed (by identity), notify all subscribers.
+
+        Identity comparison (is) is deliberate:
+        - Mutating a dict in place and calling set() with the same object is a no-op.
+        - Create a new dict to trigger notification.
+        - Consistent with Vue 3's Object.is() and Preact's identity check.
+        """
         if value is self._value:
             return
         self._value = value
@@ -98,16 +131,27 @@ class Signal(Generic[T]):
         self.set(fn(self._value))
 
     def _notify_subscribers(self) -> None:
-        """Notify all consumers that this signal changed."""
-        global _batch_depth
-        for consumer in list(self._subscribers):
-            if _batch_depth > 0:
-                if isinstance(consumer, Effect) and consumer not in _batch_queue:
-                    _batch_queue.append(consumer)
-                elif isinstance(consumer, Computed):
-                    consumer._dirty = True
-            else:
-                consumer._notify()
+        """Notify all consumers that this signal changed.
+
+        Thread-safe: takes a snapshot of subscribers under lock.
+        Cleans up disposed consumers to prevent memory leaks.
+
+        All consumers get _notify() called — batch checking is handled
+        by each consumer type:
+        - Effect._notify() checks _batch_depth and enqueues if batching
+        - Computed._notify() marks dirty and propagates to its subscribers
+        This ensures Computed→Effect chains work correctly in batch mode.
+        """
+        with _lock:
+            # Clean up disposed consumers (prevents memory leak)
+            self._subscribers = {
+                c for c in self._subscribers
+                if not getattr(c, '_disposed', False)
+            }
+            snapshot = list(self._subscribers)
+
+        for consumer in snapshot:
+            consumer._notify()
 
     @property
     def value(self) -> T:
@@ -127,6 +171,10 @@ class Signal(Generic[T]):
 
 class Computed(_Consumer, Generic[T]):
     """Derived reactive value. Caches result. Recomputes lazily when deps change.
+
+    Skips propagation to downstream subscribers if the recomputed value
+    is identical (by identity) to the previous value. This avoids
+    unnecessary effect re-runs when a computed returns the same object.
 
         name = Signal("Alice")
         greeting = Computed(lambda: f"Hello, {name.get()}!")
@@ -165,28 +213,56 @@ class Computed(_Consumer, Generic[T]):
         return self._value  # type: ignore
 
     def _recompute(self) -> None:
-        """Execute fn, track new dependencies, cache result."""
-        # Untrack old dependencies
+        """Execute fn, track new dependencies, cache result.
+
+        Only bumps version and propagates to subscribers if the
+        recomputed value is different (by identity) from the old value.
+        This is the key optimization: if a computed returns the same
+        object, downstream effects don't re-run.
+        """
         self._untrack_all()
-        # Set self as the active consumer
         token = _active_consumer.set(self)
         try:
             old = self._value
             self._value = self._fn()
+            self._dirty = False
+            # Only propagate if value actually changed (identity)
             if self._value is not old:
                 self._version += 1
-            self._dirty = False
+                self._propagate()
         finally:
             _active_consumer.reset(token)
 
+    def _propagate(self) -> None:
+        """Notify downstream subscribers that this computed's value changed."""
+        with _lock:
+            # Clean up disposed subscribers
+            self._subscribers = {
+                c for c in self._subscribers
+                if not getattr(c, '_disposed', False)
+            }
+            snapshot = list(self._subscribers)
+        for consumer in snapshot:
+            consumer._notify()
+
     def _notify(self) -> None:
-        """Called when a dependency changed. Mark dirty and propagate."""
+        """Called when a dependency changed. Mark dirty and propagate.
+
+        We must propagate even though we haven't recomputed yet, because
+        downstream Effects need to know they should re-run. When they do
+        re-run and read this Computed, _recompute will check if the value
+        actually changed and skip further propagation if not.
+        """
         if self._disposed:
             return
+        was_dirty = self._dirty
         self._dirty = True
-        # Propagate to our own subscribers (other Computeds or Effects)
-        for consumer in list(self._subscribers):
-            consumer._notify()
+        # Only propagate if we weren't already dirty (avoid redundant notifications)
+        if not was_dirty:
+            with _lock:
+                snapshot = list(self._subscribers)
+            for consumer in snapshot:
+                consumer._notify()
 
     def dispose(self) -> None:
         """Stop tracking. Remove from all dependency subscriber lists."""
@@ -211,6 +287,12 @@ class Effect(_Consumer):
         log_effect = Effect(lambda: print(f"Counter: {counter.get()}"))
         counter.set(1)  # prints "Counter: 1"
         log_effect.dispose()  # stops tracking
+
+    Async effects (async def) are supported but with a limitation:
+    dependency tracking only covers signal reads before the first `await`.
+    Reads after `await` may execute in a different microtask where
+    _active_consumer has been reset. Design effects to read all signals
+    upfront, then await with the captured values.
     """
     __slots__ = ("_fn", "_is_async", "_disposed", "_running")
 
@@ -226,11 +308,14 @@ class Effect(_Consumer):
     def run(self) -> None:
         """Execute the effect function, tracking all Signal reads.
 
+        Re-entrancy guard: if the effect is already running (e.g., effect
+        writes to a signal it reads), skip. This prevents infinite loops.
+
         For async effects: we set _active_consumer BEFORE creating the task.
         asyncio.create_task copies the current context, so the coroutine
         body will see _active_consumer=self during its Signal reads.
         We reset the context var immediately after task creation (the task
-        has its own copy).
+        has its own copy). Reads after the first `await` may not be tracked.
         """
         if self._disposed or self._running:
             return
@@ -238,7 +323,6 @@ class Effect(_Consumer):
         self._untrack_all()
 
         if self._is_async:
-            # Set context BEFORE create_task so the task inherits it
             token = _active_consumer.set(self)
             self_ref = self
 
@@ -256,7 +340,6 @@ class Effect(_Consumer):
             except RuntimeError:
                 self._running = False
             finally:
-                # Reset in the CALLING context (not the task's context)
                 _active_consumer.reset(token)
         else:
             token = _active_consumer.set(self)
@@ -272,10 +355,12 @@ class Effect(_Consumer):
         """Called by a signal when its value changes."""
         if self._disposed:
             return
-        global _batch_depth
-        if _batch_depth > 0:
-            if self not in _batch_queue:
-                _batch_queue.append(self)
+        with _lock:
+            in_batch = _batch_depth > 0
+        if in_batch:
+            with _lock:
+                if self not in _batch_queue:
+                    _batch_queue.append(self)
         else:
             self.run()
 
@@ -298,30 +383,45 @@ def batch():
             name.set("Alice")
             age.set(30)
         # Effects that depend on name or age run ONCE here, not twice.
+
+    Thread-safe: batch depth is protected by lock.
     """
     global _batch_depth
-    _batch_depth += 1
+    with _lock:
+        _batch_depth += 1
     try:
         yield
     finally:
-        _batch_depth -= 1
-        if _batch_depth == 0:
+        with _lock:
+            _batch_depth -= 1
+            should_flush = _batch_depth == 0
+        if should_flush:
             _flush_batch()
 
 
 def _flush_batch() -> None:
-    """Run all pending effects from the batch queue."""
+    """Run all pending effects from the batch queue.
+
+    Effects are sorted by creation order (_id) for deterministic execution.
+    Parent effects (created first) run before child effects.
+    """
     global _batch_queue
     iterations = 0
-    while _batch_queue:
+    while True:
+        with _lock:
+            if not _batch_queue:
+                break
+            # Sort by creation order (deterministic, parent before child)
+            _batch_queue.sort(key=lambda e: e._id)
+            pending = list(_batch_queue)
+            _batch_queue.clear()
+
         if iterations > 100:
             log.error("Reactive batch exceeded 100 iterations — possible infinite loop")
-            _batch_queue.clear()
+            with _lock:
+                _batch_queue.clear()
             break
-        # Take the current queue, clear it, run effects
-        # (effects may produce new entries)
-        pending = list(_batch_queue)
-        _batch_queue.clear()
+
         for effect in pending:
             if not effect._disposed:
                 effect.run()

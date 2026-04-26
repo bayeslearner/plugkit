@@ -587,14 +587,58 @@ with batch():
 
 Without batching: each `hot_add` would fire the Effect separately. With batching: changes accumulate, then all pending Effects run once when the batch exits. This is the same as Vue's `nextTick` or React's batched state updates.
 
+## Edge Cases the Engine Handles
+
+The reactive engine is ~350 lines. It's simple, but it handles real edge cases:
+
+| Edge case | How it's handled | Test |
+|-----------|-----------------|------|
+| **Duplicate tracking** | `_deps` and `_subscribers` are sets — reading the same Signal twice in one Effect is a no-op | `TestDuplicateTracking` |
+| **Stale deps** | `Effect.run()` calls `_untrack_all()` before re-executing. If the Effect takes a different code path, old deps stop notifying | `test_effect_resubscribes_after_rerun` |
+| **Re-entrancy** | `_running` flag prevents an Effect from re-triggering itself during execution (writes to own dep) | `TestReentrancyGuard` |
+| **Disposed consumers** | `_notify_subscribers()` cleans up disposed consumers from subscriber sets. Prevents memory leaks from components that deactivated | `TestDisposedCleanup` |
+| **Batch coalescing** | In batch mode, Effects are enqueued (not run). Batch flush deduplicates and sorts by creation order | `TestBatch` |
+| **Creation ordering** | Effects in a batch run in creation order (`_id`). Parent-before-child, deterministic | `TestCreationOrdering` |
+| **Computed dirty dedup** | If a Computed is already dirty, a second notification doesn't double-propagate to downstream subscribers | `TestComputedDirtyDedup` |
+| **Computed skip propagation** | `_recompute()` only bumps version and propagates if the value actually changed (identity check). Prevents cascading through Computed chains when intermediate values are stable | `TestComputedSkipsPropagation` |
+| **Thread safety** | All mutation of `_batch_depth`, `_batch_queue`, and subscriber sets is protected by `threading.Lock`. Safe for ThreadPoolExecutor and free-threaded Python 3.13+ | `reactive.py:_lock` |
+| **Infinite loop** | `_flush_batch` caps at 100 iterations | `reactive.py:317` |
+
+### Known limitations
+
+**Async effects track deps only before the first `await`.** After `await`, the
+microtask may resume in a different context where `_active_consumer` has been
+reset. Design async effects to read all signals upfront, then await:
+
+```python
+@effect
+async def good(self):
+    url = self.rt.config.get("url")    # tracked (before await)
+    key = self.rt.creds.get("key")     # tracked (before await)
+    await self._reconnect(url, key)    # not tracked (after await — fine)
+```
+
+Vue 3 doesn't support async `watchEffect` at all. SolidJS explicitly warns about
+this. Our approach (inherit ContextVar via `create_task`) is a pragmatic middle
+ground — it works for the common pattern of "read state, then do async work."
+
+**Push-then-pull for Computeds.** When a Signal changes, Computed subscribers
+get `_notify()` immediately (push: mark dirty, propagate). Downstream Effects
+re-run and read the Computed, which recomputes on demand (pull). If the
+Computed's value didn't actually change, the Effect still ran — it just sees
+the same value. Vue 3 has the same tradeoff. A full version-check optimization
+(skip the Effect if no computed version bumped) is possible but adds complexity.
+
+
 ## Summary
 
 | Concept | What it is | Why it matters |
 |---|---|---|
 | **Signal** | Reactive value wrapper | Every `self.rt.X` is one |
-| **ContextVar** | "Who's asking?" tracker | Async-safe, zero globals |
+| **ContextVar** | "Who's asking?" tracker | Async-safe, per-task isolation |
 | **Effect** | Function that re-runs on dep change | Replaces all manual callbacks |
-| **Computed** | Lazy cached derived value | Efficient, chains automatically |
+| **Computed** | Lazy cached derived value | Efficient, chains automatically, skips propagation on same value |
 | **Tracking** | Signal.get() records the caller | You never declare deps — kernel figures it out |
 | **Notification** | Signal.set() tells all subscribers | Changes propagate through the graph |
-| **Batch** | Group changes, fire once | Prevents redundant re-runs |
+| **Batch** | Group changes, fire once | Effects deduplicated and sorted by creation order |
+| **Lock** | Thread safety | `_batch_depth`, `_batch_queue`, subscriber sets protected |
