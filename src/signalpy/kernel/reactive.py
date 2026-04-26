@@ -12,9 +12,19 @@ Algorithm (Vue 3 / Preact Signals model):
   - Effect re-runs its function when any tracked dependency changes.
   - batch() groups multiple set() calls, effects fire once at the end.
 
-Threading: all mutation of shared state (_batch_depth, _batch_queue,
-subscriber sets) is protected by a Lock. Safe for multi-threaded use
-(ThreadPoolExecutor for blocking I/O) and free-threaded Python 3.13+.
+Threading: a single global RLock (`_lock`) serializes all mutations of
+shared reactive state — Signal value/version updates, subscriber-set
+adds and removals, dependency tracking, batch depth/queue, and the
+Computed recompute critical section. The lock is reentrant so an effect
+that writes to a signal it reads (or any same-thread re-entry) does not
+deadlock. Effect/Computed bodies execute *with the lock held* on the
+running thread, which means signal mutation across threads is fully
+serialized. This trades raw throughput for simple, audit-able correctness.
+
+Safe for: multi-threaded use (ThreadPoolExecutor for blocking I/O,
+threaded REST servers, background poller threads writing to shared
+signals) and CPython 3.13+ free-threaded mode (no reliance on GIL
+atomicity for set/dict mutations — every mutation is under the lock).
 
 Ordering: Effects execute in creation order within a batch flush.
 This ensures parent-before-child and deterministic behavior.
@@ -43,7 +53,7 @@ T = TypeVar("T")
 _active_consumer: ContextVar[_Consumer | None] = ContextVar("_active_consumer", default=None)
 _batch_depth: int = 0
 _batch_queue: list[Effect] = []
-_lock = threading.Lock()
+_lock = threading.RLock()
 _creation_counter: int = 0
 
 
@@ -64,11 +74,18 @@ class _Consumer:
         self._id: int = _next_id()
 
     def _track(self, signal: Signal) -> None:
-        """Record that this consumer read the given signal."""
+        """Record that this consumer read the given signal.
+
+        Caller holds `_lock` (called from Signal.get / Computed.get under lock).
+        """
         self._deps.add(signal)
 
     def _untrack_all(self) -> None:
-        """Remove self from all tracked signals' subscriber lists."""
+        """Remove self from all tracked signals' subscriber lists.
+
+        Caller holds `_lock` (called from Effect.run / Computed._recompute /
+        dispose paths, all of which acquire the lock).
+        """
         for sig in self._deps:
             sig._subscribers.discard(self)
         self._deps.clear()
@@ -101,15 +118,24 @@ class Signal(Generic[T]):
         """Read the value. If inside an Effect or Computed, track the dependency.
 
         Duplicate tracking is a no-op: _deps and _subscribers are sets.
+        Thread-safe: tracking writes and the value read happen under the lock,
+        so a concurrent set() cannot drop the new subscription nor expose a
+        torn read.
         """
         consumer = _active_consumer.get()
-        if consumer is not None:
-            consumer._track(self)
-            self._subscribers.add(consumer)
-        return self._value
+        with _lock:
+            if consumer is not None:
+                consumer._track(self)
+                self._subscribers.add(consumer)
+            return self._value
 
     def peek(self) -> T:
-        """Read the value without tracking. For use outside reactive contexts."""
+        """Read the value without tracking. For use outside reactive contexts.
+
+        Lock-free fast path: a single attribute read. Safe under the GIL
+        (atomic reference load) and under PEP 703 free-threading (loads of
+        object references are atomic per the no-GIL spec).
+        """
         return self._value
 
     def set(self, value: T) -> None:
@@ -119,12 +145,18 @@ class Signal(Generic[T]):
         - Mutating a dict in place and calling set() with the same object is a no-op.
         - Create a new dict to trigger notification.
         - Consistent with Vue 3's Object.is() and Preact's identity check.
+
+        Thread-safe: the entire compare/swap/version-bump/notify sequence runs
+        under the reentrant lock so two writers serialize cleanly. Each writer
+        gets exactly one version bump and exactly one notification cycle; no
+        lost updates, no duplicate effect runs caused by interleaved writes.
         """
-        if value is self._value:
-            return
-        self._value = value
-        self._version += 1
-        self._notify_subscribers()
+        with _lock:
+            if value is self._value:
+                return
+            self._value = value
+            self._version += 1
+            self._notify_subscribers()
 
     def update(self, fn: Callable[[T], T]) -> None:
         """Update value based on current: signal.update(lambda x: x + 1)"""
@@ -194,23 +226,30 @@ class Computed(_Consumer, Generic[T]):
         self._disposed: bool = False
 
     def get(self) -> T:
-        """Read the computed value. Recomputes if dirty. Tracks caller."""
-        if self._disposed:
+        """Read the computed value. Recomputes if dirty. Tracks caller.
+
+        Thread-safe: dirty-check, recompute, and subscriber registration run
+        under the reentrant lock so two threads cannot both observe `_dirty`
+        and double-execute `_fn`.
+        """
+        with _lock:
+            if self._disposed:
+                return self._value  # type: ignore
+            if self._dirty:
+                self._recompute()
+            # Track this computed as a dependency of the outer consumer
+            consumer = _active_consumer.get()
+            if consumer is not None:
+                consumer._track(self)  # type: ignore  # Computed acts as a Signal
+                self._subscribers.add(consumer)
             return self._value  # type: ignore
-        if self._dirty:
-            self._recompute()
-        # Track this computed as a dependency of the outer consumer
-        consumer = _active_consumer.get()
-        if consumer is not None:
-            consumer._track(self)  # type: ignore  # Computed acts as a Signal for tracking
-            self._subscribers.add(consumer)
-        return self._value  # type: ignore
 
     def peek(self) -> T:
         """Read without tracking."""
-        if self._dirty and not self._disposed:
-            self._recompute()
-        return self._value  # type: ignore
+        with _lock:
+            if self._dirty and not self._disposed:
+                self._recompute()
+            return self._value  # type: ignore
 
     def _recompute(self) -> None:
         """Execute fn, track new dependencies, cache result.
@@ -219,6 +258,9 @@ class Computed(_Consumer, Generic[T]):
         recomputed value is different (by identity) from the old value.
         This is the key optimization: if a computed returns the same
         object, downstream effects don't re-run.
+
+        Caller must hold `_lock` (this is internal; entered from get/peek
+        which acquire it, or from _notify which we also lock).
         """
         self._untrack_all()
         token = _active_consumer.set(self)
@@ -252,23 +294,28 @@ class Computed(_Consumer, Generic[T]):
         downstream Effects need to know they should re-run. When they do
         re-run and read this Computed, _recompute will check if the value
         actually changed and skip further propagation if not.
+
+        Thread-safe: dirty-toggle and subscriber snapshot are under the
+        reentrant lock; the dedup ("only propagate if not already dirty")
+        is now race-free.
         """
-        if self._disposed:
-            return
-        was_dirty = self._dirty
-        self._dirty = True
-        # Only propagate if we weren't already dirty (avoid redundant notifications)
-        if not was_dirty:
-            with _lock:
-                snapshot = list(self._subscribers)
-            for consumer in snapshot:
-                consumer._notify()
+        with _lock:
+            if self._disposed:
+                return
+            was_dirty = self._dirty
+            self._dirty = True
+            if was_dirty:
+                return
+            snapshot = list(self._subscribers)
+        for consumer in snapshot:
+            consumer._notify()
 
     def dispose(self) -> None:
         """Stop tracking. Remove from all dependency subscriber lists."""
-        self._disposed = True
-        self._untrack_all()
-        self._subscribers.clear()
+        with _lock:
+            self._disposed = True
+            self._untrack_all()
+            self._subscribers.clear()
 
     @property
     def value(self) -> T:
@@ -309,65 +356,77 @@ class Effect(_Consumer):
         """Execute the effect function, tracking all Signal reads.
 
         Re-entrancy guard: if the effect is already running (e.g., effect
-        writes to a signal it reads), skip. This prevents infinite loops.
+        writes to a signal it reads), skip. This prevents infinite loops
+        AND prevents two threads from both entering the same effect body.
 
         For async effects: we set _active_consumer BEFORE creating the task.
         asyncio.create_task copies the current context, so the coroutine
         body will see _active_consumer=self during its Signal reads.
-        We reset the context var immediately after task creation (the task
-        has its own copy). Reads after the first `await` may not be tracked.
+        Reads after the first `await` may not be tracked (Vue 3 limitation).
+
+        Thread-safety: the entire run() body is under the reentrant lock.
+        That serializes effect execution across threads, which is what makes
+        re-entrant signal writes from inside the effect safe (same thread
+        can re-acquire) and prevents two writers from running an effect twice
+        with interleaved reads.
         """
-        if self._disposed or self._running:
-            return
-        self._running = True
-        self._untrack_all()
+        with _lock:
+            if self._disposed or self._running:
+                return
+            self._running = True
+            self._untrack_all()
 
-        if self._is_async:
-            token = _active_consumer.set(self)
-            self_ref = self
+            if self._is_async:
+                token = _active_consumer.set(self)
+                self_ref = self
 
-            async def _tracked_async():
+                async def _tracked_async():
+                    try:
+                        await self_ref._fn()
+                    except Exception:
+                        log.exception("Async effect execution error")
+                    finally:
+                        with _lock:
+                            self_ref._running = False
+
                 try:
-                    await self_ref._fn()
-                except Exception:
-                    log.exception("Async effect execution error")
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_tracked_async())
+                except RuntimeError:
+                    self._running = False
                 finally:
-                    self_ref._running = False
-
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_tracked_async())
-            except RuntimeError:
-                self._running = False
-            finally:
-                _active_consumer.reset(token)
-        else:
-            token = _active_consumer.set(self)
-            try:
-                self._fn()
-            except Exception:
-                log.exception("Effect execution error")
-            finally:
-                _active_consumer.reset(token)
-                self._running = False
+                    _active_consumer.reset(token)
+            else:
+                token = _active_consumer.set(self)
+                try:
+                    self._fn()
+                except Exception:
+                    log.exception("Effect execution error")
+                finally:
+                    _active_consumer.reset(token)
+                    self._running = False
 
     def _notify(self) -> None:
-        """Called by a signal when its value changes."""
+        """Called by a signal when its value changes.
+
+        Thread-safe: batch-state inspection and queue insertion are atomic
+        under the reentrant lock; non-batch path calls run() which takes
+        the lock internally.
+        """
         if self._disposed:
             return
         with _lock:
-            in_batch = _batch_depth > 0
-        if in_batch:
-            with _lock:
+            if _batch_depth > 0:
                 if self not in _batch_queue:
                     _batch_queue.append(self)
-        else:
-            self.run()
+                return
+        self.run()
 
     def dispose(self) -> None:
         """Stop tracking. Remove from all dependency subscriber lists."""
-        self._disposed = True
-        self._untrack_all()
+        with _lock:
+            self._disposed = True
+            self._untrack_all()
 
     def __repr__(self) -> str:
         return f"Effect({self._fn.__name__ if hasattr(self._fn, '__name__') else '...'})"
