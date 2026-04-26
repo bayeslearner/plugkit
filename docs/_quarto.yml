@@ -56,6 +56,8 @@ website:
         menu:
           - text: "How Reactivity Works"
             href: concepts/reactivity-deep-dive.qmd
+          - text: "Reactive Engine: Line by Line"
+            href: concepts/reactive-line-by-line.qmd
           - text: "Architecture"
             href: concepts/architecture.qmd
           - text: "Bridging External Systems"
@@ -93,6 +95,7 @@ website:
     - title: "Concepts"
       contents:
         - concepts/reactivity-deep-dive.qmd
+        - concepts/reactive-line-by-line.qmd
         - concepts/architecture.qmd
         - concepts/bridging.qmd
         - concepts/deployment.qmd

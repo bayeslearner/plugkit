@@ -1,8 +1,8 @@
 /* SignalPy docs — custom overrides for Quarto darkly theme */
 
-/* Fix Mermaid diagrams: light text on dark background */
+/* ── Mermaid diagrams: high contrast on dark background ────────── */
 .mermaid {
-  background: #1a1d27 !important;
+  background: #0d1117 !important;
 }
 .mermaid text,
 .mermaid .nodeLabel,
@@ -10,43 +10,70 @@
 .mermaid .label,
 .mermaid .cluster-label,
 .mermaid span {
-  color: #e2e4ea !important;
-  fill: #e2e4ea !important;
+  color: #f0f3f6 !important;
+  fill: #f0f3f6 !important;
+  font-weight: 500 !important;
 }
 .mermaid .node rect,
 .mermaid .node circle,
 .mermaid .node polygon {
-  fill: #242836 !important;
-  stroke: #6c8cff !important;
+  fill: #1c2333 !important;
+  stroke: #58a6ff !important;
+  stroke-width: 2px !important;
 }
 .mermaid .edgePath .path {
-  stroke: #8b8fa3 !important;
+  stroke: #8b949e !important;
+  stroke-width: 2px !important;
 }
 .mermaid .arrowheadPath {
-  fill: #8b8fa3 !important;
+  fill: #8b949e !important;
 }
 .mermaid .cluster rect {
-  fill: #1a1d27 !important;
-  stroke: #2e3345 !important;
+  fill: #161b22 !important;
+  stroke: #58a6ff44 !important;
+  stroke-width: 2px !important;
+  rx: 8px !important;
 }
 .mermaid .cluster-label .nodeLabel {
-  color: #a78bfa !important;
-  fill: #a78bfa !important;
+  color: #d2a8ff !important;
+  fill: #d2a8ff !important;
+  font-size: 1.1em !important;
+  font-weight: 600 !important;
 }
 
+/* ── Callout borders ───────────────────────────────────────────── */
 .callout-note {
-  border-left-color: #6c8cff;
+  border-left-color: #58a6ff;
 }
-
 .callout-tip {
-  border-left-color: #4ade80;
+  border-left-color: #3fb950;
 }
-
 .callout-warning {
-  border-left-color: #fbbf24;
+  border-left-color: #d29922;
+}
+.callout-important {
+  border-left-color: #f85149;
 }
 
-/* Level tags for traits */
+/* ── Code blocks: slightly lighter background for contrast ──── */
+div.sourceCode {
+  background-color: #0d1117 !important;
+  border: 1px solid #21262d !important;
+}
+
+/* ── Tables: readable borders and header ───────────────────── */
+.table, table {
+  border-color: #30363d !important;
+}
+.table thead th, table thead th {
+  border-bottom: 2px solid #58a6ff !important;
+  color: #f0f3f6 !important;
+}
+.table td, table td {
+  border-color: #21262d !important;
+}
+
+/* ── Level tags for traits ──────────────────────────────────── */
 .level-tag {
   display: inline-block;
   font-size: 0.75rem;
@@ -55,7 +82,15 @@
   font-weight: 700;
   font-family: monospace;
 }
-.l0 { background: #6c8cff22; color: #6c8cff; border: 1px solid #6c8cff; }
-.l1 { background: #a78bfa22; color: #a78bfa; border: 1px solid #a78bfa; }
-.l2 { background: #4ade8022; color: #4ade80; border: 1px solid #4ade80; }
-.l3 { background: #fbbf2422; color: #fbbf24; border: 1px solid #fbbf24; }
+.l0 { background: #58a6ff22; color: #58a6ff; border: 1px solid #58a6ff; }
+.l1 { background: #d2a8ff22; color: #d2a8ff; border: 1px solid #d2a8ff; }
+.l2 { background: #3fb95022; color: #3fb950; border: 1px solid #3fb950; }
+.l3 { background: #d2992222; color: #d29922; border: 1px solid #d29922; }
+
+/* ── ASCII art / pre blocks: ensure readable ────────────────── */
+pre:not(.sourceCode) {
+  background-color: #0d1117 !important;
+  color: #c9d1d9 !important;
+  border: 1px solid #21262d !important;
+  padding: 1em !important;
+}
