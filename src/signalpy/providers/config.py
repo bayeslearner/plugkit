@@ -1,4 +1,4 @@
-"""ConfigProvider — layered config with Signal-backed state and runtime admin.
+"""ConfigProvider — layered config with per-key reactive state and runtime admin.
 
 Provides: IConfig, IConfigAdmin
 Requires: nothing (leaf provider, activates first)
@@ -6,9 +6,16 @@ Requires: nothing (leaf provider, activates first)
 Config is layered:
   defaults (manifest) → app config.yaml → workspace overlay → env overrides
 
-State is stored in a Signal. Reading config inside @effect or @computed
-tracks the dependency automatically. When config changes (set, update),
-the Signal notifies the reactive graph — no manual callbacks needed.
+**Per-key reactivity.** State is a plain dict; reactivity lives on a lazily
+populated map `dotted-key → Signal`. `config.get("a.b")` registers the active
+@effect/@computed against that specific dotted key. `config.set("a.b", v)`
+only notifies consumers of that key (and its descendants, so a parent-replace
+correctly invalidates child reads). Consumers of `config.all()` subscribe to
+a single `_all_version` Signal that bumps on every mutation.
+
+Versus the old "one master `Signal[dict]`" design: a write to one key no longer
+re-runs every effect that ever read any key. Effects only re-run if their own
+read keys actually changed.
 
 Also provides ConfigAdmin capabilities: push config updates by PID to
 managed services, optional JSON persistence.
@@ -18,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -121,8 +129,19 @@ class ConfigProvider:
         persisted = self._load_persisted()
         self._merge(data, persisted)
 
-        # Signal-backed state — this IS the reactivity
-        self._state: Signal[dict[str, Any]] = Signal(data)
+        # Per-key reactive state.
+        #   _state         — plain dict (the source of truth)
+        #   _key_signals   — lazy: dotted-key → Signal[value]; populated on first
+        #                    reactive read of that key. Drives per-key fan-out.
+        #   _all_version   — version counter; .all() consumers subscribe here so
+        #                    they re-run on any mutation, not just one key's.
+        #   _key_lock      — guards _key_signals dict mutation (lazy create).
+        #                    The kernel's RLock guards each Signal's value/notify;
+        #                    this one only guards our own dict layer.
+        self._state: dict[str, Any] = data
+        self._key_signals: dict[str, Signal] = {}
+        self._all_version: Signal[int] = Signal(0)
+        self._key_lock = threading.RLock()
 
         # ConfigAdmin: managed service registrations + per-PID configs
         self._managed: dict[str, IManagedService] = {}
@@ -132,27 +151,42 @@ class ConfigProvider:
     # ── IConfig ──────────────────────────────────────────────────
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a config value by dotted path. REACTIVE — tracks the caller."""
-        data = self._state.get()  # reactive read: tracks consumer
-        parts = key.split(".")
-        cur: Any = data
-        for part in parts:
-            if not isinstance(cur, dict):
-                return default
-            cur = cur.get(part)
-            if cur is None:
-                return default
-        return cur
+        """Get a config value by dotted path. REACTIVE — tracks the caller
+        on this specific key only (not on the whole config dict)."""
+        value = self._read_path(key)
+        # Lazy-create the per-key Signal even if value is None, so a later
+        # set(key, real_value) correctly notifies this consumer.
+        sig = self._key_signal(key, value)
+        # Reactive read: registers active @effect/@computed against this key.
+        # We discard the returned value because peek would skip dotted-path
+        # traversal — value above already walked the path.
+        sig.get()
+        return value if value is not None else default
 
     def set(self, key: str, value: Any) -> None:
-        """Set a config value at runtime. Triggers reactive propagation."""
-        data = dict(self._state.peek())  # copy — new identity
-        self._set_in(data, key, value)
-        self._state.set(data)  # Signal.set → notifies all consumers
+        """Set a config value at runtime. Triggers per-key reactive propagation:
+        only consumers of this exact key (and its dotted descendants — so
+        replacing a parent correctly invalidates child reads) are notified.
+        Consumers of `.all()` are also notified via _all_version."""
+        self._set_in(self._state, key, value)
+
+        with self._key_lock:
+            # Notify the exact key, if anyone has read it
+            if key in self._key_signals:
+                self._key_signals[key].set(self._read_path(key))
+            # Notify dotted descendants — replacing a parent invalidates them
+            prefix = key + "."
+            descendants = [k for k in self._key_signals if k.startswith(prefix)]
+        for k in descendants:
+            self._key_signals[k].set(self._read_path(k))
+
+        # Bump the all() version so .all() consumers re-run
+        self._all_version.set(self._all_version.peek() + 1)
 
     def all(self) -> dict[str, Any]:
-        """Return the full config dict. REACTIVE."""
-        return dict(self._state.get())
+        """Return the full config dict. REACTIVE — subscribes to ANY change."""
+        self._all_version.get()  # reactive: track on the version counter
+        return dict(self._state)
 
     # ── IConfigAdmin ─────────────────────────────────────────────
 
@@ -229,7 +263,7 @@ class ConfigProvider:
             p.parent.mkdir(parents=True, exist_ok=True)
             # Persist both the main config and PID configs
             payload = {
-                "config": self._state.peek(),
+                "config": dict(self._state),
                 "pid_configs": self._pid_configs,
             }
             p.write_text(json.dumps(payload, indent=2, default=str))
@@ -264,6 +298,32 @@ class ConfigProvider:
         self._factories = {}
 
     # ── Internal helpers ─────────────────────────────────────────
+
+    def _read_path(self, key: str) -> Any:
+        """Walk the dotted path through self._state. Returns None if missing.
+        Non-reactive — does not register dependencies."""
+        cur: Any = self._state
+        for part in key.split("."):
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(part)
+            if cur is None:
+                return None
+        return cur
+
+    def _key_signal(self, key: str, current_value: Any) -> Signal:
+        """Lazily create-and-return the per-key Signal, seeded with the
+        current value. Thread-safe via _key_lock (the kernel's own RLock
+        protects each Signal's internals separately)."""
+        sig = self._key_signals.get(key)
+        if sig is not None:
+            return sig
+        with self._key_lock:
+            sig = self._key_signals.get(key)
+            if sig is None:
+                sig = Signal(current_value)
+                self._key_signals[key] = sig
+            return sig
 
     @staticmethod
     def _set_in(data: dict, key: str, value: Any) -> None:
