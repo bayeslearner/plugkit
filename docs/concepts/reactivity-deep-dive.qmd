@@ -5,31 +5,76 @@ subtitle: "The internals: Signals, tracking, and why it's different from React"
 
 ## The Problem Reactivity Solves
 
-Without reactivity, when data changes, you must manually notify everyone who cares:
+The problem isn't *what happens* when data changes — both approaches can
+rebuild an index or reconnect a client. The problem is **who wires the
+notification**.
+
+### Without reactivity: you write the glue
 
 ```python
-# Without reactivity — manual wiring
+# The consumer defines callbacks
 class SpellChecker:
-    def on_dict_added(self, dict, props):    # you write this
+    def on_dict_added(self, dict, props):
         self.index[props["lang"]] = dict
-    def on_dict_removed(self, dict, props):  # and this
+    def on_dict_removed(self, dict, props):
         del self.index[props["lang"]]
-    def on_config_changed(self, new_config):  # and this
-        self.url = new_config.get("url")
 ```
 
-With reactivity, you write what you need, and the kernel figures out the wiring:
+But who calls `on_dict_added`? Someone has to write the glue:
 
 ```python
-# With reactivity — automatic tracking
+# SOMEWHERE ELSE — the provider or a framework must:
+# 1. Maintain a list of listeners
+# 2. Know which consumers care about which events
+# 3. Call the right callback on each consumer
+class DictionaryRegistry:
+    def __init__(self):
+        self._listeners = []                  # who do I notify?
+
+    def register_listener(self, listener):    # consumer must register
+        self._listeners.append(listener)
+
+    def add_dict(self, dict, props):
+        self._dicts.append(dict)
+        for listener in self._listeners:      # notify each consumer
+            listener.on_dict_added(dict, props)
+
+    def remove_dict(self, dict, props):
+        self._dicts.remove(dict)
+        for listener in self._listeners:
+            listener.on_dict_removed(dict, props)
+```
+
+And somewhere during boot, someone writes:
+
+```python
+registry.register_listener(spell_checker)     # manual wiring
+```
+
+Three pieces of code that must stay in sync: the callback methods on the
+consumer, the notification loop on the provider, and the registration call
+that connects them. Miss any one and changes are silently dropped.
+
+### With reactivity: no glue
+
+```python
 class SpellChecker:
     @effect
     def rebuild(self):
-        # kernel tracks: this effect reads self.rt.dicts and self.rt.config
         self.index = {getattr(d, "lang", "?"): d for d in self.rt.dicts}
-        self.url = self.rt.config.get("url")
-    # When either dicts or config changes → rebuild() re-runs automatically
 ```
+
+That's it. No registration. No listener list on the provider. No callback
+protocol. The provider doesn't know the consumer exists. The consumer doesn't
+know when or how the provider changes.
+
+The kernel handles the wiring: it tracks that `rebuild()` read `self.rt.dicts`
+(a Signal), and re-runs `rebuild()` when that Signal changes. The provider
+just provides a service. The consumer just reads it.
+
+**Both approaches react to changes. The difference is: with Signals, there
+is no glue code. The reactive graph replaces the listener registry, the
+registration calls, and the callback protocol — all of it.**
 
 How does the kernel know what `rebuild()` read? That's the core trick.
 
