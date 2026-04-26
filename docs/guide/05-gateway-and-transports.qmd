@@ -3,7 +3,169 @@ title: "5. Gateway & Transports"
 subtitle: "How @api, the Gateway, and Transport adapters turn runnables into REST endpoints, MCP tools, and CLI commands."
 ---
 
+## Trace a Request: From HTTP to @runnable
+
+Before explaining the architecture, let's trace what actually happens when
+an HTTP request hits a SignalPy-generated endpoint. Every file path and
+line number references the real source.
+
+Suppose you have this component:
+
+```python
+@component("splunk", version="1.0")
+@api("rest", prefix="/splunk", version="v1")
+class SplunkApp:
+    @runnable("query", params=QueryParams, description="Run a Splunk query")
+    async def query(self, params):
+        return {"results": ["event1", "event2"]}
+```
+
+And a client sends: `POST /api/v1/splunk/query  {"spl": "index=main"}`
+
+Here is every step that executes, with the actual code:
+
+
+### Step 1: `@runnable` stores metadata (decoration time)
+
+`component.py:329` — the `@runnable` decorator creates a `RunnableDef` and appends
+it to the class metadata. Nothing runs. No handler is registered yet.
+
+```python
+# component.py — what @runnable actually does:
+def runnable(name, *, params, description, ...):
+    def decorator(fn):
+        fn.__runnable__ = RunnableDef(
+            name=name,                  # "query"
+            fn=fn,                      # SplunkApp.query
+            params_model=QueryParams,   # for validation
+            description=description,
+            is_async=True,              # detected from async def
+        )
+        return fn
+    return decorator
+```
+
+At this point, `SplunkApp` is just a class with metadata attached. No kernel,
+no bus, no routes.
+
+
+### Step 2: Boot registers a bus handler (`kernel/__init__.py:336-338`)
+
+When `kernel.boot()` activates `SplunkApp`, `_register_component_bus()` reads
+the metadata and registers a handler on the bus:
+
+```python
+# kernel/__init__.py:336-338
+for rd in ci.meta.runnables:
+    handler_name = f"{ci.name}.{rd.name}"    # "splunk.query"
+    self.bus.register_handler(
+        handler_name,
+        self._make_bus_handler(rd, ci.instance, ci),
+    )
+```
+
+`_make_bus_handler` (`kernel/__init__.py:272-317`) creates a closure that:
+
+1. Validates params with the Pydantic model
+2. Checks auth if `requires_action` or `requires_role` is set
+3. Calls `rd.fn(instance, validated_params)` — the actual `query()` method
+
+Now `bus._handlers["splunk.query"]` is a callable. The bus doesn't know
+about REST or MCP. It's just a dict of `{name: async_function}`.
+
+
+### Step 3: Gateway builds a surface (`gateway.py:82-135`)
+
+The `APIGateway` component activates after `SplunkApp`. It scans `bus.handlers`
+and matches each handler to its component's `@api` declarations:
+
+```python
+# gateway.py:93-97 — for each bus handler:
+handler_name = "splunk.query"
+component_qn = "splunk"
+runnable_name = "query"
+
+# gateway.py:113 — for each @api declaration on that component:
+for api_def in meta.apis:          # APIDef(transport="rest", prefix="/splunk", version="v1")
+    surface = self._get_surface("rest")
+    surface.entries.append(APIEntry(
+        runnable_name="splunk.query",   # the bus handler name — this is the key
+        short_name="query",
+        group="splunk",                 # from prefix="/splunk"
+    ))
+```
+
+The gateway now holds: `surfaces["rest"]` contains an `APIEntry` with
+`runnable_name="splunk.query"`. This string is the bridge between the
+gateway and the bus.
+
+
+### Step 4: Transport generates a FastAPI route (`rest.py`)
+
+The `RESTTransport` (or `mount_rest()`) reads the surface and generates routes.
+The core is this closure in `rest.py:_add_route()`:
+
+```python
+# rest.py — the actual route handler:
+def _make_handler(name="splunk.query", b=bus):
+    async def _handler(request: Request):
+        body = await request.json()                  # {"spl": "index=main"}
+        result = await b.invoke(name, body)          # ← THE BRIDGE
+        return JSONResponse({"ok": True, "data": result})
+    return _handler
+
+router.add_api_route("/query", _make_handler(), methods=["POST"])
+```
+
+FastAPI now has: `POST /api/v1/splunk/query` → `_handler`
+
+The bridge is one line: `await bus.invoke("splunk.query", body)`. The route
+handler doesn't know about `SplunkApp`. It only knows the bus handler name.
+
+
+### Step 5: HTTP request arrives
+
+```
+Client: POST /api/v1/splunk/query  {"spl": "index=main"}
+         │
+         ▼
+FastAPI matches route → _handler(request)              # rest.py
+         │
+         ▼
+body = await request.json()                            # {"spl": "index=main"}
+         │
+         ▼
+result = await bus.invoke("splunk.query", body)        # rest.py → bus.py:74
+         │
+         ▼
+handler = bus._handlers["splunk.query"]                # bus.py:83-85
+result = await handler({"spl": "index=main"})          #   ↓
+         │                                             #   ↓
+         ▼                                             #   ↓
+_make_bus_handler closure:                             # kernel/__init__.py:296
+  validated = QueryParams.model_validate(body)         #   params validation
+  result = await SplunkApp.query(instance, validated)  #   actual method call
+         │
+         ▼
+return JSONResponse({"ok": True, "data": {"results": ["event1", "event2"]}})
+```
+
+That's the full path. Five hops: FastAPI route → bus.invoke → bus handler →
+param validation → your method. The component never imported FastAPI.
+FastAPI never imported SignalPy. The bus handler name (`"splunk.query"`)
+is the only connection between them.
+
+::: {.callout-tip}
+## The bus is the bridge
+Every adapter (REST, MCP, CLI) generates the same thing: a thin wrapper
+that calls `bus.invoke(runnable_name, params)`. The bus handler name is
+a string. That's the entire interface between "presentation" and "capability."
+:::
+
+
 ## The Three-Layer Pipeline
+
+Now that you've seen the trace, here's the architecture:
 
 Components don't build REST routes or CLI commands. They declare what they
 want to expose, and the kernel handles the rest through three layers:
