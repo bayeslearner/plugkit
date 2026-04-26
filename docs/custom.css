@@ -29,11 +29,58 @@ code:not(.sourceCode) {
   font-size: 0.9em !important;
 }
 
-/* Code text color: bright */
+/* Code text color: bright.
+ * Quarto sets `pre > code.sourceCode > span { color: #003B4F }` as the default
+ * for the LINE-WRAPPER spans (one per source line, holds un-classed identifiers
+ * like variable names, type names, parameters). That's near-black on our dark
+ * bg → invisible. Override only the line wrapper (direct-child selector); the
+ * deeper classed token spans `code span.X` are unaffected and keep their colors. */
 div.sourceCode code,
-pre.sourceCode code {
+pre.sourceCode code,
+pre > code.sourceCode > span,
+code.sourceCode > span,
+div.sourceCode pre.sourceCode {
   color: #e6edf3 !important;
 }
+
+/* ── Syntax highlighting tokens: dark-mode palette ─────────────
+ * Quarto ships LIGHT-mode token colors (dark blues/reds/grays)
+ * which are unreadable on our dark code block background.
+ * Override with a GitHub-Dark / One-Dark inspired palette.
+ */
+pre > code.sourceCode > span > a:first-child::before {
+  color: #6e7681 !important;  /* line number gutter */
+}
+code span.al { color: #ff7b72 !important; }                     /* alert */
+code span.an { color: #8b949e !important; font-style: italic; } /* annotation */
+code span.at { color: #79c0ff !important; }                     /* attribute */
+code span.bn { color: #79c0ff !important; }                     /* base-N number */
+code span.bu { color: #ffa657 !important; }                     /* builtin */
+code span.cf { color: #ff7b72 !important; }                     /* control flow */
+code span.ch { color: #a5d6ff !important; }                     /* char */
+code span.cn { color: #79c0ff !important; }                     /* constant */
+code span.co { color: #8b949e !important; font-style: italic; } /* comment */
+code span.cv { color: #8b949e !important; font-style: italic; } /* comment var */
+code span.do { color: #8b949e !important; font-style: italic; } /* docstring */
+code span.dt { color: #ffa657 !important; }                     /* data type */
+code span.dv { color: #79c0ff !important; }                     /* decimal value */
+code span.er { color: #ff7b72 !important; font-weight: bold; }  /* error */
+code span.ex { color: #e6edf3 !important; }                     /* extension */
+code span.fl { color: #79c0ff !important; }                     /* float */
+code span.fu { color: #d2a8ff !important; }                     /* function */
+code span.im { color: #ff7b72 !important; }                     /* import */
+code span.in { color: #8b949e !important; font-style: italic; } /* information */
+code span.kw { color: #ff7b72 !important; }                     /* keyword */
+code span.op { color: #ff7b72 !important; }                     /* operator */
+code span.ot { color: #79c0ff !important; }                     /* other */
+code span.pp { color: #d2a8ff !important; }                     /* preprocessor */
+code span.sc { color: #a5d6ff !important; }                     /* special char */
+code span.ss { color: #a5d6ff !important; }                     /* special string */
+code span.st { color: #a5d6ff !important; }                     /* string */
+code span.va { color: #ffa657 !important; }                     /* variable */
+code span.vs { color: #a5d6ff !important; }                     /* verbatim string */
+code span.wa { color: #d29922 !important; font-style: italic; } /* warning */
+code span.bi { color: #ffa657 !important; }                     /* builtin (Quarto variant) */
 
 /* ── ASCII art / pre blocks (non-code): distinct from body ──── */
 pre:not(.sourceCode) {
