@@ -126,8 +126,11 @@ The `ContextVar` separates the two flows' "who's asking" state. The
 
 ## Q3. Are we reinventing the wheel?
 
-Short answer: the *primitives we depend on* are stdlib. The *composition*
-is not, because Python's stdlib has no reactive graph.
+The honest answer in three layers: **stdlib primitives — reused. The
+reactive pattern — borrowed from JS. The combination at the layer
+SignalPy targets — does not exist as an off-the-shelf library, but
+one library (`reaktiv`) overlaps enough that we should be specific
+about where we differ.**
 
 ### What stdlib gives us, and what we lean on
 
@@ -154,19 +157,101 @@ own context machinery. The engine is a thin coordinator on top of them.
 - **Notification fan-out with batching.** Vue's `nextTick`, our `batch()`
   context — neither is in stdlib.
 
-### How we compare to nearby libraries
+### "Aren't signals just a subscriber registry?"
 
-| Library | Lines | Thread-safe? | Per-key collection deps? | Async (`await` after read) |
-|---|---|---|---|---|
-| **SignalPy** | ~450 | Yes (RLock + ContextVar) | Yes (lazy per-key Signals in ConfigProvider) | Tracked through first `await` via `copy_context()` |
-| **observ** (Vue 2 port, PyPI) | ~1400 | No (class-level `Dep.stack`) | Yes (Vue 2 style proxies) | Not officially supported |
-| **Vue 3 reactivity** | (large) | Single-threaded JS — N/A | Yes | `watchEffect` is sync only |
-| **Solid.js / Preact-Signals** | (large) | Single-threaded JS — N/A | N/A (different model) | sync |
+A reasonable critique: at the lowest level, `Signal._subscribers` is
+literally a `set` of consumers. The kernel's `ServiceRegistry` is also
+a registry. Why is one called "reactive" and the other isn't?
 
-We're closest to **observ** in size and intent, but observ uses a
-class-attribute `Dep.stack` instead of `ContextVar`, which doesn't
-isolate threads or asyncio tasks. The choice of `ContextVar` is what
-lets us claim *thread-and-task safe* without giant code changes.
+The difference is **who writes the registration code**. With a plain
+observer registry:
+
+```python
+# Observer pattern (e.g., blinker, PyDispatcher)
+config.url_changed.connect(my_callback)        # explicit subscribe
+config.token_changed.connect(my_callback)      # one per signal
+config.url_changed.disconnect(my_callback)     # explicit unsubscribe
+```
+
+With auto-tracking signals:
+
+```python
+@effect
+def my_effect(self):
+    url = self.rt.config.get("url")            # auto-subscribe
+    token = self.rt.config.get("token")        # auto-subscribe
+    # no disconnect — engine cleans up at dispose
+```
+
+Same `set` underneath. But the effect doesn't know it's subscribing,
+the framework doesn't know which signals matter — both sides discover
+that fact at runtime through the `_active_consumer` ContextVar
+hand-off during `get()`. Removing this layer is what produced the
+`@bind`/`@unbind` decorators of v1, the kind of glue every user
+eventually got tired of writing.
+
+So the registry critique is true at the data-structure level and
+mostly wrong at the code-the-user-writes level. The reactive layer is
+*two things* on top of the registry: auto-tracking (saves the
+subscribe), and propagation policy (saves the diamond/order/supersede
+bookkeeping — see the propagation algorithm below).
+
+### The Python landscape, honestly
+
+The closest active competitor is **reaktiv** (PyPI v0.21.3, Feb 2026)
+— a Python Signal/Computed/Effect lib explicitly aimed at backend use
+(FastAPI, IoT, data pipelines), inspired by Angular/SolidJS. We had
+not benchmarked against it directly until this audit; here is where
+the libraries differ:
+
+| Library | Maintenance | Cells (Sig/Comp/Eff)? | Auto-track? | **Thread-safe?** | **Async supersede?** | DI / component model? |
+|---|---|---|---|---|---|---|
+| **SignalPy** | active (this repo) | Yes | Yes | **Yes** (RLock + ContextVar) | **Yes** (`is_stale()` + `cancel_on_supersede`) | Yes (`@component`/`@provides`/`@requires`) |
+| **reaktiv** | active (Feb 2026) | Yes | Yes | **Not documented** | **Experimental**; docs recommend sync effect that spawns `asyncio.create_task` | No |
+| **observ** (Vue 2 port) | active (Feb 2026) | Yes | Yes | No (class-level `Dep.stack`) | Not officially supported | No (UI-focused; patchdiff dep) |
+| **traitlets** | mature | Cells but no auto-track (`.observe(handler)`) | No | Not claimed | Async observers open since 2017 | No (Jupyter-coupled) |
+| **HoloViz `param`** | active | `.rx`/`.bind` reactive expressions | Partial | Not claimed | Sync-oriented | No (HoloViz/Panel-coupled) |
+| **blinker** | active (Pallets) | No (pure pub-sub) | No (manual `connect`) | Yes | `send_async` exists; no graph | No |
+| **RxPY / aioreactive** | RxPY slow / aioreactive niche | Streams, not cells | Manual operator pipelines | N/A | Different paradigm | No |
+| **Trellis** (PEAK) | **discontinued** | Yes (historical interest) | Yes | — | — | — |
+| **Solara / Reflex state** | active | Yes, framework-bound | Yes | Framework-managed | Framework-managed | Framework-managed (UI) |
+
+The picture: there is exactly **one** other actively-maintained
+Python library doing fine-grained reactive cells aimed at backend
+services (`reaktiv`). It stops at the primitive layer. SignalPy
+extends past it in three concrete directions:
+
+1. **Documented thread safety.** Every shared-state mutation goes
+   through one RLock; every "who is asking" lookup goes through a
+   ContextVar. `reaktiv`'s docs do not make a thread-safety claim;
+   `observ`, `param`, `traitlets` are all single-thread by design.
+2. **Async supersede semantics.** When a notification arrives during
+   an in-flight async effect, SignalPy schedules a re-run instead of
+   silently dropping. `is_stale()` for cooperative bail; the
+   `cancel_on_supersede=True` flag for resource-bound bodies.
+   `reaktiv` documents async effects as experimental and recommends
+   working around them by spawning a task from a sync effect.
+3. **Component composition.** SignalPy's reactive primitives are
+   wired into `@component`/`@provides`/`@requires` so the *injected
+   service itself* is a Signal, and reads via `self.rt.X` are tracked
+   automatically. `reaktiv` is just primitives — you'd build the DI
+   layer yourself.
+
+**Could we build SignalPy on top of `reaktiv` instead?** In theory.
+In practice, the parts we extend most heavily — thread safety,
+supersede semantics — are at the primitive layer where the two
+libraries' implementations are not interchangeable. The honest
+trade-off is: if all you need are reactive cells in single-thread
+code, `reaktiv` is smaller and well-maintained, use it. If you need
+backend-service composition (DI, lifecycle, hot-reload, structural
+scoping for credentials/storage) and concurrency guarantees, that
+combination is what the SignalPy kernel supplies.
+
+The rest of the landscape is in different niches: pub-sub event
+buses (`blinker`), push streams (`RxPY`, `aioreactive`), notebook
+data binding (`traitlets`, `param`), or framework-bound state
+(`Solara`, `Reflex`). None of those are wheels we'd be reinventing
+because none target the same problem.
 
 
 ## The propagation algorithm — one logic, four corner cases
