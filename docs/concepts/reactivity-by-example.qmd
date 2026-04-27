@@ -86,6 +86,14 @@ class Effect:
 
 The walkthrough below traces exactly **one cycle**: boot → first run → mutation → re-run.
 
+> **Why does the provider have so much machinery?** A typical provider has
+> one piece of state, so it just does `self._state = Signal(value)` — one
+> line. ConfigProvider has *many* logical pieces of state (one per dotted
+> key) and consumers want fine-grained subscriptions, so it keeps a *dict
+> of Signals*. The extra code is bookkeeping for that dict, not framework
+> overhead. See [Why ConfigProvider looks complicated](#why-configprovider-looks-more-complicated)
+> at the end of the page.
+
 
 ## ① Boot: the Effect runs for the first time
 
@@ -393,6 +401,123 @@ Once you see this cycle, every other pattern is a small variation:
 
 The principle is always the same: **read = subscribe, write = notify,
 the rest is bookkeeping.**
+
+
+## Why ConfigProvider looks more complicated
+
+The provider in our example has more code than typical. Each piece earns
+its keep — but it's worth seeing why, because the same questions come up
+every time someone reads it for the first time.
+
+### Why isn't it just `self._state = Signal(...)`?
+
+Most providers *are* exactly that one line. ConfigProvider differs in its
+**data model**: many logical pieces of state (one per dotted key), and
+consumers expect that writing `"server.port"` won't re-run effects that
+only read `"db.url"`. So instead of one Signal wrapping a whole dict, it
+keeps a **lazy dict of Signals** — one per key, created on first read.
+
+Pre-refactor it really was a single `Signal[dict]`. Simpler code, but
+every write to any key re-ran every effect that had read any key. The
+per-key design is a deliberate tradeoff: more bookkeeping, much better
+fan-out behavior. (Tested by `test_config_per_key.py`.)
+
+### Why does `get` manually call `sig.get()` and discard the result?
+
+The kernel tracks **Signal reads**, and only Signal reads. If `get()` just
+walked the plain dict and returned the leaf, the consumer would have *no
+subscription* — nothing for a later `set()` to notify.
+
+```python
+def get(self, key, default=None):
+    value = self._read_path(key)        # plain dict walk — NOT reactive
+    sig = self._key_signal(key, value)  # find/create the Signal for this key
+    sig.get()                           # ← THIS line is the subscription
+    return value if value is not None else default
+```
+
+The `sig.get()` call has nothing to do with retrieving the value —
+`_read_path` already did that. It exists purely for its **side effect**:
+it tells the kernel *"the currently-running effect depends on this key."*
+The return value is discarded.
+
+Mental model: **reading IS subscribing.** A more honest method name would
+be `signal.subscribe_active_consumer_and_return_value()` — but `get` is
+what the kernel API exposes, because in normal use the side effect and
+the return value are both wanted.
+
+### What does `_set_in(self._state, ...)` do?
+
+Pure dict mutation — walks a dotted path and sets the leaf. Zero
+reactivity:
+
+```python
+@staticmethod
+def _set_in(data, key, value):
+    parts = key.split(".")
+    cur = data
+    for part in parts[:-1]:
+        if part not in cur or not isinstance(cur[part], dict):
+            cur[part] = {}
+        cur = cur[part]
+    cur[parts[-1]] = value
+```
+
+For `key="server.port", value=9090` it produces `data["server"]["port"] = 9090`.
+The reactive notification is a *separate step* on the next few lines of
+`set()`. Splitting them keeps the dict layer (the source of truth) and
+the signal layer (the subscription channel) decoupled.
+
+### What does `_key_lock` guard?
+
+The `_key_signals` **dict** — the lazy `key → Signal` map. It does *not*
+guard individual Signals; each Signal has its own RLock from the engine.
+
+The race it prevents: two threads call `get("brand-new.key")` at the same
+moment. Both see no entry, both create a `Signal`, both insert into the
+dict — last writer wins. The first thread's effect now points at a Signal
+that's no longer in the dict; future `set()` calls notify the *other*
+Signal and the first effect never re-runs. The subscription is silently
+lost.
+
+```python
+def _key_signal(self, key, current_value):
+    sig = self._key_signals.get(key)
+    if sig is not None: return sig
+    with self._key_lock:                       # ← serialize lazy-create
+        sig = self._key_signals.get(key)       # double-check inside lock
+        if sig is None:
+            sig = Signal(current_value)
+            self._key_signals[key] = sig
+        return sig
+```
+
+Strictly about the *dict layer*. Two orthogonal pieces of state, two
+orthogonal locks — see [Threading Model](threading-model.qmd) for why
+that split matters.
+
+### What is `_all_version` for? Will it overflow?
+
+It's a Signal that consumers of `cfg.all()` subscribe to. Those consumers
+want to re-run on **any** config change, but they can't subscribe to the
+dict itself (not a Signal), nor to "every per-key Signal" (don't know
+which keys exist yet, and new ones can appear at any time). Solution:
+one shared counter Signal that every `set()` bumps.
+
+```python
+self._all_version.set(self._all_version.peek() + 1)
+```
+
+**Will it overflow?** No — Python ints are arbitrary precision. After a
+quintillion writes you've added a few bytes to a long int; nothing
+breaks.
+
+**Why an integer at all?** The value is irrelevant. What matters is that
+`peek() + 1` produces a *new int* with a different Python identity, so
+`Signal.set()`'s `value is self._value` check fails and it notifies
+subscribers. `self._all_version.set(object())` would work just as well —
+the integer is a debugging convenience so you can tell at a glance how
+many writes have happened.
 
 
 ## See also
