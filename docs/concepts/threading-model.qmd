@@ -450,6 +450,15 @@ The two questions never have the same answer.
 
 ## Async effect supersede: what happens when notifications race the body
 
+::: {.callout-tip}
+## Looking for the user-facing recipe?
+This section explains the *mechanism*. For a recipe-shelf summary of when
+each escape hatch (`batch()`, `is_stale()`, `cancel_on_supersede`, and
+`loop.call_soon_threadsafe` for cross-thread writes) is the right tool —
+with copy-pasteable scenarios — see
+[Patterns → Reactive Intent vs Default](../patterns/reactive-intent.qmd).
+:::
+
 Async effects are where reactive frameworks usually leak abstractions.
 Imagine this:
 

@@ -1,6 +1,6 @@
 ---
 title: "Commercial Patterns"
-subtitle: "Six production patterns that work with zero kernel changes."
+subtitle: "Production patterns that work with zero kernel changes."
 ---
 
 Every pattern below runs on the stock kernel. No patches, no hooks, no monkey-patching. The reactive graph (Signal + `@effect` + `@computed`) handles propagation automatically.
@@ -11,6 +11,7 @@ Each pattern has a dedicated deep-dive page, a runnable example in `src/signalpy
 
 | # | Pattern | What It Proves |
 |---|---------|---------------|
+| 0 | [Reactive Intent vs Default](reactive-intent.qmd) | When `@effect`'s default semantics need an escape hatch — `batch()`, `is_stale()`, `cancel_on_supersede`, cross-thread writes |
 | 1 | [Secret Rotation](secret-rotation.qmd) | Config Signal propagates through credential chain to consumer @effect |
 | 2 | [A/B Testing](ab-testing.qmd) | Map injection + @computed = runtime-adjustable routing |
 | 3 | [Multi-Tenant Isolation](multi-tenant.qmd) | instantiate() + properties + structural scoping = L3 targeted |

@@ -1,0 +1,310 @@
+---
+title: "Reactive Intent vs Reactive Default"
+subtitle: "Four situations where a naive @effect doesn't reflect what the programmer meant — and the escape hatches for each."
+---
+
+## Why this pattern exists
+
+The reactive default — *every write notifies; every notified effect re-runs* —
+is what you want most of the time. But four recurring situations break that
+assumption, and a programmer who hasn't seen them tends to either ship subtle
+bugs (auth attempts with mismatched creds, half-cancelled streams) or build
+elaborate workarounds (manual debouncing, state-machine glue, ad-hoc locks).
+
+This page is the recipe shelf. Each section: **what the default does → what
+goes wrong → the hatch → when not to reach for it.**
+
+| Situation | Default behavior | Bug it causes | Hatch |
+|---|---|---|---|
+| Two writes that mean *one* update | Effect fires twice on a half-state | Action with mismatched values (auth error, partial commit) | `with batch():` |
+| Async effect mid-flight, deps change, body decomposable | Old run completes fully, then re-runs | Wasted work — minutes of compute thrown away | `is_stale()` |
+| Async effect mid-flight, body holds a resource | Old run blocks the next | Streams stuck on an old endpoint, leases never released | `@effect(cancel_on_supersede=True)` |
+| Cross-thread `signal.set()` from a worker / blocking SDK callback | Sync effects fire on the worker thread; async effects silently fail | Async effects never run; thread-affine work crashes | `loop.call_soon_threadsafe(signal.set, v)` |
+
+The first three are documented inline in tutorial 3 as part of teaching
+`@effect`. The fourth is new here. All four are referenced from
+[Threading Model](../concepts/threading-model.qmd) for the underlying algorithm.
+
+---
+
+## 1. Two writes mean one thing — `batch()`
+
+### What goes wrong
+
+You're rotating an API endpoint *and* its credential together. Both live in
+config; the deploy script writes them one after the other:
+
+```python
+config.set("api.url",   "https://api-v2.example.com")
+config.set("api.token", "tok_v2_xxxxx")
+```
+
+A naive consumer:
+
+```python
+@effect
+async def reconnect(self):
+    url   = self.rt.config.get("api.url")
+    token = self.rt.config.get("api.token")
+    await self._open(url, token)
+```
+
+The effect runs **twice**. First run: `(v2_url, v1_token)` — a real auth
+attempt with mismatched creds, going to a real server, generating a real
+audit-log alarm. Second run: `(v2_url, v2_token)`, succeeds.
+
+The first run wasn't just wasted — it was *wrong*.
+
+### The hatch
+
+```python
+from signalpy.kernel import batch
+
+with batch():
+    config.set("api.url",   "https://api-v2.example.com")
+    config.set("api.token", "tok_v2_xxxxx")
+# effect fires ONCE, with both new values
+```
+
+`batch()` defers notifications until the block exits, then flushes once. From
+the effect's point of view no half-state ever existed.
+
+### When not to reach for it
+
+The kernel batches automatically in two common cases:
+
+- **Hot-add / hot-remove cascades.** A single `kernel.hot_add(GermanDict)` is
+  one cascade, one effect run, even though it touches multiple internal
+  Signals.
+- **Diamond dependencies.** If `A → B`, `A → C`, and an effect reads both `B`
+  and `C`, a single `A` update runs the effect once, not twice.
+
+You only need `batch()` for **two top-level `set()` calls that are
+semantically one update**. The kernel cannot tell two unrelated writes from
+two correlated writes; you have to declare the correlation.
+
+---
+
+## 2. Async work about to be redone — `is_stale()`
+
+### What goes wrong
+
+The default async-supersede behavior is: if a notification arrives while the
+body is mid-`await`, the engine queues a re-run for after the current body
+finishes. Always safe.
+
+That's fine for a 200ms config reload. It's *not* fine for a 30-second
+batch indexer that's already obsolete:
+
+```python
+@effect
+async def reindex(self):
+    documents = self.rt.docs.list()           # tracked
+    for chunk in chunked(documents, 100):
+        await self.rt.search.write(chunk)     # 30s total
+    # docs changed at second 5 — but we just spent 25s writing stale data
+```
+
+The default *will* re-run after the 30s body finishes. The 25 seconds of
+stale writes happened anyway.
+
+### The hatch
+
+```python
+from signalpy.kernel import is_stale
+
+@effect
+async def reindex(self):
+    documents = self.rt.docs.list()
+    for chunk in chunked(documents, 100):
+        await self.rt.search.write(chunk)
+        if is_stale():
+            return                            # newer doc set arrived
+```
+
+`is_stale()` flips to `True` the moment a notification arrives. Check it at
+any `await`-point that's safe to abandon work at. The engine will fire the
+next run regardless — `is_stale()` is purely your hint to skip the rest of
+*this* run.
+
+### When not to reach for it
+
+- **Fast bodies (< ~100ms).** The bookkeeping is more code than it's worth.
+- **Bodies that aren't decomposable into checkpoints.** If you can only bail
+  at the very end, there's nothing to bail from.
+- **Bodies that mutate external state in ways that can't be left
+  half-applied.** `is_stale()` returns from the body, which means partial
+  work is *committed*, not rolled back. If half-written results are corrupt,
+  use a transaction or a staging buffer — `is_stale()` doesn't undo.
+
+---
+
+## 3. Async work holding a resource — `cancel_on_supersede`
+
+### What goes wrong
+
+Sometimes the in-flight body isn't just wasteful but *blocking* the next
+run. A long-poll holding a connection, a file lock, a GPU lease, a backend
+session that licenses one consumer at a time:
+
+```python
+@effect
+async def stream(self):
+    url = self.rt.config.get("stream.url")
+    async with httpx.AsyncClient() as client:
+        async for event in client.stream("GET", url):   # holds the conn
+            self.rt.publish("stream.event", event)
+```
+
+If `config.set("stream.url", new_url)` fires, the default behavior queues a
+re-run. But the *current* body never returns — `async for event in
+client.stream(...)` is an infinite loop. The next run never starts. Worse,
+the connection to the old endpoint stays open until something kicks it
+loose.
+
+### The hatch
+
+```python
+@effect(cancel_on_supersede=True)
+async def stream(self):
+    url = self.rt.config.get("stream.url")
+    async with httpx.AsyncClient() as client:
+        async for event in client.stream("GET", url):
+            self.rt.publish("stream.event", event)
+```
+
+When the dep changes, the engine calls `task.cancel()` on the in-flight
+task. The async generator inside `client.stream` raises `CancelledError`,
+the `async with` block closes the connection cleanly, and the engine
+re-runs the effect with the new URL.
+
+### When not to reach for it
+
+- **The body has finalizers that *must* complete and that don't tolerate
+  `CancelledError`.** Cancellation is cooperative — Python raises
+  `CancelledError` at the next `await`, but `finally:` blocks must
+  themselves yield to actually run their cleanup. If your `finally:` does a
+  blocking `os.remove()` of a temp file, it'll run; if it does
+  `await self._send_goodbye()`, the cancel will likely propagate through it.
+  Test it.
+- **Idempotent bodies that just compute and return.** Use the default —
+  there's nothing to cancel that the GC won't clean up.
+
+If you find yourself wanting *both* `is_stale()` and `cancel_on_supersede`
+in the same effect, that's a sign the effect is doing too much. Split it.
+
+---
+
+## 4. Cross-thread writes — marshalling to the kernel loop
+
+### What goes wrong
+
+The kernel guards shared state with a single global `RLock`, so calling
+`signal.set(v)` from another thread is **value-safe**: no torn writes, no
+corrupt subscriber sets. But two things still go wrong if you do it naively.
+
+**Sync effects fire on the writing thread.** A worker-pool thread calls
+`signal.set(v)`; any `@effect` subscribed to that signal runs *on the
+worker thread*, not the kernel's event loop thread. If the effect calls
+`self.rt.invoke(...)`, touches a connection pool that's loop-affine, or
+logs through a handler that expects loop context, things break in
+hard-to-diagnose ways.
+
+**Async effects silently fail.** An async effect's `Effect._notify()`
+calls `asyncio.get_running_loop()` to schedule its body. If the writing
+thread doesn't have a running loop (worker threads don't), it raises
+`RuntimeError`, which the engine swallows by setting `_running = False`
+and moving on. The effect simply *does not run*. No exception bubbles up.
+
+This bites in three common situations:
+
+- **Blocking SDK callbacks.** A library hands you a callback that fires on
+  its own thread (Kafka consumer, gRPC stream, native audio).
+- **`run_in_executor` results.** You `await loop.run_in_executor(...)` and
+  inside the worker callable you call `signal.set(result)`.
+- **GUI integrations.** Tkinter / Qt fire events on the GUI thread.
+
+### The hatch
+
+Marshal the `set()` back to the kernel's loop:
+
+```python
+import asyncio
+
+class KafkaBridge:
+    @lifecycle.activate
+    def activate(self):
+        self._loop = asyncio.get_running_loop()      # capture once
+        self._latest = Signal(None)
+        self._consumer = KafkaConsumer(...)
+        self._consumer.on_message = self._on_kafka_message
+
+    def _on_kafka_message(self, msg):
+        # called from Kafka's own thread — DO NOT touch self._latest directly
+        self._loop.call_soon_threadsafe(self._latest.set, msg.value)
+```
+
+`loop.call_soon_threadsafe` is the asyncio-blessed primitive for "schedule
+this on the loop thread." When the loop picks it up, the `set()` runs
+inside the loop, `Effect._notify()` finds the running loop, and async
+effects schedule normally.
+
+### Worked example: blocking executor callback
+
+```python
+@component("transcoder")
+@requires(config=IConfig)
+class Transcoder:
+
+    @lifecycle.activate
+    def activate(self):
+        self._loop = asyncio.get_running_loop()
+        self._progress = Signal(0.0)
+
+    @runnable("transcode", params=TranscodeParams, description="Transcode video")
+    async def transcode(self, params):
+        await self._loop.run_in_executor(
+            None, self._do_transcode, params.path)
+
+    def _do_transcode(self, path):                   # runs on a worker thread
+        for pct in ffmpeg_pipeline(path):
+            # WRONG: self._progress.set(pct)        # async effects won't fire
+            self._loop.call_soon_threadsafe(self._progress.set, pct)
+```
+
+A consumer can now subscribe to `self._progress` with an async `@effect`
+and it will reliably fire from the loop thread.
+
+### When not to reach for it
+
+- **Pure async code.** If every write to the signal happens inside an
+  `async def` reached via the kernel's normal call paths, you're already
+  on the loop thread. No marshalling needed.
+- **Sync-only effects that don't touch loop-affine resources.** A sync
+  `@effect` that just appends to a list or updates a metric counter is
+  fine on a worker thread — the `RLock` covers it.
+
+The hatch is for bodies that *cross* the boundary: data produced on one
+thread, observed by effects that need to be on another.
+
+---
+
+## What ties them together
+
+All four hatches solve the same shape of problem: **the reactive engine's
+default — fire-once-per-write, run-each-effect-in-isolation — encodes one
+honest interpretation of "the deps changed," but reality has more
+structure.** Sometimes the structure is "these writes go together"
+(`batch()`). Sometimes it's "this work is provisional and might need to
+abandon" (`is_stale()`). Sometimes it's "this work owns a resource"
+(`cancel_on_supersede`). Sometimes it's "this work doesn't live on the
+same thread as the engine" (`call_soon_threadsafe`).
+
+The kernel can't infer any of those from your code. Each hatch is a small,
+explicit declaration that *this* situation isn't the default one.
+
+For the underlying mechanism — the 5-step propagation algorithm and which
+algorithmic step each hatch controls — see
+[Threading Model → The propagation algorithm](../concepts/threading-model.qmd).
+For the introductory teaching of the first three, see
+[Tutorial 3: Dynamic Services](../guide/03-dynamic-services.qmd).

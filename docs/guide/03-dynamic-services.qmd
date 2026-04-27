@@ -310,6 +310,11 @@ a sign the effect is doing too much — split it. See
 for the full mechanism, including the table of which engine step
 each escape hatch controls.
 
+For a recipe-shelf summary of all four escape hatches (the three above
+plus cross-thread writes via `loop.call_soon_threadsafe`), with
+worked-example scenarios you can lift into your own code, see
+[Patterns → Reactive Intent vs Default](../patterns/reactive-intent.qmd).
+
 ## Properties & Ranking
 
 Properties are metadata attached to a service when it registers:

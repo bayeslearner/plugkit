@@ -228,6 +228,15 @@ useful for flushing pending writes before snapshot.
 **State size.** The snapshot lives in memory during the swap. For large state
 (e.g., a 100MB index), consider snapshotting to disk via storage.
 
+**Consumer effects during the swap.** While `hot_update()` is mid-flight, an
+async `@effect` on a consumer that reads the swapped service may be in the
+middle of a body that still holds a reference to the *old* instance. The
+kernel's automatic batching during the lifecycle transition ensures consumer
+effects re-run *once* against the new instance after the swap completes — but
+if the in-flight body owns a connection or lease that the new instance also
+needs, mark the consumer effect with `cancel_on_supersede=True`. See
+[Reactive Intent → cancel_on_supersede](reactive-intent.qmd#async-work-holding-a-resource-cancel_on_supersede).
+
 
 ## Key Takeaway
 

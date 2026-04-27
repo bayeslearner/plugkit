@@ -42,6 +42,8 @@ website:
         menu:
           - text: "Overview"
             href: patterns/index.qmd
+          - text: "Reactive Intent vs Default"
+            href: patterns/reactive-intent.qmd
           - text: "Secret Rotation"
             href: patterns/secret-rotation.qmd
           - text: "A/B Testing"
@@ -91,6 +93,7 @@ website:
     - title: "Patterns"
       contents:
         - patterns/index.qmd
+        - patterns/reactive-intent.qmd
         - patterns/secret-rotation.qmd
         - patterns/ab-testing.qmd
         - patterns/multi-tenant.qmd
