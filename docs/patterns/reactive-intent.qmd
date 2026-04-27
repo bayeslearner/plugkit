@@ -158,9 +158,44 @@ async def stream(self):
 
 If `config.set("stream.url", new_url)` fires, the default behavior queues a
 re-run. But the *current* body never returns — `async for event in
-client.stream(...)` is an infinite loop. The next run never starts. Worse,
-the connection to the old endpoint stays open until something kicks it
-loose.
+client.stream(...)` blocks inside a single network read, waiting for the
+old server to send the next event. If that takes 10 minutes, your body
+sits inside that one `await` for 10 more minutes. The next run never
+starts. Worse, the connection to the old endpoint stays open until
+something kicks it loose.
+
+::: {.callout-important}
+## "Why isn't `is_stale() + return` enough here?"
+
+A natural question if you just read section 2: why introduce a second
+hatch instead of putting `if is_stale(): return` after the
+`self.rt.publish(event)` line?
+
+Two reasons:
+
+**1. `is_stale()` is cooperative — it only fires *between* awaits.** It's
+a function you call. Python only runs your code between `await` points.
+So `if is_stale(): return` only takes effect at *checkpoints you wrote*,
+right after some `await` returns control to your code. `task.cancel()`
+fires `CancelledError` *at* the next await, including the one currently
+blocked. You don't have to be holding the CPU.
+
+**2. The stream body has no checkpoints to reach.** The indexer in
+section 2 awaits `self.rt.search.write(chunk)` — short calls returning
+control to your loop frequently. Many checkpoints. The stream body has
+*one* effective await: the next iteration of `async for`, which is
+itself blocked on a network read that may take minutes. Even if you
+added `if is_stale(): return` after `publish`, you'd still wait for the
+next event from the old server before reaching it. Cancel doesn't wait.
+
+| Hatch | Mechanism | Works when |
+|---|---|---|
+| `is_stale() + return` | You poll a flag at points you choose | The body returns control to you frequently — short awaits in a loop |
+| `cancel_on_supersede` | The runtime injects `CancelledError` at the next await | The body is stuck in a long await you don't control |
+
+Mental model: `is_stale()` is "I'll bail when I get a chance."
+`cancel_on_supersede` is "stop now, I don't care what you're doing."
+:::
 
 ### The hatch
 
