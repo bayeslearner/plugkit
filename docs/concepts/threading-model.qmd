@@ -720,6 +720,6 @@ dependency in the first place.
 - [Reactivity by Example](reactivity-by-example.qmd) — start here for the cycle
 - [Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd) — why one slot is enough
 - [Reactive Engine: Line by Line](reactive-line-by-line.qmd) — every lock acquisition annotated
-- [`tests/test_thread_safety.py`](https://github.com/bayeslearner/bayeslearner-microkernel) — the five concurrency tests that pin this behavior
+- [`tests/test_thread_safety.py`](https://github.com/bayeslearner/signalpy-kernel) — the five concurrency tests that pin this behavior
 - [PEP 567](https://peps.python.org/pep-0567/) — `ContextVar` design rationale
 - [Python `contextvars` docs](https://docs.python.org/3/library/contextvars.html)

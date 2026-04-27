@@ -4,6 +4,9 @@ project:
 
 website:
   title: "SignalPy Microkernel"
+  site-url: "https://bayeslearner.github.io/signalpy-kernel/"
+  repo-url: "https://github.com/bayeslearner/signalpy-kernel"
+  repo-actions: [edit, issue]
   navbar:
     left:
       - text: "Tutorials"

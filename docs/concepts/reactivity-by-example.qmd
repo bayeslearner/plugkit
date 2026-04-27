@@ -329,7 +329,7 @@ in creation order, deduplicated against other signals in the same cascade.
 > Because we have **per-key signals**, only consumers of `"api.url"` get
 > notified. A change to `"db.url"` would notify a different signal — your
 > effect doesn't re-run unnecessarily. This is what
-> [test_config_per_key.py](https://github.com/bayeslearner/bayeslearner-microkernel)
+> [test_config_per_key.py](https://github.com/bayeslearner/signalpy-kernel)
 > verifies.
 
 
