@@ -1,6 +1,6 @@
 ---
 title: "Reactive Intent vs Reactive Default"
-subtitle: "Four situations where a naive @effect doesn't reflect what the programmer meant — and the escape hatches for each."
+subtitle: "Seven situations where a naive @effect doesn't reflect what the programmer meant — and the escape hatches for each."
 ---
 
 ## Why this pattern exists
@@ -20,9 +20,13 @@ goes wrong → the hatch → when not to reach for it.**
 | Async effect mid-flight, deps change, body decomposable | Old run completes fully, then re-runs | Wasted work — minutes of compute thrown away | `is_stale()` |
 | Async effect mid-flight, body holds a resource | Old run blocks the next | Streams stuck on an old endpoint, leases never released | `@effect(cancel_on_supersede=True)` |
 | Cross-thread `signal.set()` from a worker / blocking SDK callback | Sync effects fire on the worker thread; async effects silently fail | Async effects never run; thread-affine work crashes | `loop.call_soon_threadsafe(signal.set, v)` |
+| Mutating a value in place and re-`set()`-ing it | No notification fires (identity check, no change) | "I changed the dict — why did nothing react?" | Replace, don't mutate: `signal.set({**old, "k": v})` |
+| Effect runs once at activation, before any "change" | Body fires on startup | Phantom-event bugs: a "rotation handler" fires on first boot | `_initialized` guard, or move setup into `@lifecycle.activate` |
+| Effect allocates a resource on each run | Old resource stays open when new one replaces it on `self` | Connection / file-descriptor / thread leaks accumulating per re-run | Close-prev-then-open-new at top of each run |
 
 The first three are documented inline in tutorial 3 as part of teaching
-`@effect`. The fourth is new here. All four are referenced from
+`@effect`. The fourth (cross-thread) and last three (value semantics,
+activation timing, resource cleanup) are new here. All seven reference
 [Threading Model](../concepts/threading-model.qmd) for the underlying algorithm.
 
 ---
@@ -324,22 +328,246 @@ thread, observed by effects that need to be on another.
 
 ---
 
+## 5. Mutating a value in place doesn't notify
+
+### What goes wrong
+
+```python
+old = self._cache.peek()
+old["new_key"] = "value"        # mutate in place
+self._cache.set(old)            # NO-OP
+```
+
+The kernel uses **identity comparison** (`is not`) in `Signal.set` — see
+`reactive.py:144`. Calling `set()` with the same object the Signal already
+holds is silently dropped, regardless of whether you mutated its contents.
+The intent ("I changed the data, please react") is foiled by the default
+("nothing changed by identity").
+
+### Why identity, not equality
+
+This is a category-wide convention, not a SignalPy quirk:
+
+| Framework | Bail-out check |
+|---|---|
+| React `useState` | `Object.is` (≈ identity for objects) |
+| Vue 3 reactivity | `Object.is` |
+| Solid signals | `===` (reference equality) |
+| MobX | reference equality (configurable) |
+| SignalPy | `is not` |
+
+The reasoning every framework converged on:
+
+- **Cost.** `==` on a 10MB dict is O(n). `is` is one pointer compare. The
+  check runs on every `set()`.
+- **Predictability.** With identity, *you* decide when notifications fire
+  by choosing whether to create a new object. With `==`, the framework
+  decides for you and you can't override it.
+- **Pedagogy.** Identity-comparison forces immutable updates. That friction
+  is intentional — frameworks that allow in-place mutation grow subtle
+  propagation bugs.
+
+And the kicker: **`==` wouldn't help with the mutate-in-place case
+either.** A mutated dict is `==` to itself (same object). Switching to
+`==` would only suppress notifications when you write a *new* object with
+equal contents — a rare case better handled by checking before `set()`.
+
+### The hatch
+
+Replace, don't mutate:
+
+```python
+self._cache.set({**self._cache.peek(), "new_key": "value"})
+```
+
+or use the convenience wrapper:
+
+```python
+self._cache.update(lambda d: {**d, "new_key": "value"})
+```
+
+For lists: `set([*old, new_item])`. For sets: `set(old | {new_item})`. The
+pattern generalizes — produce a new container, don't mutate the held one.
+
+### When not to reach for it
+
+This isn't an opt-in pattern; it's how the framework expects you to write
+state updates. If you find yourself wanting to mutate-in-place, the
+question to ask is: *does anything reactive depend on this value?* If no,
+fine — it's just a regular Python dict, mutate freely. If yes, you owe
+the engine a new object.
+
+---
+
+## 6. The first run at activation isn't always what you wanted
+
+### What goes wrong
+
+`@effect` runs once at activation, before any dependency has "changed."
+For some effects this is desired (initialize from current state). For
+others it's a phantom event:
+
+```python
+@effect
+async def on_url_rotation(self):
+    url = self.rt.config.get("api.url")
+    await self._notify_ops_team(f"URL rotated to {url}")   # PAGES SOMEONE
+```
+
+The intent: react to *future* rotations. The default: also fire on
+startup, because tracking-the-first-read counts as a "run." Ops gets
+paged every time the service boots.
+
+### The hatch
+
+A `_initialized` guard:
+
+```python
+@effect
+async def on_url_rotation(self):
+    url = self.rt.config.get("api.url")     # always read — establishes tracking
+    if not getattr(self, "_initialized", False):
+        self._initialized = True
+        return
+    await self._notify_ops_team(f"URL rotated to {url}")
+```
+
+The first read still has to happen — that's how the engine learns this
+effect depends on `api.url`. The guard skips only the *side effects*.
+
+For a cleaner separation, split the work between `@lifecycle.activate`
+(one-shot setup) and `@effect` (delta handler):
+
+```python
+@lifecycle.activate
+def activate(self):
+    self._url = self.rt.config.peek("api.url")     # peek — no tracking
+
+@effect
+async def on_url_rotation(self):
+    new_url = self.rt.config.get("api.url")        # tracked
+    if new_url == self._url:
+        return                                      # phantom (also covers 1st run)
+    old, self._url = self._url, new_url
+    await self._notify_ops_team(f"URL rotated: {old} → {new_url}")
+```
+
+This pattern (compare against a stored "last known value") doubles as
+duplicate-write suppression — useful for any effect whose body costs
+real money or wakes a human up.
+
+### When not to reach for it
+
+If the body is idempotent and cheap (rebuild an in-memory index, recompute
+a string), the first run is harmless and saves you a "first-time
+initialization" path. The guard is for effects with *side effects you
+wouldn't want to fire spuriously*: paging, billing, notifications, audit
+log entries, rate-limited API calls.
+
+---
+
+## 7. Effects don't auto-clean what they allocated last time
+
+### What goes wrong
+
+An effect re-runs because a dep changed. Whatever it allocated *last
+time* (a connection, a file watcher, a background thread) is still alive
+— the variable just got overwritten:
+
+```python
+@effect
+def open_listener(self):
+    url = self.rt.config.get("api.url")
+    self._listener = SDK.connect(url)   # opens a TCP connection
+```
+
+Run 1 (`url=v1`): opens TCP connection #1 to v1, stores in `self._listener`.
+
+Run 2 (`url` changed to v2): opens TCP connection #2 to v2, overwrites
+`self._listener`. **Connection #1 is still open** — the SDK has no idea we
+abandoned it. Now you have two open connections, one of them useless.
+Each rotation adds another. By midnight you're out of file descriptors.
+
+The effect expressed *intent*: "the listener should be configured for the
+current url." The default does only the *forward* half of that (open new);
+the *backward* half (close old) it leaves to you.
+
+### Why isn't this `cancel_on_supersede`?
+
+`cancel_on_supersede` is for *async* effects whose body is currently
+mid-`await`. This effect is sync — it returned immediately. There's no
+in-flight body to cancel. The cleanup we need is for state stored on
+`self` *between* runs, not work happening *during* a run.
+
+### The hatch
+
+Track on `self`, close at the top of every run:
+
+```python
+@effect
+def open_listener(self):
+    # close previous, if any
+    prev = getattr(self, "_listener", None)
+    if prev is not None:
+        prev.close()
+    # open current
+    url = self.rt.config.get("api.url")
+    self._listener = SDK.connect(url)
+```
+
+Yes, this is React's `useEffect` cleanup pattern, just inverted. Instead
+of "return a cleanup callback that runs before the next effect," you "open
+with the previous still around, close it at the start of the next." Same
+lifecycle, different syntax.
+
+For deactivation cleanup (when the component shuts down), pair with
+`@lifecycle.deactivate`:
+
+```python
+@lifecycle.deactivate
+def deactivate(self):
+    if getattr(self, "_listener", None) is not None:
+        self._listener.close()
+```
+
+The kernel disposes the effect on deactivate but doesn't know what
+resources it owned — that's still your responsibility.
+
+### When not to reach for it
+
+- **Pure-compute effects.** A body that rebuilds an index or recomputes a
+  string doesn't allocate anything beyond Python objects — GC handles it.
+- **Effects whose "allocation" *is* a Signal you own.** `self._cache.set(new)`
+  doesn't leak; Signal replacement is just an attribute swap.
+- **Async resources mid-await.** Use `cancel_on_supersede=True` (section 3).
+  The `async with` block closes them via `CancelledError` propagation.
+
+---
+
 ## What ties them together
 
-All four hatches solve the same shape of problem: **the reactive engine's
-default — fire-once-per-write, run-each-effect-in-isolation — encodes one
-honest interpretation of "the deps changed," but reality has more
-structure.** Sometimes the structure is "these writes go together"
-(`batch()`). Sometimes it's "this work is provisional and might need to
-abandon" (`is_stale()`). Sometimes it's "this work owns a resource"
-(`cancel_on_supersede`). Sometimes it's "this work doesn't live on the
-same thread as the engine" (`call_soon_threadsafe`).
+All seven hatches solve the same shape of problem: **the reactive engine's
+defaults are locally correct mechanical answers that sometimes diverge
+from the developer's notion of what *matters*.** The engine's "the deps
+changed" is precise — every write to a tracked Signal, fire each
+subscribed effect once. The developer's "this matters" is fuzzier — *these
+two writes go together; this in-flight work is wasted; that mutation
+should propagate; this resource shouldn't leak.*
 
-The kernel can't infer any of those from your code. Each hatch is a small,
-explicit declaration that *this* situation isn't the default one.
+The kernel cannot infer any of those from your code. Each hatch is a
+small, explicit declaration that *this* situation isn't the default one:
+
+- `batch()` — "these writes are one update."
+- `is_stale()` — "abandon if newer notification arrived."
+- `cancel_on_supersede` — "interrupt the in-flight body."
+- `call_soon_threadsafe` — "marshal this write to the loop thread."
+- Replace-don't-mutate — "I produced a new value, please notify."
+- `_initialized` guard — "only react to changes after the first run."
+- Close-prev-then-open — "the resource lifecycle follows the effect."
 
 For the underlying mechanism — the 5-step propagation algorithm and which
 algorithmic step each hatch controls — see
 [Threading Model → The propagation algorithm](../concepts/threading-model.qmd).
-For the introductory teaching of the first three, see
+For the introductory teaching of `batch()`, `is_stale()`, and
+`cancel_on_supersede`, see
 [Tutorial 3: Dynamic Services](../guide/03-dynamic-services.qmd).

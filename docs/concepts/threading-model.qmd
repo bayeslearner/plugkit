@@ -512,6 +512,25 @@ What happens when `cfg.set("url", "https://b")` lands while the first
 time. The supersede signal is never lost. Verified by
 `test_async_pending_rerun_fires_after_inflight_finishes`.
 
+::: {.callout-note}
+## Note on tracking after the first `await`
+
+Python's `contextvars` persist across `await` *within a task*, so signal
+reads after the first `await` in an async effect's body are usually
+tracked correctly — `_active_consumer` is still set to the effect when
+control resumes. This is more robust than Vue 3's situation, where JS's
+lack of contextvars makes post-`await` tracking unreliable.
+
+That said, the kernel's source comment (`reactive.py:412`) is conservative
+on this point: it does not *guarantee* tracking after the first await,
+because exotic body shapes (sub-tasks via `asyncio.gather`, libraries that
+manipulate context, framework re-entry) can in principle lose the
+contextvar. The portable, defensive convention — **read all reactive deps
+before the first `await`** — is recommended for code that might run under
+adversarial async setups, but is not strictly required for vanilla
+`async def` bodies in SignalPy.
+:::
+
 This default suits the vast majority of cases — config reloads, fetch
 data on dependency change, debounced rebuilds — where the work is
 either idempotent or cheap to redo.
