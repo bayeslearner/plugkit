@@ -95,215 +95,18 @@ The walkthrough below traces exactly **one cycle**: boot → first run → mutat
 > at the end of the page.
 
 
-## Setup: how `@effect` becomes an `Effect` instance
+## How `@effect` becomes a runtime `Effect`
 
 Before the cycle starts, something has to turn the user's *decorated method*
-into an actual `Effect` object that the engine can call. The transformation
-happens in three stages, each in a different file. None of them is mysterious
-once you see the code — but the docs glossed over it, so let's walk it.
+into an actual `Effect` object the engine can call. That happens in three
+stages — decoration attaches a marker, the kernel scans for markers at
+discovery time, and activation wraps each marker in a `ReactiveEffect`.
 
-### Stage 1 — the decorator just tags the function
-
-When Python evaluates the class body, `@effect` runs:
-
-```python
-# signalpy/kernel/component.py
-def effect(fn):
-    fn.__effect__ = EffectDef(fn=fn, is_async=inspect.iscoroutinefunction(fn))
-    return fn
-```
-
-That's the entire decorator. It does **not** wrap the function. It does **not**
-create an `Effect`. It attaches one attribute (`__effect__`) holding a small
-dataclass — and returns the original function unchanged. After decoration:
-
-```python
-class SearchService:
-    @effect
-    def on_url_change(self): ...
-
-# At this point:
-SearchService.on_url_change                # still the same Python function
-SearchService.on_url_change.__effect__     # EffectDef(fn=..., is_async=False)
-```
-
-If you called `instance.on_url_change()` directly right now, it would just
-run as a plain method. Nothing reactive yet.
-
-### Stage 2 — the metaclass collects the tags
-
-When the class itself is constructed, `ComponentMeta` scans every attribute
-looking for the markers the decorators left behind:
-
-```python
-# signalpy/kernel/component.py — inside ComponentMeta._finalize_meta
-for name, obj in cls.__dict__.items():
-    ed = getattr(obj, "__effect__", None)
-    if isinstance(ed, EffectDef):
-        meta.effect_defs.append(ed)        # remember it for activation
-```
-
-Same pass collects `@computed`, `@runnable`, `@subscribe`, `@lifecycle.*`, etc.
-The result is `meta.effect_defs`: a list of `EffectDef`s, one per `@effect`
-method. Still no `Effect` objects exist; we have *plans* for them.
-
-### Stage 3 — activation wraps and runs
-
-When the kernel activates a component instance, it loops over `meta.effect_defs`
-and creates one `ReactiveEffect` (which is `Effect` from `reactive.py`) per
-plan:
-
-```python
-# signalpy/kernel/__init__.py — inside _activate
-for ed in ci.meta.effect_defs:
-    fn = ed.fn
-
-    if ed.is_async:
-        async def _async_wrapper(f=fn, inst=instance):
-            await f(inst)
-        re = ReactiveEffect(_async_wrapper, lazy=False)
-    else:
-        def _sync_wrapper(f=fn, inst=instance):
-            f(inst)
-        re = ReactiveEffect(_sync_wrapper, lazy=False)
-
-    ci._disposables.append(re)
-```
-
-Two things to notice:
-
-- **The wrapper closes over the bound instance.** `inst=instance` captures
-  the live component, so when the engine calls the wrapper later, it reaches
-  back into your object and runs your method on it.
-- **`lazy=False` triggers an immediate run.** Looking at `Effect.__init__`
-  in `reactive.py`: if `lazy=False` it calls `self.run()` right away — which
-  sets `_active_consumer = self`, executes the body, and tracks every Signal
-  read along the way. This is **moment ① in the next section**.
-
-So the journey from `@effect def foo(self): ...` to "an actively tracking
-reactive consumer" is:
-
-| Stage | Where | What changes |
-|---|---|---|
-| Decoration | class body, runtime startup | `fn.__effect__ = EffectDef(...)` — function unchanged |
-| Class build | `ComponentMeta._finalize_meta` | `meta.effect_defs` populated — *plans* collected |
-| Activation | `kernel._activate` | `ReactiveEffect(wrapper, lazy=False)` created and run — *graph entry exists* |
-
-The same three-stage pattern applies to every reactive decorator:
-
-- `@computed fn` → `fn.__computed__ = ComputedDef(...)` → `meta.computed_defs`
-  → `ReactiveComputed(wrapper)` at activation (lazy: only runs on first read).
-- `@runnable("name") fn` → `fn.__runnable__ = RunnableDef(...)` →
-  `meta.runnable_defs` → bus handler registration at activation.
-- `@subscribe("topic") fn` → `fn.__subscribe__ = SubscribeDef(...)` →
-  `meta.subscribe_defs` → bus subscription at activation.
-
-Once you see this pattern you stop wondering "what does `@runnable` do
-underneath" — they're all variations on *attach a marker, collect it later,
-do something useful with it at activation*.
-
-### Why this design — and not the more common "wrap the function" approach
-
-Most Python frameworks reach for one of these alternatives instead:
-
-```python
-# Alternative A — wrap the function in a closure
-def effect(fn):
-    @functools.wraps(fn)
-    def wrapper(self, *args, **kw):
-        # …reactive setup runs here every call
-        return fn(self, *args, **kw)
-    wrapper._is_effect = True
-    return wrapper
-
-# Alternative B — replace the method with a descriptor
-class effect:
-    def __init__(self, fn): self.fn = fn
-    def __get__(self, instance, owner):
-        return BoundReactiveEffect(self.fn, instance)
-
-# Alternative C — register against a global app at decoration time
-def effect(fn):
-    _GLOBAL_APP.register_effect(fn)   # à la FastAPI / Flask routes
-    return fn
-```
-
-We chose the marker pattern over all three. Concrete reasons:
-
-**1. The kernel doesn't exist yet at decoration time.**
-Class bodies execute during module import. The runtime, the registry,
-`_active_consumer`, the instance's `self.rt` — none of those exist when
-`@effect` runs. The decorator literally has no Signal graph to subscribe
-to. Any "real work" at decoration time would need either a global kernel
-singleton (constitution rule #2 forbids globals) or deferred closures
-(which is a wrapper, see point 3).
-
-**2. Decoration declares *intent*; activation chooses *timing*.**
-Three reactive decorators, one mechanism: `@effect` is *eager* (run
-immediately at activation), `@computed` is *lazy* (run on first read),
-`@runnable` is *on-demand* (run per bus invocation). All three use the
-same marker pattern — they differ only in what stage 3 does with the
-plan. A wrapper-based approach bakes the timing into the decorator and
-then needs three different wrappers; our way separates declaration from
-execution and reuses the pipeline.
-
-**3. Methods stay plain callable Python.**
-`instance.on_url_change()` is a regular method call. You can unit-test
-it without booting a kernel. With a wrapper, calling the method outside
-an Effect context either no-ops, errors, or does something subtly
-different from what runs *inside* the engine — and now your unit tests
-have to construct an `_active_consumer` to test the body. Markers leave
-the function behaviorally untouched: bodies are tested as bodies, the
-reactive layer is tested separately.
-
-**4. Inheritance, `super()`, and method resolution work without surprises.**
-A subclass can override `on_url_change` and `super().on_url_change()`
-calls the parent's body. Descriptor-based decorators (Alternative B) can
-break MRO in confusing ways — the descriptor's `__get__` returns a new
-object every access, defeating identity comparisons and confusing
-introspection.
-
-**5. Re-decoration is idempotent.**
-Reload a module, hot-swap a class, pickle and unpickle, monkey-patch in
-a test — applying `@effect` again just overwrites `fn.__effect__` with
-an equivalent `EffectDef`. With wrappers you get wrappers-of-wrappers
-and stale closures over old instances. Marker = state; wrapper = state
-*and* behavior glued together.
-
-**6. Introspection tooling sees the original function.**
-`inspect.signature(fn)`, Sphinx autodoc, IDE go-to-definition,
-type-checkers reading `Callable[...]` — they all see the function you
-wrote. `functools.wraps` patches this *partially* for closure wrappers
-but never fully (e.g. `inspect.getsource` can still surprise you).
-Descriptor approaches require custom protocol support in every tool.
-
-**7. No coupling to a global kernel at import time.**
-A component class can be imported, type-checked, and unit-tested without
-ever instantiating a kernel. With Alternative C (global registration at
-decoration), `import myapp.search` has the side effect of mutating
-global state — which makes circular imports, test isolation, and
-multi-kernel scenarios all painful.
-
-The cost is honest: the kernel has to do a metaclass scan to collect the
-markers, and the activation step is where the real work happens. We
-think that's a good place for the work to happen — same place lifecycle,
-DI, ref-counting, and trait inference all run. One place to look when
-something's surprising at boot, instead of N places hidden inside N
-decorators' closures.
-
-| Concern | Marker (ours) | Wrapper closure | Descriptor | Global register |
-|---|---|---|---|---|
-| Kernel-free import | yes | yes | yes | **no** |
-| `inspect.signature` correct | yes | partial | varies | yes |
-| `super().method()` works | yes | yes | brittle | yes |
-| Idempotent re-decoration | yes | **no** | **no** | **no** |
-| Body unit-testable as plain method | yes | **no** | **no** | yes |
-| Same decorator → eager / lazy / on-demand | yes | needs 3 wrappers | needs 3 descriptors | yes |
-| Where to look when boot misbehaves | one stage 3 | N closures | N descriptors | one global |
-
-The marker pattern shows up in pytest fixtures, Hypothesis strategies,
-and Pydantic validators for the same reasons. It's the boring choice,
-which is why it's the right one here.
+The walkthrough — including why the kernel uses a marker pattern instead
+of a closure wrapper, descriptor, or global registry — is in
+[Architecture → Decoration → Activation](architecture.qmd#decoration-activation).
+Read that first if you want to know *what* the decorator does;
+read this page for the *runtime* lifecycle of an effect once it's been wired up.
 
 
 ## ① Boot: the Effect runs for the first time
@@ -349,7 +152,7 @@ def run(self):
 ::::
 :::::
 
-[**State after ①**]{.cnum .cnum-k} — `_active_consumer = effect_A`. No
+[①]{.cnum .cnum-k} **State after** — `_active_consumer = effect_A`. No
 subscriptions yet. The body is about to execute.
 
 
@@ -404,7 +207,7 @@ def get(self):           # Signal.get
 ::::
 :::::
 
-[**State after ②**]{.cnum .cnum-k} —
+[②]{.cnum .cnum-k} **State after** —
 
 - `effect_A._deps = {api_url_signal}`
 - `api_url_signal._subscribers = {effect_A}`
@@ -458,7 +261,7 @@ _active_consumer.reset(token)
 ::::
 :::::
 
-[**State after ③**]{.cnum .cnum-k} — engine is dormant. No effects
+[③]{.cnum .cnum-k} **State after** — engine is dormant. No effects
 running. The graph is wired and waiting.
 
 
@@ -513,8 +316,10 @@ def set(self, value):    # Signal.set
 ::::
 :::::
 
-[**State after ④**]{.cnum .cnum-k} — `effect_A._notify()` enqueues (or
-runs synchronously, depending on batch mode) a re-run.
+[④]{.cnum .cnum-k} **State after** — `effect_A._notify()` enqueues a
+re-run into the implicit batch the engine opens around every `Signal.set`
+notification cascade. The effect actually fires when that batch flushes,
+in creation order, deduplicated against other signals in the same cascade.
 
 > Because we have **per-key signals**, only consumers of `"api.url"` get
 > notified. A change to `"db.url"` would notify a different signal — your
@@ -572,7 +377,7 @@ def run(self):       # Effect.run
 ::::
 :::::
 
-[**State after ⑤**]{.cnum .cnum-k} — graph rewired (sets are idempotent,
+[⑤]{.cnum .cnum-k} **State after** — graph rewired (sets are idempotent,
 so re-adding the same subscription is a no-op). Consumer holds the new
 URL and a new HTTP client. No callbacks were registered. No glue code
 exists.

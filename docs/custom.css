@@ -266,16 +266,24 @@ pre:not(.sourceCode) {
 .cnum {
   display: inline-block;
   background: #58a6ff;
-  color: #0d1117;
+  color: #0d1117 !important;
   font-weight: 700;
   border-radius: 50%;
-  width: 1.4em;
+  min-width: 1.4em;
   height: 1.4em;
   line-height: 1.4em;
+  padding: 0 0.2em;
   text-align: center;
   font-family: monospace;
   margin-right: 0.35em;
   font-size: 0.85em;
+  vertical-align: baseline;
+}
+/* Defensive: if a long phrase is accidentally wrapped in .cnum, at least
+   keep it readable rather than rendering dark-on-dark. */
+.cnum:has(> :nth-child(2)),
+.cnum:not(:empty):not(:where(*:only-child)) {
+  border-radius: 0.7em;
 }
 .cnum-c { background: #3fb950; }   /* consumer */
 .cnum-p { background: #d2a8ff; }   /* provider */

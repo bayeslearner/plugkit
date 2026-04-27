@@ -5,12 +5,15 @@ subtitle: "All 13 decorators — signature, parameters, example."
 
 > **What do these decorators actually do to the function?** Almost nothing
 > at decoration time — they attach a small marker dataclass (e.g.
-> `fn.__effect__ = EffectDef(...)`) and return the function unchanged.
-> The kernel's `ComponentMeta` collects those markers when the class is
-> built; the real wrapping (in `ReactiveEffect`, bus handler registration,
-> etc.) happens at *activation* time. See
-> [Reactivity by Example → Setup: how `@effect` becomes an `Effect` instance](../concepts/reactivity-by-example.qmd#setup-how-effect-becomes-an-effect-instance)
-> for the three-stage walkthrough with the actual code.
+> `fn.__effect__ = EffectDef(...)`) and return the function unchanged. The
+> kernel scans for those markers when it registers the class as a factory
+> (free function `_finalize_meta(cls)`, called by
+> `LifecycleManager.register_factory`); the real wrapping (in
+> `ReactiveEffect`, bus handler registration, etc.) happens at *activation*
+> time. See
+> [Architecture → Decoration → Activation](../concepts/architecture.qmd#decoration-activation)
+> for the three-stage walkthrough with the actual code, plus the rationale
+> for the marker pattern over closures, descriptors, or global registries.
 
 ## Core
 
