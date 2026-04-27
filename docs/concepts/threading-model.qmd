@@ -186,11 +186,206 @@ the engine batches for you implicitly. Concretely:
 What the engine *cannot* batch for you:
 
 - **Two top-level writes that should land atomically.** `cfg.set("url", a); cfg.set("token", b)` flushes between the two — an effect that reads both will see `(new_url, old_token)` once, then `(new_url, new_token)`. If those writes are correlated, wrap them: `with batch(): cfg.set("url", a); cfg.set("token", b)`. This is the one place users still need the explicit primitive.
-- **Stale completions on async effects.** If an `async @effect` is still awaiting when its dependencies change again, the engine sets a pending-rerun flag on the effect rather than dropping the notification — the body re-fires automatically once the in-flight version finishes. Inside the body, `current_effect().is_stale()` reports whether a newer run has already been scheduled, so you can short-circuit between awaits. For long-running awaits that should be aborted on supersede, opt in with `@effect(cancel_on_supersede=True)`: the engine cancels the in-flight task and re-runs immediately. (Tracking still only covers reads before the first `await`, same as Vue 3.)
 
 The first three rows of the table used to be footguns the engine left
 to the caller. After the P0 reactive-correctness pass they are guarantees
-backed by tests. The remaining two are the genuine escape hatches.
+backed by tests. The remaining one (correlated multi-write) is the
+genuine escape hatch. Async-effect supersede has its own section
+below — short version: it works without you doing anything.
+
+
+## Async effect supersede: what happens when notifications race the body
+
+Async effects are where reactive frameworks usually leak abstractions.
+Imagine this:
+
+```python
+@effect
+async def reload_connection(self):
+    url = self.rt.config.get("url")        # tracked ✓
+    self._client = await connect_slowly(url)
+```
+
+The user changes `url` while `connect_slowly()` is still in flight.
+What does the engine do? In a naive implementation, three different
+bad things can happen:
+
+1. **Silent drop.** The notification arrives during the in-flight body,
+   sees `_running=True`, and gets discarded. The new URL is never
+   reconnected to. *(This is what SignalPy v0.x did. It's the bug we
+   spent the P1 pass fixing.)*
+2. **Stale write wins.** Both the old and new connections complete; the
+   old one finishes second and overwrites `self._client`, leaving the
+   user pointing at a connection for the wrong URL.
+3. **Stack overflow / re-entry.** The notification triggers a synchronous
+   re-run of the body before the first await returns, blowing the stack.
+
+SignalPy now handles all three correctly *out of the box*, and gives
+you two escape hatches when the default isn't what you want.
+
+### Default: pending re-run after in-flight finishes
+
+You write the same code you'd write if races didn't exist:
+
+```python
+@effect
+async def reload_connection(self):
+    url = self.rt.config.get("url")
+    self._client = await connect_slowly(url)
+```
+
+What happens when `cfg.set("url", "https://b")` lands while the first
+`connect_slowly("https://a")` is still mid-await:
+
+| Step | Time | What happens |
+|---|---|---|
+| 1 | t=0    | First run starts. `_running=True`. Body reads `url="https://a"`, calls `await connect_slowly("https://a")`. |
+| 2 | t=10ms | Outside, `cfg.set("url", "https://b")` fires. The engine sees `_running=True` and sets `_pending_run=True` *instead of dropping the notification*. |
+| 3 | t=2s   | First `connect_slowly` resolves. Body assigns `self._client = <client_a>`. |
+| 4 | t=2s+ε | The finally block notices `_pending_run=True`, clears the flag, and re-runs the effect. Second body reads `url="https://b"` and connects. |
+| 5 | t=4s   | `self._client = <client_b>`. Done. The "wrong" client briefly existed at step 3, but step 5 overwrote it before any code that depends on `self._client` could read it (because that code is also reactive and re-runs in step 4's same flush). |
+
+**Zero user code changes required.** The body runs to completion every
+time. The supersede signal is never lost. Verified by
+`test_async_pending_rerun_fires_after_inflight_finishes`.
+
+This default suits the vast majority of cases — config reloads, fetch
+data on dependency change, debounced rebuilds — where the work is
+either idempotent or cheap to redo.
+
+### Escape hatch 1: `is_stale()` for cooperative bail-out
+
+Default behavior runs the in-flight body to completion. That's wasteful
+when the work is expensive (a 5-second batch insert, a network upload)
+*and* the result is going to be thrown away anyway. Use `is_stale()`
+between awaits to skip the rest of the body voluntarily:
+
+```python
+from signalpy.kernel import current_effect
+
+@effect
+async def index_documents(self):
+    docs = self.rt.docs.get()
+    for batch in chunked(docs, 100):
+        await self._index_one_batch(batch)
+        if current_effect().is_stale():
+            return                        # newer doc set arrived; bail
+```
+
+`is_stale()` flips to `True` the moment a notification arrives during
+your body. Check it at any `await`-point boundary that's safe to abandon
+work at. Verified by `test_is_stale_inside_async_body`.
+
+**Why not always check it?** It's purely advisory — the engine will run
+the next body whether you check or not. It's a hint to *your* code that
+the rest of the current body is wasted work.
+
+For sync effects, `is_stale()` always returns `False` (sync bodies can't
+be superseded mid-execution under the global lock; the running guard
+catches re-entry differently). Verified by
+`test_is_stale_false_for_sync_effect`.
+
+### Escape hatch 2: `cancel_on_supersede=True` for hard abort
+
+When the in-flight work isn't just wasteful but *actively wrong* to
+finish — e.g., a long-poll that's still holding a connection to the
+old endpoint, or a CPU loop you'd rather kill than coast through — opt
+into task cancellation:
+
+```python
+@effect(cancel_on_supersede=True)
+async def long_poll(self):
+    url = self.rt.endpoint.get()
+    async with httpx.AsyncClient() as client:
+        try:
+            async for event in client.stream("GET", url):
+                self.rt.events.publish(event)
+        except asyncio.CancelledError:
+            # connection torn down; let the next run open the new one
+            raise
+```
+
+When a dependency changes, the engine calls `task.cancel()` on the
+in-flight task. The body sees `CancelledError` at the next await point.
+The engine then re-runs the effect with the latest values. Verified by
+`test_cancel_on_supersede_aborts_inflight`.
+
+**Pick this when:** the in-flight work owns a resource (socket, file
+handle, GPU lease) that the next run needs to acquire. Without
+cancellation, the next run waits for the old one to finish releasing.
+
+**Don't pick this when:** the body has cleanup that *must* run on the
+old value (a `finally` block writing partial progress to disk; a
+two-phase commit). Cancellation interrupts mid-await — your `finally`
+will run, but only what hadn't yet awaited will execute synchronously.
+
+### Caveat: write coalescing inside async bodies
+
+Sync effect bodies get an implicit `with batch():` wrapper, so two
+writes back-to-back inside an effect coalesce — dependents see one
+update, not two. **Async bodies do not.** The reason: `_batch_depth`
+is process-global, and a long-running async body would hold depth>0
+across its awaits, swallowing every other task's notification cascade
+— including its *own* supersede signal. The cure was worse than the
+disease, so we don't apply it.
+
+If you need write-coalescing inside an async body, do it explicitly:
+
+```python
+@effect
+async def aggregate(self):
+    docs = self.rt.docs.get()
+    summary = await self._summarize(docs)
+    with batch():
+        self.rt.summary.set(summary.text)
+        self.rt.tags.set(summary.tags)
+        self.rt.last_updated.set(time.time())
+    # Dependent effects re-run once for these three writes, not three times.
+```
+
+Without the explicit `with batch():`, each `set()` triggers a separate
+flush, and effects that read more than one of these signals fire once
+per write.
+
+### Putting it together: a decision flow
+
+Default — read deps before await, write results after, ignore supersede:
+
+```python
+@effect
+async def thing(self):
+    x = self.rt.x.get()
+    y = self.rt.y.get()
+    result = await compute(x, y)
+    self.rt.result.set(result)
+```
+
+Bail out early on supersede if the work is expensive:
+
+```python
+@effect
+async def thing(self):
+    items = self.rt.items.get()
+    for item in items:
+        await process(item)
+        if current_effect().is_stale():
+            return
+```
+
+Cancel in-flight on supersede if the resource must be released first:
+
+```python
+@effect(cancel_on_supersede=True)
+async def thing(self):
+    url = self.rt.url.get()
+    async with open_connection(url) as conn:
+        await conn.read_forever()
+```
+
+**No flag answers all three.** The default is what most code wants, and
+the two opt-ins exist precisely because the engine cannot guess whether
+your body is cheap-to-redo (default), expensive-but-bailable (`is_stale`),
+or holds a resource (`cancel_on_supersede`).
 
 
 ## When the threading model is *not* enough
@@ -230,6 +425,12 @@ Read all signals you depend on **before** the first `await`. After the
 SolidJS document for their async-effect equivalents — see the
 [reactive engine line by line](reactive-line-by-line.qmd) doc for the
 detailed mechanics.
+
+This is purely a *tracking* limitation, not a *correctness* one — if
+a dependency changes while the body is awaiting, the engine still
+re-fires the effect (see "Async effect supersede" above). You just
+have to read the signal at the top so the engine knows it's a
+dependency in the first place.
 
 
 ## See also

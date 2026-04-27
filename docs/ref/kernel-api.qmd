@@ -126,3 +126,28 @@ with batch():
     b.set(2)
 # effects run ONCE here
 ```
+
+### current_effect()
+
+Returns the `Effect` currently running, or `None` if not inside one.
+Useful inside async effect bodies for cooperative supersede checks.
+
+```python
+from signalpy.kernel import current_effect
+
+@effect
+async def reload(self):
+    items = self.rt.items.get()
+    for item in items:
+        await self._process(item)
+        if current_effect().is_stale():
+            return    # a newer run has been scheduled — bail
+```
+
+### Effect.is_stale()
+
+Returns `True` if a newer run has been scheduled while this body is
+in flight. Always `False` for sync effects (sync bodies can't be
+superseded mid-execution under the global lock). See
+[Threading Model → Async effect supersede](../concepts/threading-model.qmd#async-effect-supersede-what-happens-when-notifications-race-the-body)
+for the full lifecycle.

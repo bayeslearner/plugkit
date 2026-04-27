@@ -83,6 +83,9 @@ Access: `self.base_url()` — always current, cached.
 ```python
 @effect
 def method(self) -> None: ...
+
+@effect(cancel_on_supersede: bool = False)
+def method(self) -> None: ...
 ```
 
 Reactive side effect. Reads from `self.rt.*` are tracked. Re-runs when dependencies change. Both `def` and `async def` work.
@@ -93,6 +96,47 @@ async def on_config_change(self):
     url = self.rt.config.get("url")
     await self._reconnect(url)
 ```
+
+**Async supersede behavior.** If a dependency changes while an async
+body is mid-`await`, the engine sets a pending-rerun flag and fires
+the effect again once the in-flight body finishes — notifications
+are never silently dropped. See [Threading Model → Async effect
+supersede](../concepts/threading-model.qmd#async-effect-supersede-what-happens-when-notifications-race-the-body)
+for the full mechanism with examples.
+
+Two opt-in escape hatches for when the default isn't right:
+
+- **`current_effect().is_stale()`** inside an async body — returns
+  `True` once a newer run has been scheduled. Use it to short-circuit
+  expensive work that's about to be redone:
+
+  ```python
+  from signalpy.kernel import current_effect
+
+  @effect
+  async def index(self):
+      docs = self.rt.docs.get()
+      for batch in chunked(docs, 100):
+          await self._index_one(batch)
+          if current_effect().is_stale():
+              return    # newer doc set arrived; bail
+  ```
+
+- **`@effect(cancel_on_supersede=True)`** — when a dependency changes
+  mid-await, the engine calls `task.cancel()` on the in-flight task.
+  The body sees `CancelledError` at the next await; the engine then
+  re-runs with the latest values. Pick this when the in-flight work
+  owns a resource (socket, connection, lease) the next run needs to
+  acquire:
+
+  ```python
+  @effect(cancel_on_supersede=True)
+  async def long_poll(self):
+      url = self.rt.endpoint.get()
+      async with httpx.AsyncClient() as client:
+          async for event in client.stream("GET", url):
+              ...
+  ```
 
 ## Lifecycle
 
