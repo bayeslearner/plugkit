@@ -95,6 +95,114 @@ The walkthrough below traces exactly **one cycle**: boot → first run → mutat
 > at the end of the page.
 
 
+## Setup: how `@effect` becomes an `Effect` instance
+
+Before the cycle starts, something has to turn the user's *decorated method*
+into an actual `Effect` object that the engine can call. The transformation
+happens in three stages, each in a different file. None of them is mysterious
+once you see the code — but the docs glossed over it, so let's walk it.
+
+### Stage 1 — the decorator just tags the function
+
+When Python evaluates the class body, `@effect` runs:
+
+```python
+# signalpy/kernel/component.py
+def effect(fn):
+    fn.__effect__ = EffectDef(fn=fn, is_async=inspect.iscoroutinefunction(fn))
+    return fn
+```
+
+That's the entire decorator. It does **not** wrap the function. It does **not**
+create an `Effect`. It attaches one attribute (`__effect__`) holding a small
+dataclass — and returns the original function unchanged. After decoration:
+
+```python
+class SearchService:
+    @effect
+    def on_url_change(self): ...
+
+# At this point:
+SearchService.on_url_change                # still the same Python function
+SearchService.on_url_change.__effect__     # EffectDef(fn=..., is_async=False)
+```
+
+If you called `instance.on_url_change()` directly right now, it would just
+run as a plain method. Nothing reactive yet.
+
+### Stage 2 — the metaclass collects the tags
+
+When the class itself is constructed, `ComponentMeta` scans every attribute
+looking for the markers the decorators left behind:
+
+```python
+# signalpy/kernel/component.py — inside ComponentMeta._finalize_meta
+for name, obj in cls.__dict__.items():
+    ed = getattr(obj, "__effect__", None)
+    if isinstance(ed, EffectDef):
+        meta.effect_defs.append(ed)        # remember it for activation
+```
+
+Same pass collects `@computed`, `@runnable`, `@subscribe`, `@lifecycle.*`, etc.
+The result is `meta.effect_defs`: a list of `EffectDef`s, one per `@effect`
+method. Still no `Effect` objects exist; we have *plans* for them.
+
+### Stage 3 — activation wraps and runs
+
+When the kernel activates a component instance, it loops over `meta.effect_defs`
+and creates one `ReactiveEffect` (which is `Effect` from `reactive.py`) per
+plan:
+
+```python
+# signalpy/kernel/__init__.py — inside _activate
+for ed in ci.meta.effect_defs:
+    fn = ed.fn
+
+    if ed.is_async:
+        async def _async_wrapper(f=fn, inst=instance):
+            await f(inst)
+        re = ReactiveEffect(_async_wrapper, lazy=False)
+    else:
+        def _sync_wrapper(f=fn, inst=instance):
+            f(inst)
+        re = ReactiveEffect(_sync_wrapper, lazy=False)
+
+    ci._disposables.append(re)
+```
+
+Two things to notice:
+
+- **The wrapper closes over the bound instance.** `inst=instance` captures
+  the live component, so when the engine calls the wrapper later, it reaches
+  back into your object and runs your method on it.
+- **`lazy=False` triggers an immediate run.** Looking at `Effect.__init__`
+  in `reactive.py`: if `lazy=False` it calls `self.run()` right away — which
+  sets `_active_consumer = self`, executes the body, and tracks every Signal
+  read along the way. This is **moment ① in the next section**.
+
+So the journey from `@effect def foo(self): ...` to "an actively tracking
+reactive consumer" is:
+
+| Stage | Where | What changes |
+|---|---|---|
+| Decoration | class body, runtime startup | `fn.__effect__ = EffectDef(...)` — function unchanged |
+| Class build | `ComponentMeta._finalize_meta` | `meta.effect_defs` populated — *plans* collected |
+| Activation | `kernel._activate` | `ReactiveEffect(wrapper, lazy=False)` created and run — *graph entry exists* |
+
+The same three-stage pattern applies to every reactive decorator:
+
+- `@computed fn` → `fn.__computed__ = ComputedDef(...)` → `meta.computed_defs`
+  → `ReactiveComputed(wrapper)` at activation (lazy: only runs on first read).
+- `@runnable("name") fn` → `fn.__runnable__ = RunnableDef(...)` →
+  `meta.runnable_defs` → bus handler registration at activation.
+- `@subscribe("topic") fn` → `fn.__subscribe__ = SubscribeDef(...)` →
+  `meta.subscribe_defs` → bus subscription at activation.
+
+Once you see this pattern you stop wondering "what does `@runnable` do
+underneath" — they're all variations on *attach a marker, collect it later,
+do something useful with it at activation*.
+
+
 ## ① Boot: the Effect runs for the first time
 
 After the kernel activates `SearchService`, it wraps `on_url_change` in an
