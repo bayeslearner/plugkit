@@ -251,6 +251,7 @@ The whole thing is small because the work is done by Python's runtime context ma
 ## See also
 
 - [Reactive Engine: Line by Line](reactive-line-by-line.qmd) — every line of `reactive.py` annotated.
-- [How Reactivity Works](reactivity-deep-dive.qmd) — the broader Signal/Computed/Effect picture.
+- [Reactivity by Example](reactivity-by-example.qmd) — consumer/provider/kernel side by side, one full cycle.
+- [Threading Model](threading-model.qmd) — how this story extends across threads and asyncio tasks.
 - [Python `contextvars` docs](https://docs.python.org/3/library/contextvars.html) — the stdlib module.
 - [PEP 567](https://peps.python.org/pep-0567/) — original design rationale for `ContextVar`.

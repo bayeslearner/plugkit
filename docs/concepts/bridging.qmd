@@ -12,27 +12,31 @@ Real apps integrate with PostgreSQL, Redis, Phoenix, Celery. Each has its own li
 A bridge component has three responsibilities:
 
 ```{mermaid}
-graph LR
-    subgraph External["External System"]
-        SDK[Native SDK/API]
-        LC[Native Lifecycle]
-        CFG[Native Config]
+flowchart LR
+    subgraph K["Kernel Components"]
+        C["Via contract<br/>self.rt.tracer.span()"]
+        N["Via native<br/>self.rt.tracer.native"]
+        D["Via direct import<br/>import opentelemetry"]
     end
 
-    subgraph Bridge["Bridge Component"]
-        L[1. LIFECYCLE<br/>activate → start<br/>deactivate → stop]
-        S[2. SURFACE<br/>1-3 methods<br/>covers 90% of use]
-        E[3. ESCAPE HATCH<br/>.native/.pool/.client<br/>raw SDK access]
+    subgraph B["Bridge Component"]
+        L["1. LIFECYCLE<br/>activate → start<br/>deactivate → stop"]
+        S["2. SURFACE<br/>1–3 methods<br/>covers 90% of use"]
+        H["3. ESCAPE HATCH<br/>.native / .pool / .client"]
     end
 
-    subgraph Kernel["Kernel Components"]
-        C[Via contract<br/>self.rt.tracer.span()]
-        N[Via native<br/>self.rt.tracer.native]
-        D[Via direct<br/>import opentelemetry]
+    subgraph X["External System"]
+        SDK["Native SDK / API"]
+        LC["Native Lifecycle"]
+        CFG["Native Config"]
     end
 
-    Bridge --> External
-    Kernel --> Bridge
+    C --> S
+    N --> H
+    D -. bypass .-> SDK
+    L --> LC
+    S --> SDK
+    H --> SDK
 ```
 
 ## Three Access Levels

@@ -1,0 +1,218 @@
+---
+title: "Threading Model"
+subtitle: "Does this work with threads? How do two threads share a Signal? Are we reinventing the wheel?"
+---
+
+When people first read the reactive engine they tend to ask three questions
+in this order:
+
+1. *Will this even work in a multi-threaded service?*
+2. *If two threads share a Signal, what happens?*
+3. *Doesn't Python already have something like this in the standard library?*
+
+This page answers all three, in the same order, with concrete examples.
+
+
+## Q1. Does the kernel work with threads?
+
+**Yes.** The reactive engine uses two complementary mechanisms:
+
+- **`ContextVar`** for per-flow state ("who is currently running?"). Each
+  thread or `asyncio.Task` automatically has its own value — no locking
+  needed for the *who's-asking* slot.
+- **`threading.RLock`** for shared state mutation (subscriber sets,
+  version counters, batch queue). One reentrant lock guards every
+  read-modify-write that touches data shared between flows.
+
+The result: any number of threads can read and write Signals concurrently
+without losing notifications, double-firing effects, or producing torn
+state. This is verified by `tests/test_thread_safety.py` — five targeted
+concurrency tests, all green.
+
+**What "works" means precisely:** notifications never get dropped, version
+counters are accurate, and the engine stays consistent. **What it does
+*not* mean:** that an `@effect` body is itself thread-safe — if your
+effect mutates a shared dict without a lock, that's still your problem.
+The engine guarantees the *graph* is correct; the *bodies* are your code.
+
+
+## Q2. How do two threads share a Signal?
+
+Concretely, by both reaching the same Signal object. The interesting part
+is what happens *inside* the engine when they do.
+
+### Setup
+
+```python
+from signalpy.kernel.reactive import Signal, Effect
+import threading
+
+shared = Signal(0)
+
+# Thread A: subscribes
+def reader():
+    def body():
+        v = shared.get()
+        print(f"A saw {v}")
+    Effect(body)        # creates and runs once
+
+# Thread B: writes
+def writer():
+    for i in range(1, 4):
+        shared.set(i)
+
+t_a = threading.Thread(target=reader)
+t_b = threading.Thread(target=writer)
+t_a.start(); t_b.start()
+t_a.join();  t_b.join()
+```
+
+### What's shared, what isn't
+
+| State | Where it lives | Per-thread? | Locked? |
+|---|---|---|---|
+| `shared._value` | the `Signal` object | No — shared | RLock |
+| `shared._subscribers` | the `Signal` object | No — shared | RLock |
+| `shared._version` | the `Signal` object | No — shared | RLock |
+| `_active_consumer` | a `ContextVar` | **Yes — per flow** | not needed |
+| Effect's `_deps` | the `Effect` object | mostly per-effect | RLock during mutation |
+
+When Thread A's `Effect` runs, the kernel does
+`_active_consumer.set(effect_a)` — but **only inside Thread A's flow**.
+Thread B's `_active_consumer` stays `None`. So Thread B's `shared.set(...)`
+calls don't accidentally subscribe themselves; they just mutate the value
+and notify whoever subscribed (effect_a).
+
+### What the lock prevents
+
+Without the RLock, three races would be reachable:
+
+1. **Lost version bumps.** `_version += 1` is read-modify-write. Two
+   concurrent writers can both read the same N, both write N+1.
+   *Test:* `test_concurrent_writers_all_version_bumps_recorded`.
+2. **Dropped subscriptions.** A `get()` adding to `_subscribers` while a
+   `set()` is iterating-and-cleaning the same set produces a partial
+   subscription that silently never gets notified.
+   *Test:* `test_concurrent_subscribe_and_write_no_dropped_subs`.
+3. **Double-firing.** Two writers both notify the same effect concurrently.
+   *Test:* `test_concurrent_writers_no_duplicate_effect_runs`.
+
+With the RLock, all three are impossible — every mutation of `_version`,
+`_subscribers`, and `_deps` is serialized. RLock specifically (rather
+than `Lock`) so an effect that writes to another Signal from inside its
+own body doesn't deadlock against itself.
+
+### Mental picture
+
+```
+Thread A flow                     Thread B flow
+-----------------                 -----------------
+ContextVar                         ContextVar
+ _active_consumer = effect_a       _active_consumer = None
+
+       │                                  │
+       ▼                                  ▼
+            ┌─────────────────────────┐
+            │  shared = Signal(...)   │    ← single object,
+            │   _value                │       one set of state,
+            │   _subscribers (RLock)  │       guarded by RLock
+            │   _version              │
+            └─────────────────────────┘
+```
+
+The `ContextVar` separates the two flows' "who's asking" state. The
+`RLock` lets them safely touch the *same* data on the Signal.
+
+
+## Q3. Are we reinventing the wheel?
+
+Short answer: the *primitives we depend on* are stdlib. The *composition*
+is not, because Python's stdlib has no reactive graph.
+
+### What stdlib gives us, and what we lean on
+
+| Need | Stdlib piece | What we use it for |
+|---|---|---|
+| Per-flow state | `contextvars.ContextVar` | `_active_consumer` — automatic per-thread/task isolation |
+| Mutual exclusion | `threading.RLock` | All shared-state mutations in `reactive.py` |
+| Async task context propagation | `asyncio.Task` (uses `copy_context()` automatically) | `@effect async def …` — child task inherits `_active_consumer` |
+| Cleanup on scope exit | `try/finally`, `ContextVar.reset(token)` | Restoring the consumer slot, even on exceptions |
+
+We do **not** roll our own threading primitives. We do **not** roll our
+own context machinery. The engine is a thin coordinator on top of them.
+
+### What stdlib does *not* give us
+
+- **A reactive graph.** There's no `signal.add_subscriber()` /
+  `effect.add_dependency()` in the stdlib. That's the bookkeeping the
+  ~450-line engine adds.
+- **Auto dep tracking.** Without the `_active_consumer` ContextVar plus
+  the `Signal.get` / `Effect.run` cooperation, you'd be writing
+  callback-registration code by hand — exactly what the [reactivity by
+  example](reactivity-by-example.qmd) page contrasts as "the glue you
+  don't write."
+- **Notification fan-out with batching.** Vue's `nextTick`, our `batch()`
+  context — neither is in stdlib.
+
+### How we compare to nearby libraries
+
+| Library | Lines | Thread-safe? | Per-key collection deps? | Async (`await` after read) |
+|---|---|---|---|---|
+| **SignalPy** | ~450 | Yes (RLock + ContextVar) | Yes (lazy per-key Signals in ConfigProvider) | Tracked through first `await` via `copy_context()` |
+| **observ** (Vue 2 port, PyPI) | ~1400 | No (class-level `Dep.stack`) | Yes (Vue 2 style proxies) | Not officially supported |
+| **Vue 3 reactivity** | (large) | Single-threaded JS — N/A | Yes | `watchEffect` is sync only |
+| **Solid.js / Preact-Signals** | (large) | Single-threaded JS — N/A | N/A (different model) | sync |
+
+We're closest to **observ** in size and intent, but observ uses a
+class-attribute `Dep.stack` instead of `ContextVar`, which doesn't
+isolate threads or asyncio tasks. The choice of `ContextVar` is what
+lets us claim *thread-and-task safe* without giant code changes.
+
+
+## When the threading model is *not* enough
+
+Two cases where you still need to think:
+
+### 1. Effect bodies that share their own state
+
+```python
+@effect
+def aggregator(self):
+    items = self.rt.items   # tracked
+    self._cache.update(items)   # ← unguarded — if multiple effects
+                                #   touch the same _cache, you race
+```
+
+The engine ensures the effect re-runs correctly. It does *not* serialize
+your effect against itself or other effects. If you mutate shared state
+inside an effect, you wrap it in your own lock.
+
+### 2. Effects that span an `await`
+
+```python
+@effect
+async def reload(self):
+    url = self.rt.config.get("url")   # ✓ tracked
+    key = self.rt.creds.get("key")    # ✓ tracked
+    await self._reconnect(url, key)   # ✗ not tracked — fine here
+                                      #   because we already read what we needed
+    other = self.rt.something.peek()  # ✗ not tracked even if we'd wanted
+                                      #   it to be — read before the await
+```
+
+Read all signals you depend on **before** the first `await`. After the
+`await`, the microtask resumes in a different context and
+`_active_consumer` may be reset. This is the same restriction Vue 3 and
+SolidJS document for their async-effect equivalents — see the
+[reactive engine line by line](reactive-line-by-line.qmd) doc for the
+detailed mechanics.
+
+
+## See also
+
+- [Reactivity by Example](reactivity-by-example.qmd) — start here for the cycle
+- [Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd) — why one slot is enough
+- [Reactive Engine: Line by Line](reactive-line-by-line.qmd) — every lock acquisition annotated
+- [`tests/test_thread_safety.py`](https://github.com/bayeslearner/bayeslearner-microkernel) — the five concurrency tests that pin this behavior
+- [PEP 567](https://peps.python.org/pep-0567/) — `ContextVar` design rationale
+- [Python `contextvars` docs](https://docs.python.org/3/library/contextvars.html)

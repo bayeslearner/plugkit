@@ -45,7 +45,6 @@ Three primitives, implemented in 327 lines of pure Python:
 | **Effect** | Runs a function. Re-runs when any Signal it read changes. | `@effect` decorator on component methods |
 
 ```{mermaid}
-%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#242836', 'primaryTextColor': '#e2e4ea', 'primaryBorderColor': '#6c8cff', 'lineColor': '#8b8fa3', 'secondaryColor': '#1a1d27', 'tertiaryColor': '#1a1d27'}}}%%
 sequenceDiagram
     participant S as Signal (self.rt.config)
     participant E as @effect method
@@ -105,10 +104,15 @@ Tutorials teach one concept at a time. Each builds on the last.
 
 ## Concepts
 
+Read in this order — each builds on the last:
+
 | Page | What it explains |
 |------|-----------------|
-| [**How Reactivity Works**](concepts/reactivity-deep-dive.qmd) | **Signal internals, ContextVar, tracking, React vs Vue model** |
-| [Architecture](concepts/architecture.qmd) | Constitution, two-axis model, reactive foundation |
+| [Architecture](concepts/architecture.qmd) | Constitution, two-axis model, what's in the kernel |
+| [**Reactivity by Example**](concepts/reactivity-by-example.qmd) | **Consumer / Provider / Kernel side-by-side, one full cycle from boot to re-run** |
+| [Context, ContextVar, Active Consumer](concepts/contextvar-and-tracking.qmd) | Why a single `_active_consumer` ContextVar is enough for many effects |
+| [Reactive Engine: Line by Line](concepts/reactive-line-by-line.qmd) | Every line of `reactive.py` annotated |
+| [Threading Model](concepts/threading-model.qmd) | Threads, asyncio, RLock, ContextVar isolation, vs stdlib |
 | [Bridging External Systems](concepts/bridging.qmd) | Bridge pattern, three access levels, 7 rules |
 | [Deployment Scales](concepts/deployment.qmd) | Monolith → containers → Dapr → agent system |
 

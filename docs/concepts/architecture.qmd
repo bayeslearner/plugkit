@@ -21,7 +21,6 @@ Non-negotiable design rules. Every decision traces back to one of these.
 ## Two-Axis Model
 
 ```{mermaid}
-%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#242836', 'primaryTextColor': '#e2e4ea', 'primaryBorderColor': '#6c8cff', 'lineColor': '#8b8fa3', 'secondaryColor': '#1a1d27', 'tertiaryColor': '#1a1d27', 'clusterBkg': '#1a1d27', 'clusterBorder': '#2e3345'}}}%%
 graph LR
     subgraph "Axis 1: The Mechanism (irreplaceable)"
         R[reactive.py<br/>Signal/Computed/Effect]
@@ -72,7 +71,6 @@ v2's key insight: **reactivity IS the kernel**, not a feature bolted on.
 Every injected service is a `Signal`. Reading `self.rt.config` inside an `@effect` or `@computed` is a reactive read — the kernel tracks the dependency. When the service changes, the consumer is notified automatically.
 
 ```{mermaid}
-%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#242836', 'primaryTextColor': '#e2e4ea', 'primaryBorderColor': '#6c8cff', 'lineColor': '#8b8fa3', 'secondaryColor': '#1a1d27', 'tertiaryColor': '#1a1d27', 'actorTextColor': '#e2e4ea', 'actorBkg': '#242836', 'actorBorder': '#6c8cff', 'signalColor': '#8b8fa3', 'signalTextColor': '#e2e4ea'}}}%%
 sequenceDiagram
     participant CA as ConfigAdmin
     participant R as Registry

@@ -1,0 +1,403 @@
+---
+title: "Reactivity by Example"
+subtitle: "Consumer, Provider, and Kernel — side by side, one cycle from first run to re-run."
+---
+
+The reactive engine is small (~450 lines) but the value of reading any one
+file in isolation is limited. The interesting question is: **when a consumer
+calls a provider, what does the kernel do underneath, and how does that
+produce automatic re-runs on change?**
+
+This page walks one full cycle, with the three layers shown side by side and
+moments numbered so you can trace the same instant across all three columns.
+
+> Read this page first. It's the shortest path to the mental model.
+> When you want to dig deeper, follow the links at the end:
+>
+> - **[Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd)** — why a single `_active_consumer` is enough
+> - **[Reactive Engine: Line by Line](reactive-line-by-line.qmd)** — every line of `reactive.py`
+> - **[Threading Model](threading-model.qmd)** — what changes (and doesn't) under threads
+
+
+## The cast
+
+Three real pieces of code, lifted from this codebase:
+
+```python
+# Consumer — your application code
+@component("search")
+@requires(cfg=IConfig)
+class SearchService:
+    @effect
+    def on_url_change(self):
+        self.url = self.rt.cfg.get("api.url")
+        self.client = HTTPClient(self.url)
+```
+
+```python
+# Provider — signalpy/providers/config.py (excerpt)
+class ConfigProvider:
+    def get(self, key, default=None):
+        value = self._read_path(key)
+        sig = self._key_signal(key, value)   # lazy per-key Signal
+        sig.get()                            # reactive read
+        return value if value is not None else default
+
+    def set(self, key, value):
+        self._set_in(self._state, key, value)
+        with self._key_lock:
+            if key in self._key_signals:
+                self._key_signals[key].set(self._read_path(key))
+        self._all_version.set(self._all_version.peek() + 1)
+```
+
+```python
+# Kernel — signalpy/kernel/reactive.py (excerpt)
+_active_consumer: ContextVar = ContextVar("_active_consumer", default=None)
+
+class Signal:
+    def get(self):
+        with _lock:
+            c = _active_consumer.get()
+            if c is not None:
+                c._deps.add(self)
+                self._subscribers.add(c)
+            return self._value
+
+    def set(self, value):
+        with _lock:
+            if value is self._value: return
+            self._value = value
+            self._version += 1
+            subs = list(self._subscribers)
+        for c in subs:
+            c._notify()
+
+class Effect:
+    def run(self):
+        with _lock:
+            self._untrack_all()
+        token = _active_consumer.set(self)
+        try:
+            self._fn()
+        finally:
+            _active_consumer.reset(token)
+```
+
+The walkthrough below traces exactly **one cycle**: boot → first run → mutation → re-run.
+
+
+## ① Boot: the Effect runs for the first time
+
+After the kernel activates `SearchService`, it wraps `on_url_change` in an
+`Effect` and calls `Effect.run()`. The kernel installs the effect as the
+"current consumer" via the `ContextVar`, then invokes the body.
+
+::::: {.triptych}
+:::: {.col}
+::: {.col-head}
+Consumer
+:::
+```python
+@effect
+def on_url_change(self):
+    # body about to run
+    ...
+```
+::::
+:::: {.col}
+::: {.col-head}
+Provider
+:::
+```python
+# not yet involved
+```
+::::
+:::: {.col}
+::: {.col-head}
+Kernel
+:::
+```python
+def run(self):
+    self._untrack_all()
+    token = _active_consumer.set(self)
+    # _active_consumer = effect_A
+    try:
+        self._fn()        # ← calls body
+    finally:
+        _active_consumer.reset(token)
+```
+::::
+:::::
+
+[**State after ①**]{.cnum .cnum-k} — `_active_consumer = effect_A`. No
+subscriptions yet. The body is about to execute.
+
+
+## ② Consumer reads config — three layers track in one call
+
+Inside the body, `self.rt.cfg.get("api.url")` is one Python expression. But
+underneath it, three layers cooperate. The provider walks the dict and asks
+the kernel for the per-key `Signal`. The kernel checks who's currently
+running, and on both sides records the dependency.
+
+::::: {.triptych}
+:::: {.col}
+::: {.col-head}
+Consumer
+:::
+```python
+def on_url_change(self):
+    self.url = (
+        self.rt.cfg.get("api.url")
+    )
+    # returns "http://api.local"
+```
+::::
+:::: {.col}
+::: {.col-head}
+Provider
+:::
+```python
+def get(self, key, default=None):
+    value = self._read_path(key)
+    sig = self._key_signal(
+        key, value
+    )
+    sig.get()          # ← reactive
+    return value
+```
+::::
+:::: {.col}
+::: {.col-head}
+Kernel
+:::
+```python
+def get(self):           # Signal.get
+    with _lock:
+        c = _active_consumer.get()
+        # c is effect_A
+        if c is not None:
+            c._deps.add(self)
+            self._subscribers.add(c)
+        return self._value
+```
+::::
+:::::
+
+[**State after ②**]{.cnum .cnum-k} —
+
+- `effect_A._deps = {api_url_signal}`
+- `api_url_signal._subscribers = {effect_A}`
+
+These two sets are the **persistent reactive graph**. The ContextVar is
+just the temporary "who's asking" badge that let the kernel write into the
+right effect's dep set.
+
+> The provider doesn't know which consumer called it. It just calls
+> `sig.get()`. The kernel reads `_active_consumer` to find out. That's the
+> entire trick — see [Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd) for why one ContextVar is enough.
+
+
+## ③ Effect body returns — ContextVar resets, graph remains
+
+The body finishes. The `finally` clause restores `_active_consumer` to
+whatever it was before (here, `None`). The dep/subscriber sets stay.
+
+::::: {.triptych}
+:::: {.col}
+::: {.col-head}
+Consumer
+:::
+```python
+# body returned;
+# self.url = "http://api.local"
+# self.client built
+```
+::::
+:::: {.col}
+::: {.col-head}
+Provider
+:::
+```python
+# idle; per-key signal
+# _key_signals["api.url"]
+# is alive and tracked
+```
+::::
+:::: {.col}
+::: {.col-head}
+Kernel
+:::
+```python
+# Effect.run finally:
+_active_consumer.reset(token)
+# _active_consumer = None
+# api_url_signal._subscribers
+#                = {effect_A}
+```
+::::
+:::::
+
+[**State after ③**]{.cnum .cnum-k} — engine is dormant. No effects
+running. The graph is wired and waiting.
+
+
+## ④ Someone mutates the config
+
+A REST call, an admin, or another component does `cfg.set("api.url", new)`.
+The provider updates its dict, looks up the per-key Signal, and calls
+`sig.set(new_value)`. The Signal compares identity, bumps the version,
+and notifies every subscriber.
+
+::::: {.triptych}
+:::: {.col}
+::: {.col-head}
+Consumer
+:::
+```python
+# not running yet —
+# notification arrives next
+```
+::::
+:::: {.col}
+::: {.col-head}
+Provider
+:::
+```python
+def set(self, key, value):
+    self._set_in(
+        self._state, key, value
+    )
+    with self._key_lock:
+        if key in self._key_signals:
+            self._key_signals[
+                key
+            ].set(value)   # ← Signal.set
+```
+::::
+:::: {.col}
+::: {.col-head}
+Kernel
+:::
+```python
+def set(self, value):    # Signal.set
+    with _lock:
+        if value is self._value:
+            return
+        self._value = value
+        self._version += 1
+        subs = list(self._subscribers)
+    for c in subs:
+        c._notify()       # ← effect_A
+```
+::::
+:::::
+
+[**State after ④**]{.cnum .cnum-k} — `effect_A._notify()` enqueues (or
+runs synchronously, depending on batch mode) a re-run.
+
+> Because we have **per-key signals**, only consumers of `"api.url"` get
+> notified. A change to `"db.url"` would notify a different signal — your
+> effect doesn't re-run unnecessarily. This is what
+> [test_config_per_key.py](https://github.com/bayeslearner/bayeslearner-microkernel)
+> verifies.
+
+
+## ⑤ Effect re-runs — same path, fresh value
+
+`effect_A._notify()` calls `effect_A.run()`. The kernel clears the old
+`_deps`, sets the ContextVar again, runs the body. Re-tracking happens
+exactly like in ②. The body sees the new URL.
+
+::::: {.triptych}
+:::: {.col}
+::: {.col-head}
+Consumer
+:::
+```python
+def on_url_change(self):
+    self.url = (
+        self.rt.cfg.get("api.url")
+    )   # "http://prod.api.com"
+    self.client = HTTPClient(self.url)
+```
+::::
+:::: {.col}
+::: {.col-head}
+Provider
+:::
+```python
+def get(self, key, default=None):
+    value = self._read_path(key)
+    sig = self._key_signal(
+        key, value
+    )
+    sig.get()         # re-tracks
+    return value
+```
+::::
+:::: {.col}
+::: {.col-head}
+Kernel
+:::
+```python
+def run(self):       # Effect.run
+    self._untrack_all()
+    token = _active_consumer.set(self)
+    try:
+        self._fn()
+    finally:
+        _active_consumer.reset(token)
+```
+::::
+:::::
+
+[**State after ⑤**]{.cnum .cnum-k} — graph rewired (sets are idempotent,
+so re-adding the same subscription is a no-op). Consumer holds the new
+URL and a new HTTP client. No callbacks were registered. No glue code
+exists.
+
+
+## What the cycle taught us
+
+| Question | Answer |
+|---|---|
+| **Who told the consumer to re-run?** | The Signal it read. The Signal knew because the kernel registered the subscription during ②. |
+| **Where does the dependency live?** | `effect._deps` and `signal._subscribers` — symmetric sets on the two ends. |
+| **Why doesn't the consumer write callbacks?** | Reading the signal is the subscription. There's nothing to register. |
+| **Why doesn't the provider know its consumers?** | The provider calls `sig.get()` and `sig.set()`. The kernel handles routing through `_active_consumer`. The provider has zero coupling to the consumer. |
+| **Why one ContextVar for many effects?** | Effects don't overlap on a single flow. The slot is reused like a return-address register. See [contextvar-and-tracking](contextvar-and-tracking.qmd). |
+| **What about threads?** | `ContextVar` is per-flow; subscriber sets are guarded by `RLock`. See [threading-model](threading-model.qmd). |
+
+
+## Variations of the same pattern
+
+Once you see this cycle, every other pattern is a small variation:
+
+- **`@computed`** — like an `@effect`, but lazy and cached. It plays *both*
+  roles: a consumer (it reads signals) and a signal (other effects can
+  read it). When its inputs change it marks itself dirty; on the next
+  read it recomputes.
+- **Service replacement (`hot_add` / `hot_remove`)** — the kernel's runtime
+  exposes injected services *as Signals*. Replacing the service calls
+  `Signal.set(new_service)` on the runtime — your effect re-runs because
+  it read `self.rt.cfg`, which is the outer Signal.
+- **Component-local Signals** — you can `Signal(initial)` inside a
+  component (e.g., circuit-breaker state). Same mechanics. The reactive
+  primitives don't care whether the Signal lives in the kernel or in your
+  code.
+- **`config.all()`** — the provider keeps a separate `_all_version: Signal`.
+  Every `set` bumps it. Effects that called `cfg.all()` subscribed to that
+  one and re-run on any change. The per-key signals stay isolated.
+
+The principle is always the same: **read = subscribe, write = notify,
+the rest is bookkeeping.**
+
+
+## See also
+
+- [Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd)
+- [Reactive Engine: Line by Line](reactive-line-by-line.qmd)
+- [Threading Model](threading-model.qmd)
+- [Architecture](architecture.qmd) — where these pieces live in the codebase

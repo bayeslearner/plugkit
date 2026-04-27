@@ -92,49 +92,194 @@ pre:not(.sourceCode) {
   padding: 1em !important;
 }
 
-/* ── Mermaid diagrams: high contrast ───────────────────────────── */
+/* ── Mermaid diagrams: high contrast ─────────────────────────────
+ * One central place for ALL mermaid theming. Do NOT add inline
+ * %%{init: {'theme':...}}%% blocks in .qmd files — they fight these
+ * rules and produce inconsistent colors per-page (recurring bug).
+ */
 .mermaid {
   background: #161b22 !important;
   border: 1px solid #444c56 !important;
   border-radius: 8px !important;
   padding: 1em !important;
 }
+/* All text-bearing elements */
 .mermaid text,
 .mermaid .nodeLabel,
 .mermaid .edgeLabel,
 .mermaid .label,
 .mermaid .cluster-label,
-.mermaid span {
+.mermaid span,
+.mermaid foreignObject div {
   color: #f0f3f6 !important;
   fill: #f0f3f6 !important;
   font-weight: 500 !important;
 }
+/* edgeLabel backgrounds (the little label-on-arrow bg) */
+.mermaid .edgeLabel,
+.mermaid .edgeLabel rect,
+.mermaid .edgeLabel foreignObject {
+  background-color: #161b22 !important;
+  fill: #161b22 !important;
+}
+.mermaid .edgeLabel .labelBkg {
+  fill: #161b22 !important;
+  background-color: #161b22 !important;
+  opacity: 1 !important;
+}
+
+/* ── Flowchart nodes ─────────────────────────────────────────────── */
 .mermaid .node rect,
 .mermaid .node circle,
-.mermaid .node polygon {
+.mermaid .node polygon,
+.mermaid .node ellipse,
+.mermaid .node path {
   fill: #2d333b !important;
   stroke: #58a6ff !important;
   stroke-width: 2px !important;
 }
-.mermaid .edgePath .path {
+.mermaid .edgePath .path,
+.mermaid .flowchart-link {
   stroke: #8b949e !important;
   stroke-width: 2px !important;
+  fill: none !important;
 }
-.mermaid .arrowheadPath {
+.mermaid .arrowheadPath,
+.mermaid #arrowhead path,
+.mermaid marker path {
   fill: #8b949e !important;
+  stroke: #8b949e !important;
 }
+
+/* ── Subgraph (cluster) ──────────────────────────────────────────── */
 .mermaid .cluster rect {
   fill: #1c2128 !important;
   stroke: #58a6ff66 !important;
   stroke-width: 2px !important;
   rx: 8px !important;
 }
-.mermaid .cluster-label .nodeLabel {
+.mermaid .cluster-label,
+.mermaid .cluster-label .nodeLabel,
+.mermaid .cluster-label foreignObject div {
   color: #d2a8ff !important;
   fill: #d2a8ff !important;
-  font-size: 1.1em !important;
+  font-size: 1.05em !important;
   font-weight: 600 !important;
 }
+
+/* ── Sequence diagrams ───────────────────────────────────────────── */
+.mermaid .actor,
+.mermaid rect.actor {
+  fill: #2d333b !important;
+  stroke: #58a6ff !important;
+  stroke-width: 2px !important;
+}
+.mermaid text.actor,
+.mermaid .actor > tspan,
+.mermaid .actor-box text {
+  fill: #f0f3f6 !important;
+}
+.mermaid .actor-line,
+.mermaid line.actor-line {
+  stroke: #6e7681 !important;
+  stroke-width: 1px !important;
+}
+.mermaid line.messageLine0,
+.mermaid line.messageLine1,
+.mermaid path.messageLine0,
+.mermaid path.messageLine1 {
+  stroke: #8b949e !important;
+  stroke-width: 1.5px !important;
+  fill: none !important;
+}
+.mermaid .messageText,
+.mermaid text.messageText {
+  fill: #d2a8ff !important;
+  stroke: none !important;
+  font-weight: 500 !important;
+}
+.mermaid .note,
+.mermaid rect.note {
+  fill: #1c2128 !important;
+  stroke: #d29922 !important;
+}
+.mermaid .noteText,
+.mermaid text.noteText,
+.mermaid .note text {
+  fill: #f0f3f6 !important;
+  stroke: none !important;
+}
+.mermaid .loopText,
+.mermaid text.loopText,
+.mermaid .loopLine {
+  fill: #d29922 !important;
+  stroke: #d29922 !important;
+}
+.mermaid .activation0,
+.mermaid .activation1,
+.mermaid .activation2 {
+  fill: #444c56 !important;
+  stroke: #58a6ff !important;
+}
+.mermaid .labelText,
+.mermaid text.labelText {
+  fill: #f0f3f6 !important;
+}
+
+/* ── Side-by-side code triptych (consumer / provider / kernel) ─── */
+.triptych {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.6rem;
+  margin: 1.2em 0 1.6em 0;
+  align-items: stretch;
+}
+.triptych > .col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.triptych .col-head {
+  display: block;
+  font-family: monospace;
+  font-size: 0.85em;
+  color: #58a6ff;
+  border-bottom: 1px solid #444c56;
+  padding: 0.25em 0;
+  margin-bottom: 0.35em;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+.triptych pre.sourceCode,
+.triptych div.sourceCode {
+  font-size: 0.74em !important;
+  margin: 0 !important;
+  height: 100% !important;
+  padding: 0.5em 0.7em !important;
+}
+@media (max-width: 980px) {
+  .triptych { grid-template-columns: 1fr; }
+}
+
+/* Numbered call-out badges used in the triptych prose */
+.cnum {
+  display: inline-block;
+  background: #58a6ff;
+  color: #0d1117;
+  font-weight: 700;
+  border-radius: 50%;
+  width: 1.4em;
+  height: 1.4em;
+  line-height: 1.4em;
+  text-align: center;
+  font-family: monospace;
+  margin-right: 0.35em;
+  font-size: 0.85em;
+}
+.cnum-c { background: #3fb950; }   /* consumer */
+.cnum-p { background: #d2a8ff; }   /* provider */
+.cnum-k { background: #ffa657; }   /* kernel */
 
 /* ── Callout blocks ────────────────────────────────────────────── */
 .callout {

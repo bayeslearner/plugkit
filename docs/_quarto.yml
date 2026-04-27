@@ -54,14 +54,16 @@ website:
             href: ref/kernel-api.qmd
       - text: "Concepts"
         menu:
-          - text: "How Reactivity Works"
-            href: concepts/reactivity-deep-dive.qmd
-          - text: "Reactive Engine: Line by Line"
-            href: concepts/reactive-line-by-line.qmd
-          - text: "Context, ContextVar, Active Consumer"
-            href: concepts/contextvar-and-tracking.qmd
           - text: "Architecture"
             href: concepts/architecture.qmd
+          - text: "Reactivity by Example"
+            href: concepts/reactivity-by-example.qmd
+          - text: "Context, ContextVar, Active Consumer"
+            href: concepts/contextvar-and-tracking.qmd
+          - text: "Reactive Engine: Line by Line"
+            href: concepts/reactive-line-by-line.qmd
+          - text: "Threading Model"
+            href: concepts/threading-model.qmd
           - text: "Bridging External Systems"
             href: concepts/bridging.qmd
           - text: "Deployment Scales"
@@ -96,10 +98,11 @@ website:
         - ref/kernel-api.qmd
     - title: "Concepts"
       contents:
-        - concepts/reactivity-deep-dive.qmd
-        - concepts/reactive-line-by-line.qmd
-        - concepts/contextvar-and-tracking.qmd
         - concepts/architecture.qmd
+        - concepts/reactivity-by-example.qmd
+        - concepts/contextvar-and-tracking.qmd
+        - concepts/reactive-line-by-line.qmd
+        - concepts/threading-model.qmd
         - concepts/bridging.qmd
         - concepts/deployment.qmd
 
