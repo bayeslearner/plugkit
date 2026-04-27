@@ -169,29 +169,197 @@ isolate threads or asyncio tasks. The choice of `ContextVar` is what
 lets us claim *thread-and-task safe* without giant code changes.
 
 
-## What the engine guarantees without an explicit `batch()`
+## The propagation algorithm — one logic, four corner cases
 
-`batch()` exists as an explicit escape hatch for grouping correlated
-writes that the engine *cannot* know are correlated. Everything else,
-the engine batches for you implicitly. Concretely:
+You may have a hunch about what the engine is doing: "group the
+affected effects into a subgraph, dedupe, deal with the awkward
+ones." That's exactly right. Every behavior in the rest of this
+document falls out of one five-step algorithm:
 
-| Scenario | What you'd fear | What actually happens |
+```
+                     Signal.set(new_value)
+                              │
+                              ▼
+                    ┌──────────────────┐
+              ① Track │ collect the subgraph │
+                    │   (transitive readers │
+                    │    of this signal)    │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────┐
+              ② Queue │ enqueue each effect│
+                    │ in a global batch  │
+                    │   (set-dedup)      │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────┐
+              ③ Resolve│ for each effect:    │
+                    │   is it OK to run? │ ← this is where
+                    │   defer? skip?     │   "corner cases" live
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────┐
+              ④ Order │ sort by creation   │
+                    │   order (_id)      │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────┐
+              ⑤ Flush │ run each effect    │
+                    │   exactly once     │
+                    └──────────────────┘
+```
+
+That's the whole thing. Everything else in this section is one
+specific situation that step ③ has to make a decision about.
+
+**Step ① — Track.** When an effect (or computed) reads `Signal.get()`,
+the signal records the consumer in its subscriber set. After the body
+runs, every signal it touched knows about it. This is just lazy
+graph-building — see
+[Reactivity by Example](reactivity-by-example.qmd) for the cycle.
+
+**Step ② — Queue.** When `Signal.set` fires, the engine walks the
+subscriber set transitively (including computeds that propagate to
+*their* subscribers) and collects every reachable effect into the
+global batch queue. The queue is a `set`, so an effect reached via
+two paths (a *diamond*) is only enqueued once.
+
+**Step ③ — Resolve.** For each enqueued effect, the engine asks: *can
+I run this body right now?* Four answers are possible — they are the
+four "corner cases" the rest of this doc discusses:
+
+| Situation at the time the effect is dequeued | What step ③ decides |
+|---|---|
+| Effect is idle. Normal case. | Run it. |
+| Effect is **sync, currently running** (it just wrote to a signal it itself reads → re-entry). | **Skip.** The body is already executing on the latest value; running it again would loop. |
+| Effect is **async, mid-await** (a notification arrived while a previous run is still suspended at an `await`). | **Defer.** Set `_pending_run=True` on the effect. When the in-flight body finishes, the engine re-runs it from the finally block. Optionally cancel the in-flight task (`cancel_on_supersede=True`). |
+| Effect is **disposed**. | **Drop.** It's gone. |
+
+**Step ④ — Order.** Each effect has a creation-time `_id` counter. The
+queue is sorted by `_id` before flushing, so parents created before
+children always run before them. Without this you'd get
+non-deterministic order driven by `set` iteration (hash-randomized
+between Python processes).
+
+**Step ⑤ — Flush.** Run each effect's body. Bodies may themselves call
+`Signal.set` — those writes also enter step ① and queue more effects.
+The flush loop runs until the queue is empty (with a 100-iteration
+runaway guard, in case the user's code has a genuine cycle that won't
+quiesce).
+
+### Where does `batch()` fit in?
+
+`batch()` is just a way to **defer step ⑤**. While `_batch_depth > 0`,
+nothing flushes — writes accumulate in the queue. When the outermost
+batch exits, the queue is sorted and run once. Two writes that would
+normally trigger two cascades collapse into one.
+
+The engine *opens a batch implicitly* at three places:
+
+- around every `Signal._notify_subscribers` call — so a single
+  `Signal.set` deduplicates downstream effects (the "diamond" case).
+- around every `Computed._recompute` call — same reason at the
+  computed layer.
+- around every **sync** effect body — so writes from inside the body
+  coalesce.
+
+Users only need to write `with batch():` themselves when **two
+top-level writes should land atomically**:
+
+```python
+with batch():
+    cfg.set("url", a)
+    cfg.set("token", b)
+# only one flush — readers see (a, b), never (a, old_token).
+```
+
+This is the one place users still need the explicit primitive — the
+engine cannot guess that two unrelated `set` calls are correlated.
+
+Async bodies are the exception: they do *not* get an implicit batch,
+because `_batch_depth` is process-global and a long-running async body
+would hold depth>0 across its awaits, swallowing every other task's
+cascade — including its own supersede signal. Wrap explicitly inside
+async if you need write coalescing.
+
+### Verified table of cases
+
+Each row is "what step ③ does in this situation," tied to a test
+that pins the behavior:
+
+| Case | What you'd fear | What step ③ does | Test |
+|---|---|---|---|
+| **Diamond** (A → B and A → C, both feeding E) | E fires twice | Step ② enqueues E once (set-dedup); step ⑤ flushes once. | `test_diamond_runs_effect_once` |
+| **Multi-effect fan-out** | Order varies between Python processes | Step ④ sorts by `_id` (deterministic). | `test_effect_order_outside_batch_matches_creation_order` |
+| **Sync effect writes two signals** | Two cascades, dependents fire twice | Sync body wrapped in implicit batch — writes coalesce. | `test_writes_from_effect_body_coalesce` |
+| **Computed writes a signal during recompute** | Same problem at the computed layer | `_recompute` wrapped in implicit batch. | (covered indirectly) |
+| **Effect transitively writes a signal it reads** | Stack overflow from re-entry | Step ③ skips (`_running=True`). 100-iteration runaway guard catches genuine cycles. | (covered indirectly) |
+| **Async effect notified mid-await** | Notification dropped — body finishes with stale value | Step ③ defers (sets `_pending_run`). Finally block re-runs after in-flight completes. | `test_async_pending_rerun_fires_after_inflight_finishes` |
+| **Async effect, body holds a resource** | Old in-flight run holds socket/lease the new run needs | Opt into `cancel_on_supersede=True` — step ③ defers AND cancels the in-flight task. | `test_cancel_on_supersede_aborts_inflight` |
+
+Once you see step ③ as the resolution policy, the rest of this doc
+is just *which policy to pick when*. Read on for the async cases —
+they have the most decisions to make because async bodies persist
+across awaits.
+
+
+## Is `batch()` the most reliable escape hatch?
+
+Yes — for the problem it actually solves. The three escape hatches
+sit at different points in the algorithm and address different
+problems:
+
+| Hatch | Where in the algorithm | Problem it solves |
 |---|---|---|
-| **Diamond** (A → B and A → C, both feeding effect E) | E fires twice — once via B, once via C | E fires **once**: every `Signal.set` opens an implicit batch, the cascade dedupes E in the batch queue, the flush runs E once in creation order. Verified by `test_diamond_runs_effect_once`. |
-| **Effect fan-out order across runs** | `set` iteration is hash-randomized, so multi-effect order varies between processes | Effects flush in **creation order** (`_id` counter), which is deterministic across processes. Verified by `test_effect_order_outside_batch_matches_creation_order`. |
-| **Sync effect body writes two signals** | Two downstream cascades, each firing dependents | A sync effect body runs inside its own implicit batch, so writes coalesce — dependents see one update. Verified by `test_writes_from_effect_body_coalesce`. (Async bodies do *not* get this implicit batch — `_batch_depth` is process-global and a long await would swallow other tasks' notifications. Wrap explicitly with `with batch():` if you need coalescing inside an async body.) |
-| **Computed body writes a signal** | Same problem at the computed layer | Same fix — `_recompute` runs inside an implicit batch. |
-| **Effect reads a signal it transitively writes** | Stack overflow from re-entry | `Effect._running` guard short-circuits, and the 100-iteration loop guard in `_flush_batch` aborts pathological cycles with a logged error. |
+| **`with batch():`** | Step ⑤ (flush deferral) | Correlated *writes*: two top-level `set` calls that should land atomically. |
+| **`is_stale()`** | Step ③, async case | Wasted *work* inside a long async body that's about to be redone. |
+| **`cancel_on_supersede=True`** | Step ③, async case | A *resource* held across an await that the next run needs to acquire. |
 
-What the engine *cannot* batch for you:
+`batch()` is the most fundamental and the most reliable for one
+reason: it controls step ⑤ directly, deterministically, and locally.
+You decide the boundaries, the engine respects them, no surprises:
 
-- **Two top-level writes that should land atomically.** `cfg.set("url", a); cfg.set("token", b)` flushes between the two — an effect that reads both will see `(new_url, old_token)` once, then `(new_url, new_token)`. If those writes are correlated, wrap them: `with batch(): cfg.set("url", a); cfg.set("token", b)`. This is the one place users still need the explicit primitive.
+```python
+# Always works. Never wrong. Reader sees both new values or neither.
+with batch():
+    cfg.set("url", new_url)
+    cfg.set("token", new_token)
+```
 
-The first three rows of the table used to be footguns the engine left
-to the caller. After the P0 reactive-correctness pass they are guarantees
-backed by tests. The remaining one (correlated multi-write) is the
-genuine escape hatch. Async-effect supersede has its own section
-below — short version: it works without you doing anything.
+The async hatches are different — they manage the *temporal* gap
+between when an effect *starts* a run and when it *finishes* one. No
+amount of `batch()` wrapping at the call site can help, because the
+awaiting body is in its own flow, suspended past the moment your
+batch ended.
+
+```python
+# Wrapping the writer in batch does NOT help the long-running effect:
+with batch():
+    cfg.set("url", new_url)              # batch ends here
+                                         # long-poll effect still mid-await
+                                         # no checkpoint, no way to bail —
+                                         # batch can't reach into another flow
+```
+
+So:
+
+- **Correlated writes** → always `with batch():`. Reach for it first;
+  it's the one hatch that's purely additive (wrong-batches just
+  delay flush; they don't change semantics).
+- **Long async body, decomposable work** → `is_stale()` between
+  `await`s. Cheap, no exception machinery.
+- **Long async body, resource-bound** → `@effect(cancel_on_supersede=True)`.
+  Hard but necessary when nothing else can release the resource in
+  time.
+
+If you're not sure which problem you have: ask whether the issue
+is "two writes shouldn't be observed apart" (use `batch()`) or "a
+long-running body is reading stale state" (use the async hatches).
+The two questions never have the same answer.
 
 
 ## Async effect supersede: what happens when notifications race the body
