@@ -9,14 +9,16 @@ Non-negotiable design rules. Every decision traces back to one of these.
 
 1. **Everything is a component.** No privileged subsystems.
 2. **Components give and take.** No globals, no singletons, no ambient state.
-3. **The kernel has zero business logic.** It manages lifecycle, registry, bus, and traits.
-4. **Transport is an adapter, never a core concern.** Components declare `@api`, never import FastAPI.
-5. **Distribution is transparent.** Same `self.rt.invoke()` whether local or remote.
-6. **Apps are deployment units, components are composition units.**
-7. **Lifecycle is explicit and managed.** Dependency-ordered activation, reverse shutdown.
-8. **Every API has a client counterpart.** One declaration, every surface.
-9. **The kernel is small.** ~2600 lines across 9 files. Readable in one sitting.
-10. **Scoping is structural, not opt-in.** Credentials and storage are per-component by default.
+3. **Reactivity is the foundation, not a feature.** Every injected service is a `Signal`. Reading it inside `@effect` or `@computed` subscribes you. Writes propagate through the graph automatically — no callbacks, no `@bind`/`@unbind`, no listener registries. This is not optional plumbing layered on top; it *is* how the kernel routes change. ([Reactivity by Example](reactivity-by-example.qmd))
+4. **The kernel has zero business logic.** It manages reactivity, lifecycle, registry, bus, and traits — nothing domain-specific.
+5. **Transport is an adapter, never a core concern.** Components declare `@api`, never import FastAPI.
+6. **Distribution is transparent.** Same `self.rt.invoke()` whether local or remote.
+7. **Apps are deployment units, components are composition units.**
+8. **Lifecycle is explicit and managed.** Dependency-ordered activation, reverse shutdown.
+9. **Every API has a client counterpart.** One declaration, every surface.
+10. **The kernel is small.** ~2600 lines across 9 files. Readable in one sitting.
+11. **Scoping is structural, not opt-in.** Credentials and storage are per-component by default.
+12. **Concurrency is correct by default.** Per-flow tracking via `ContextVar`, shared-state mutation via `RLock`. Threads and asyncio tasks share Signals safely without consumer code touching a lock. ([Threading Model](threading-model.qmd))
 
 ## Two-Axis Model
 

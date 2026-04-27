@@ -115,3 +115,5 @@ format:
     code-overflow: wrap
     toc: true
     toc-depth: 3
+    mermaid:
+      theme: dark
