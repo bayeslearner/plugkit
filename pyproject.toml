@@ -24,15 +24,15 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 
+# Axis 1 (kernel/) has zero required dependencies.
+# All dependencies below are for Axis 2 (providers/, adapters/, entries/).
+dependencies = []
+
 [project.urls]
 Homepage = "https://github.com/bayeslearner/signalpy-kernel"
 Documentation = "https://bayeslearner.github.io/signalpy-kernel/"
 Repository = "https://github.com/bayeslearner/signalpy-kernel"
 Issues = "https://github.com/bayeslearner/signalpy-kernel/issues"
-
-# Axis 1 (kernel/) has zero required dependencies.
-# All dependencies below are for Axis 2 (providers/, adapters/, entries/).
-dependencies = []
 
 [project.optional-dependencies]
 # Platform providers
