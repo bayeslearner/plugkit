@@ -165,6 +165,12 @@ class Signal(Generic[T]):
     def _notify_subscribers(self) -> None:
         """Notify all consumers that this signal changed.
 
+        Wrapped in an implicit batch so cascading notifications coalesce:
+        a single ``Signal.set`` produces one effect run per dependent
+        effect, even through diamond dependency graphs (A → B → D and
+        A → C → D would otherwise notify D twice). Effects also flush
+        in creation order rather than ``set`` iteration order.
+
         Thread-safe: takes a snapshot of subscribers under lock.
         Cleans up disposed consumers to prevent memory leaks.
 
@@ -182,8 +188,9 @@ class Signal(Generic[T]):
             }
             snapshot = list(self._subscribers)
 
-        for consumer in snapshot:
-            consumer._notify()
+        with batch():
+            for consumer in snapshot:
+                consumer._notify()
 
     @property
     def value(self) -> T:
@@ -259,24 +266,34 @@ class Computed(_Consumer, Generic[T]):
         This is the key optimization: if a computed returns the same
         object, downstream effects don't re-run.
 
+        The body executes inside an implicit ``batch()`` so any signal
+        writes the body performs (rare but legal) coalesce instead of
+        firing one notification cascade per write.
+
         Caller must hold `_lock` (this is internal; entered from get/peek
         which acquire it, or from _notify which we also lock).
         """
         self._untrack_all()
         token = _active_consumer.set(self)
         try:
-            old = self._value
-            self._value = self._fn()
-            self._dirty = False
-            # Only propagate if value actually changed (identity)
-            if self._value is not old:
-                self._version += 1
-                self._propagate()
+            with batch():
+                old = self._value
+                self._value = self._fn()
+                self._dirty = False
+                # Only propagate if value actually changed (identity)
+                if self._value is not old:
+                    self._version += 1
+                    self._propagate()
         finally:
             _active_consumer.reset(token)
 
     def _propagate(self) -> None:
-        """Notify downstream subscribers that this computed's value changed."""
+        """Notify downstream subscribers that this computed's value changed.
+
+        Wrapped in an implicit batch (same reasoning as
+        ``Signal._notify_subscribers``): if a Computed value changes
+        outside an explicit batch, dependent effects still coalesce.
+        """
         with _lock:
             # Clean up disposed subscribers
             self._subscribers = {
@@ -284,8 +301,9 @@ class Computed(_Consumer, Generic[T]):
                 if not getattr(c, '_disposed', False)
             }
             snapshot = list(self._subscribers)
-        for consumer in snapshot:
-            consumer._notify()
+        with batch():
+            for consumer in snapshot:
+                consumer._notify()
 
     def _notify(self) -> None:
         """Called when a dependency changed. Mark dirty and propagate.
@@ -355,6 +373,13 @@ class Effect(_Consumer):
     def run(self) -> None:
         """Execute the effect function, tracking all Signal reads.
 
+        The body runs inside an implicit ``batch()`` so any signal writes
+        the body performs coalesce: e.g. an effect that updates two
+        signals in sequence triggers a single downstream effect flush
+        instead of two. Async bodies enter their own batch inside the
+        spawned task (batch state is per-flow because depth is global —
+        see threading model docs for the caveat).
+
         Re-entrancy guard: if the effect is already running (e.g., effect
         writes to a signal it reads), skip. This prevents infinite loops
         AND prevents two threads from both entering the same effect body.
@@ -382,7 +407,8 @@ class Effect(_Consumer):
 
                 async def _tracked_async():
                     try:
-                        await self_ref._fn()
+                        with batch():
+                            await self_ref._fn()
                     except Exception:
                         log.exception("Async effect execution error")
                     finally:
@@ -399,7 +425,8 @@ class Effect(_Consumer):
             else:
                 token = _active_consumer.set(self)
                 try:
-                    self._fn()
+                    with batch():
+                        self._fn()
                 except Exception:
                     log.exception("Effect execution error")
                 finally:

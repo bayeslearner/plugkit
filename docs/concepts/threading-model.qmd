@@ -169,6 +169,30 @@ isolate threads or asyncio tasks. The choice of `ContextVar` is what
 lets us claim *thread-and-task safe* without giant code changes.
 
 
+## What the engine guarantees without an explicit `batch()`
+
+`batch()` exists as an explicit escape hatch for grouping correlated
+writes that the engine *cannot* know are correlated. Everything else,
+the engine batches for you implicitly. Concretely:
+
+| Scenario | What you'd fear | What actually happens |
+|---|---|---|
+| **Diamond** (A → B and A → C, both feeding effect E) | E fires twice — once via B, once via C | E fires **once**: every `Signal.set` opens an implicit batch, the cascade dedupes E in the batch queue, the flush runs E once in creation order. Verified by `test_diamond_runs_effect_once`. |
+| **Effect fan-out order across runs** | `set` iteration is hash-randomized, so multi-effect order varies between processes | Effects flush in **creation order** (`_id` counter), which is deterministic across processes. Verified by `test_effect_order_outside_batch_matches_creation_order`. |
+| **Effect body writes two signals** | Two downstream cascades, each firing dependents | The effect body runs inside its own implicit batch, so writes coalesce — dependents see one update. Verified by `test_writes_from_effect_body_coalesce`. |
+| **Computed body writes a signal** | Same problem at the computed layer | Same fix — `_recompute` runs inside an implicit batch. |
+| **Effect reads a signal it transitively writes** | Stack overflow from re-entry | `Effect._running` guard short-circuits, and the 100-iteration loop guard in `_flush_batch` aborts pathological cycles with a logged error. |
+
+What the engine *cannot* batch for you:
+
+- **Two top-level writes that should land atomically.** `cfg.set("url", a); cfg.set("token", b)` flushes between the two — an effect that reads both will see `(new_url, old_token)` once, then `(new_url, new_token)`. If those writes are correlated, wrap them: `with batch(): cfg.set("url", a); cfg.set("token", b)`. This is the one place users still need the explicit primitive.
+- **Stale completions on async effects.** If an `async @effect` is still awaiting when its dependencies change again, the second run starts before the first finishes — the engine has no way to know whether the half-finished work is recoverable. Read everything you need before the first `await` (Vue 3 has the same restriction); for cleanup-on-supersede, an opt-in `cancel_on_supersede=True` is on the roadmap.
+
+The first three rows of the table used to be footguns the engine left
+to the caller. After the P0 reactive-correctness pass they are guarantees
+backed by tests. The remaining two are the genuine escape hatches.
+
+
 ## When the threading model is *not* enough
 
 Two cases where you still need to think:

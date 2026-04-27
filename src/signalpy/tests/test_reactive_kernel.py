@@ -731,3 +731,108 @@ class TestFastAPIIntegration:
             assert r.json()["data"]["msg"] == "Hello, Alice!"
 
         await kernel.shutdown()
+
+
+# ══════════════════════════════════════════════════════════════════
+# Implicit-batch correctness guarantees (P0)
+#
+# These pin down behavior that the engine must provide *without*
+# requiring the caller to wrap writes in `with batch():`.
+# ══════════════════════════════════════════════════════════════════
+
+class TestImplicitBatchGuarantees:
+    """Reactive correctness guarantees that hold outside explicit batch().
+
+    The engine wraps every Signal.set notification cascade and every
+    Effect/Computed body in an implicit batch. The four scenarios
+    below are the regressions that wrapping must prevent.
+    """
+
+    def test_diamond_runs_effect_once(self):
+        """A → (B, C) → E. One write to A must run E once, not twice."""
+        a = Signal(1)
+        b = Computed(lambda: a.get() + 10)
+        c = Computed(lambda: a.get() + 100)
+
+        runs = []
+        e = Effect(lambda: runs.append((b.get(), c.get())))
+        assert runs == [(11, 101)]            # initial run
+
+        a.set(2)
+        assert runs == [(11, 101), (12, 102)] # exactly one re-run, not two
+        e.dispose()
+
+    def test_effect_order_outside_batch_matches_creation_order(self):
+        """Three effects on the same signal fire in creation order, deterministically."""
+        s = Signal(0)
+        order = []
+
+        e1 = Effect(lambda: order.append(("e1", s.get())))
+        e2 = Effect(lambda: order.append(("e2", s.get())))
+        e3 = Effect(lambda: order.append(("e3", s.get())))
+        order.clear()                          # discard initial runs
+
+        s.set(7)
+        # All three fire once, in creation order — not set-iteration order
+        assert order == [("e1", 7), ("e2", 7), ("e3", 7)]
+        dispose_all(e1, e2, e3)
+
+    def test_writes_from_effect_body_coalesce(self):
+        """An effect that writes two signals causes one downstream re-run, not two."""
+        x = Signal(0)
+        y = Signal(0)
+        trigger = Signal(False)
+
+        downstream_runs = []
+        downstream = Effect(lambda: downstream_runs.append((x.get(), y.get())))
+        downstream_runs.clear()                # discard initial run
+
+        def writer():
+            if trigger.get():                  # subscribe so we re-run on set
+                x.set(x.peek() + 1)
+                y.set(y.peek() + 1)
+
+        writer_eff = Effect(writer)
+        downstream_runs.clear()                # writer's initial body had trigger=False
+
+        trigger.set(True)
+        # Writer re-runs, writes x then y, both inside the writer's auto-batch.
+        # Downstream sees ONE update — (1, 1) — not two.
+        assert downstream_runs == [(1, 1)]
+
+        writer_eff.dispose()
+        downstream.dispose()
+
+    def test_explicit_batch_still_works_and_nests(self):
+        """Explicit `with batch():` must still coalesce, and nesting is fine."""
+        a = Signal(0)
+        b = Signal(0)
+
+        runs = []
+        e = Effect(lambda: runs.append((a.get(), b.get())))
+        runs.clear()
+
+        with batch():
+            with batch():
+                a.set(1)
+                b.set(1)
+            # Inner batch exit does NOT flush (depth still > 0)
+            assert runs == []
+        # Outer exit flushes once
+        assert runs == [(1, 1)]
+        e.dispose()
+
+    def test_chained_computed_diamond(self):
+        """A → B → D and A → C → D. One A.set must flush D once."""
+        a = Signal(1)
+        b = Computed(lambda: a.get() * 2)
+        c = Computed(lambda: a.get() * 3)
+        d = Computed(lambda: b.get() + c.get())
+
+        runs = []
+        e = Effect(lambda: runs.append(d.get()))
+        assert runs == [5]                     # 1*2 + 1*3
+
+        a.set(2)
+        assert runs == [5, 10]                 # one re-run, not two
+        e.dispose()
