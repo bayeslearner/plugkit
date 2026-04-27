@@ -106,19 +106,19 @@ for the full mechanism with examples.
 
 Two opt-in escape hatches for when the default isn't right:
 
-- **`current_effect().is_stale()`** inside an async body — returns
-  `True` once a newer run has been scheduled. Use it to short-circuit
-  expensive work that's about to be redone:
+- **`is_stale()`** inside an async body — returns `True` once a newer
+  run has been scheduled. Use it to short-circuit expensive work that's
+  about to be redone:
 
   ```python
-  from signalpy.kernel import current_effect
+  from signalpy.kernel import is_stale
 
   @effect
   async def index(self):
       docs = self.rt.docs.get()
       for batch in chunked(docs, 100):
           await self._index_one(batch)
-          if current_effect().is_stale():
+          if is_stale():
               return    # newer doc set arrived; bail
   ```
 

@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
     api, computed, effect, prop, subscribe, kind, skill, exportable,
-    Signal, batch, current_effect,
+    Signal, batch, is_stale,
 )
 from signalpy.kernel.reactive import Computed, Effect, untracked, dispose_all
 from signalpy.kernel.registry import ServiceRegistry
@@ -881,7 +881,7 @@ class TestAsyncSupersede:
 
     @pytest.mark.asyncio
     async def test_is_stale_inside_async_body(self):
-        """current_effect().is_stale() flips True after a supersede."""
+        """is_stale() flips True after a supersede."""
         sig = Signal(1)
         observed: list[bool] = []
         gate_seen_first = asyncio.Event()
@@ -894,7 +894,7 @@ class TestAsyncSupersede:
                 await gate_release.wait()
                 # After the await we should see staleness from the
                 # supersede that happened while we waited.
-                observed.append(current_effect().is_stale())
+                observed.append(is_stale())
 
         e = Effect(body, lazy=True)
         e.run()
@@ -947,12 +947,12 @@ class TestAsyncSupersede:
 
         def body():
             sig.get()
-            observed.append(current_effect().is_stale())
+            observed.append(is_stale())
 
         e = Effect(body)
         sig.set(2)
         assert observed == [False, False]
         e.dispose()
 
-    def test_current_effect_returns_none_outside_effect(self):
-        assert current_effect() is None
+    def test_is_stale_returns_false_outside_effect(self):
+        assert is_stale() is False

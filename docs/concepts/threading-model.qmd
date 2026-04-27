@@ -261,14 +261,14 @@ when the work is expensive (a 5-second batch insert, a network upload)
 between awaits to skip the rest of the body voluntarily:
 
 ```python
-from signalpy.kernel import current_effect
+from signalpy.kernel import is_stale
 
 @effect
 async def index_documents(self):
     docs = self.rt.docs.get()
     for batch in chunked(docs, 100):
         await self._index_one_batch(batch)
-        if current_effect().is_stale():
+        if is_stale():
             return                        # newer doc set arrived; bail
 ```
 
@@ -368,7 +368,7 @@ async def thing(self):
     items = self.rt.items.get()
     for item in items:
         await process(item)
-        if current_effect().is_stale():
+        if is_stale():
             return
 ```
 

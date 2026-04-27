@@ -503,7 +503,7 @@ def effect(fn: Callable | None = None, *, cancel_on_supersede: bool = False):
     Without this flag (the default), the in-flight body runs to
     completion and the engine re-fires once it returns.
 
-    Inside an async body, ``current_effect().is_stale()`` reports
+    Inside an async body, ``is_stale()`` reports
     whether a newer run has been scheduled — useful for cooperative
     short-circuits between awaits.
     """

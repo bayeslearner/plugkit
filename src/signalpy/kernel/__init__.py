@@ -76,7 +76,7 @@ from signalpy.kernel.reactive import (
     Effect as ReactiveEffect,
     Signal,
     batch,
-    current_effect,
+    is_stale,
 )
 from signalpy.kernel.registry import ServiceRegistry
 from signalpy.kernel.runtime import Runtime
@@ -746,7 +746,7 @@ __all__ = [
     # Kernel
     "Kernel", "KernelState",
     # Reactive primitives
-    "Signal", "batch", "current_effect",
+    "Signal", "batch", "is_stale",
     # Core decorators (13 total)
     "component", "provides", "requires",          # core
     "computed", "effect",                          # reactive

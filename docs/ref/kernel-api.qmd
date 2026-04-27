@@ -127,27 +127,26 @@ with batch():
 # effects run ONCE here
 ```
 
-### current_effect()
+### is_stale()
 
-Returns the `Effect` currently running, or `None` if not inside one.
-Useful inside async effect bodies for cooperative supersede checks.
+Returns `True` if a newer run has been scheduled while the *currently
+running* effect's body is in flight. Returns `False` outside any
+effect, and `False` for sync effects (sync bodies can't be superseded
+mid-execution under the global lock). Useful inside async effect
+bodies for cooperative supersede checks:
 
 ```python
-from signalpy.kernel import current_effect
+from signalpy.kernel import is_stale
 
 @effect
 async def reload(self):
     items = self.rt.items.get()
     for item in items:
         await self._process(item)
-        if current_effect().is_stale():
+        if is_stale():
             return    # a newer run has been scheduled — bail
 ```
 
-### Effect.is_stale()
-
-Returns `True` if a newer run has been scheduled while this body is
-in flight. Always `False` for sync effects (sync bodies can't be
-superseded mid-execution under the global lock). See
-[Threading Model → Async effect supersede](../concepts/threading-model.qmd#async-effect-supersede-what-happens-when-notifications-race-the-body)
-for the full lifecycle.
+See [Threading Model → Async effect supersede](../concepts/threading-model.qmd#async-effect-supersede-what-happens-when-notifications-race-the-body)
+for the full lifecycle and the alternative `cancel_on_supersede=True`
+escape hatch.

@@ -363,10 +363,9 @@ class Effect(_Consumer):
     body is mid-await, the engine sets ``_pending_run`` instead of
     dropping the notification. When the body finishes, the effect runs
     again automatically — so the body always converges on the latest
-    state. Inside the body, ``effect.is_stale()`` (or
-    ``current_effect().is_stale()``) returns True once a newer run has
-    been scheduled, so the body can short-circuit voluntarily. With
-    ``cancel_on_supersede=True``, the engine calls
+    state. Inside the body, ``is_stale()`` returns True once a newer
+    run has been scheduled, so the body can short-circuit voluntarily.
+    With ``cancel_on_supersede=True``, the engine calls
     ``task.cancel()`` on the in-flight task at supersede time — the
     body sees ``CancelledError`` at the next await point.
     """
@@ -517,40 +516,32 @@ class Effect(_Consumer):
             self._disposed = True
             self._untrack_all()
 
-    def is_stale(self) -> bool:
-        """Has a newer run been scheduled while this body was in flight?
-
-        Useful inside an async effect body to short-circuit voluntarily:
-
-            @effect
-            async def reload(self):
-                url = self.rt.config.get("url")
-                await fetch(url)
-                if current_effect().is_stale():
-                    return  # newer config arrived, drop this result
-                self._apply(...)
-
-        Returns False for sync effects (they cannot be superseded
-        mid-execution under the global lock).
-        """
-        return self._pending_run
-
     def __repr__(self) -> str:
         return f"Effect({self._fn.__name__ if hasattr(self._fn, '__name__') else '...'})"
 
 
-def current_effect() -> Effect | None:
-    """Return the Effect currently executing, or None if not in one.
+def is_stale() -> bool:
+    """Has a newer run been scheduled while *the currently running effect's*
+    body is in flight?
 
-    Pairs with ``Effect.is_stale()`` for cooperative supersede inside
-    async effect bodies. Reads the same ``_active_consumer`` slot the
-    tracking machinery uses, so it works in any thread/task that the
-    engine is currently driving.
+    Useful inside an async effect body to short-circuit voluntarily:
+
+        @effect
+        async def index(self):
+            items = self.rt.items.get()
+            for item in items:
+                await process(item)
+                if is_stale():
+                    return  # newer items arrived; drop the rest
+
+    Returns ``False`` outside any effect, and ``False`` for sync effects
+    (sync bodies cannot be superseded mid-execution under the global
+    lock — the running guard catches re-entry differently).
     """
     consumer = _active_consumer.get()
     if isinstance(consumer, Effect):
-        return consumer
-    return None
+        return consumer._pending_run
+    return False
 
 
 # ── Batch ──────────────────────────────────────────────────────────
