@@ -124,18 +124,179 @@ def available_languages(self):
 
 Read `self.available_languages()` — always current, cached until the dictionary list changes.
 
-## Batching Changes
+## When two writes belong together: `batch()`
 
-Multiple signal changes can be grouped. Effects fire once at the end:
+A reactive engine fires effects after every write. That's what you
+want most of the time — but sometimes two writes belong together,
+and you don't want anyone to observe the half-updated state in
+between.
+
+### The problem, made concrete
+
+You're rotating an API endpoint and its credential at the same time.
+Both live in config, written one after the other:
+
+```python
+@component("client")
+@requires(config=IConfig)
+class APIClient:
+    @effect
+    async def reconnect(self):
+        url   = self.rt.config.get("api.url")
+        token = self.rt.config.get("api.token")
+        await self._open(url, token)        # uses BOTH on every change
+```
+
+In a deploy script:
+
+```python
+config.set("api.url",   "https://api-v2.example.com")
+config.set("api.token", "tok_v2_xxxxx")
+```
+
+Without batching, the effect runs **twice**:
+
+| Step | Trigger | Body sees | Outcome |
+|---|---|---|---|
+| 1 | `set("api.url", v2_url)` fires | `v2_url`, `v1_token` | tries to open v2 endpoint with v1 token → **auth error** |
+| 2 | `set("api.token", v2_token)` fires | `v2_url`, `v2_token` | opens correctly |
+
+The first run wasn't just wasted work — it was *wrong*. A real
+auth attempt went out with mismatched creds.
+
+### The fix
+
+Wrap the correlated writes:
 
 ```python
 from signalpy.kernel import batch
 
 with batch():
-    await kernel.hot_add(GermanDict)
-    await kernel.hot_add(SpanishDict)
-# @effect runs ONCE here, not twice
+    config.set("api.url",   "https://api-v2.example.com")
+    config.set("api.token", "tok_v2_xxxxx")
+# effect fires ONCE, with both new values
 ```
+
+Now the body sees `(v2_url, v2_token)` on its single run. No
+half-state ever exists from the effect's point of view.
+
+### When you don't need it
+
+The kernel batches automatically in two common situations, so you
+don't need to reach for `batch()`:
+
+- **Hot-add / hot-remove cascades** — a single
+  `kernel.hot_add(GermanDict)` causes one cascade; one effect run.
+- **Diamond dependencies** — if `A → B` and `A → C` and an effect
+  reads both `B` and `C`, a single update to `A` runs the effect
+  once, not twice.
+
+You only need `batch()` for **two top-level `set` calls that are
+semantically one update**. The kernel cannot guess they're related;
+you have to tell it.
+
+## Long-running async effects: when work outlives a notification
+
+Async effects open a new question: what happens if a dependency
+changes *while* the body is mid-`await`? The body has already read
+old values; the new write arrives before the body's old work has
+finished.
+
+The default is **always safe**: the engine remembers the new
+notification and re-runs the effect once the in-flight body
+completes. You write the obvious code and it works:
+
+```python
+@component("client")
+@requires(config=IConfig)
+class APIClient:
+    @effect
+    async def reconnect(self):
+        url = self.rt.config.get("api.url")
+        self._client = await connect_slowly(url)   # 2-second handshake
+```
+
+If `config.set("api.url", new_url)` fires while `connect_slowly`
+is mid-handshake, the engine queues a re-run. When the old
+handshake returns, the body re-fires with the new URL. Nothing
+gets dropped. **No code changes from you.**
+
+This works for the vast majority of cases (config reloads, fetches
+on dependency change, debounced rebuilds). Two specific situations
+need explicit handling.
+
+### When the in-flight work is expensive *and* about to be redone — `is_stale()`
+
+Default behavior runs the in-flight body all the way to the end,
+even if its result is going to be discarded. That's fine for a
+quick handshake. It's *not* fine for a 30-second batch indexing
+job that's about to be re-run with newer data.
+
+`is_stale()` lets the body bail out voluntarily between awaits:
+
+```python
+from signalpy.kernel import is_stale
+
+@component("indexer")
+@requires(docs=IDocStore, search=ISearchIndex)
+class Indexer:
+    @effect
+    async def reindex(self):
+        documents = self.rt.docs.list()           # tracked
+        for batch_of_docs in chunked(documents, 100):
+            await self.rt.search.write(batch_of_docs)
+            if is_stale():
+                return                            # newer doc set arrived
+```
+
+`is_stale()` flips to `True` the moment a notification arrives.
+Check it at any `await`-point boundary that's safe to abandon work
+at. The engine will fire the next run regardless — `is_stale()` is
+purely *your* hint that the rest of the current body is wasted.
+
+### When the in-flight work *holds a resource* — `cancel_on_supersede`
+
+Sometimes the in-flight body isn't just wasteful but *blocking*.
+A long-poll holding a connection, a file lock, a GPU lease — the
+*next* run can't even begin until the previous one releases.
+
+```python
+@component("event-stream")
+@requires(config=IConfig, events=IEventBus)
+class EventStream:
+    @effect(cancel_on_supersede=True)
+    async def stream(self):
+        url = self.rt.config.get("stream.url")
+        async with httpx.AsyncClient() as client:
+            async for event in client.stream("GET", url):
+                self.rt.events.publish(event)
+```
+
+When `config.set("stream.url", new_url)` fires:
+
+1. The engine calls `task.cancel()` on the in-flight task.
+2. The async generator inside `client.stream` raises
+   `CancelledError`. The `async with` block closes the HTTP
+   connection cleanly.
+3. The engine re-runs the effect with the new URL.
+
+The next stream connects without waiting for an event from the
+old endpoint to release the loop.
+
+### Picking which mode
+
+You almost never need to think about this. The default works for
+"fetch / reload / rebuild on dependency change" type effects.
+Reach for `is_stale()` only when the body is genuinely expensive
+*and* decomposable into checkpoint-able chunks. Reach for
+`cancel_on_supersede=True` only when the body owns a long-held
+resource the next run needs.
+
+If you find yourself reaching for *both* in the same effect, that's
+a sign the effect is doing too much — split it. See
+[Threading Model → Async effect supersede](../concepts/threading-model.qmd#async-effect-supersede-what-happens-when-notifications-race-the-body)
+for the full mechanism, including the table of which engine step
+each escape hatch controls.
 
 ## Properties & Ranking
 
