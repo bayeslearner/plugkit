@@ -7,7 +7,7 @@ subtitle: "Services come and go. Your component reacts automatically."
 
 You have two dictionaries (English, French) and a spell checker. `@requires(dictionary=IDictionary)` injects *one* dictionary. But the spell checker needs *all* dictionaries — and it needs to handle new ones appearing and old ones disappearing at runtime.
 
-In traditional frameworks (iPOPO, Spring), you'd write `@bind`/`@unbind` callbacks — manual wiring for every service that comes and goes. In SignalPy, you use `@requires(dicts=list[IDictionary])` + `@effect`. The reactive engine handles propagation automatically:
+In traditional service-oriented frameworks, you'd write `@bind`/`@unbind` callbacks — manual wiring for every service that comes and goes. In SignalPy, you use `@requires(dicts=list[IDictionary])` plus a *reactive method* called `@effect` (introduced below) — a method the kernel re-runs automatically when its tracked dependencies change. The reactive engine handles propagation:
 
 ```{mermaid}
 sequenceDiagram
@@ -80,7 +80,7 @@ Instead of separate add/remove callbacks, write one method that reads the curren
 ```python
 @component("dict-de")
 @provides(IDictionary)
-@prop("_language", "language", "DE")
+@prop("_language", "language", "DE")    # @prop(attr_name, service_property, default)
 class GermanDict:
     @lifecycle.activate
     def activate(self):
@@ -90,6 +90,11 @@ class GermanDict:
 
 await kernel.hot_add(GermanDict)
 ```
+
+::: {.callout-note}
+## `@prop(attr_name, service_property, default)`
+Three arguments: the *Python attribute* name on the instance (`self._language`), the *service-registry property* name other components match against (`"language"`), and the default value. Service properties are how the registry filters and ranks providers — see "Properties & Ranking" below.
+:::
 
 ```
   Index rebuilt: ['EN', 'FR', 'DE']
@@ -134,7 +139,12 @@ between.
 ### The problem, made concrete
 
 You're rotating an API endpoint and its credential at the same time.
-Both live in config, written one after the other:
+Both live in config, written one after the other.
+
+(`IConfig` is one of the kernel's built-in contracts from
+`signalpy.kernel.contracts` — `ConfigProvider` ships in the kernel and
+implements it. You can `@requires(config=IConfig)` without writing a
+provider yourself.)
 
 ```python
 @component("client")
@@ -200,11 +210,13 @@ you have to tell it.
 Async effects open a new question: what happens if a dependency
 changes *while* the body is mid-`await`? The body has already read
 old values; the new write arrives before the body's old work has
-finished.
+finished. We say the new run **supersedes** the old one — a fresh
+notification cancels the relevance of an in-flight body.
 
 The default is **always safe**: the engine remembers the new
 notification and re-runs the effect once the in-flight body
-completes. You write the obvious code and it works:
+(the one currently mid-`await`, not yet returned) completes. You
+write the obvious code and it works:
 
 ```python
 @component("client")
@@ -262,14 +274,14 @@ A long-poll holding a connection, a file lock, a GPU lease — the
 
 ```python
 @component("event-stream")
-@requires(config=IConfig, events=IEventBus)
+@requires(config=IConfig)
 class EventStream:
     @effect(cancel_on_supersede=True)
     async def stream(self):
         url = self.rt.config.get("stream.url")
         async with httpx.AsyncClient() as client:
             async for event in client.stream("GET", url):
-                self.rt.events.publish(event)
+                self.rt.publish("stream.event", event)   # bus event
 ```
 
 When `config.set("stream.url", new_url)` fires:

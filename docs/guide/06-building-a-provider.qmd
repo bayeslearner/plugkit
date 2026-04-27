@@ -5,7 +5,7 @@ subtitle: "Write a platform service that other components consume."
 
 ## What Is a Provider
 
-A provider is just a component that `@provides` a contract other components `@requires`. The kernel ships 9. You can write more.
+A provider is just a component that `@provides` a contract other components `@requires`. The kernel ships several built-in providers — `ConfigProvider` (`IConfig`), `LoggingProvider` (`ILogger`), `CredentialProvider` (`ICredentials`), `StorageProvider` (`IStorage`), `AuthProvider` (`IAuth`), `WorkspaceProvider` (`IWorkspace`), `TracingProvider` (`ITracer`), `APIGateway` (`IGateway`), and the transport adapters — and you can write more. See [Contracts reference](../ref/contracts.qmd) for the full list.
 
 ## Step 1: Define the Contract
 
@@ -61,6 +61,12 @@ class InMemoryCacheProvider:
 ## Step 3: Use It
 
 ```python
+from signalpy.kernel import component, requires, runnable
+from pydantic import BaseModel
+
+class SearchParams(BaseModel):
+    query: str
+
 @component("search")
 @requires(cache=ICache)
 class SearchApp:

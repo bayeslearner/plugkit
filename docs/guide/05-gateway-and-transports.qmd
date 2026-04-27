@@ -194,7 +194,7 @@ The gateway is the meeting point.
 `@api` attaches metadata — it does nothing at runtime:
 
 ```python
-@component("splunk", version="1.0", depends=["config"])
+@component("splunk", version="1.0", depends=["config"])  # <0>
 @requires(config="IConfig")
 @api("rest", prefix="/splunk", version="v1")       # <1>
 @api("mcp", name="splunk-tools")                   # <2>
@@ -208,6 +208,7 @@ class SplunkApp:
     async def reindex(self, params):                # <3>
         return {"ok": True}
 ```
+0. `depends=["config"]` — explicit activation-order constraint. Use this when you need a component to be active before yours but you don't have a `@requires` on it (e.g., you read its env-var side effects). With `@requires(config=IConfig)` already declared, this `depends=` is technically redundant; we show it to demonstrate the parameter.
 1. "Expose my runnables as REST at `/api/v1/splunk/*`"
 2. "Also expose them as MCP tools under the group `splunk-tools`"
 3. `internal=True` — on the bus but excluded from all API surfaces
@@ -318,6 +319,11 @@ class RESTTransport:
 2. Group entries by prefix — each group becomes a FastAPI router
 3. Each entry becomes a `POST` route that calls `bus.invoke(runnable_name, body)`
 
+::: {.callout-note}
+## `rt.gateway` and `rt.bus`
+`rt.gateway` is just a normal `@requires(gateway="IGateway")` injection (you'd reach it as `self.rt.gateway` with the modern `def activate(self):` style). `rt.bus`, on the other hand, is the kernel bus itself — always present on every runtime, no `@requires` needed. Use it when you need to invoke runnables by name from non-component code (transports, tests, scripts).
+:::
+
 For the Splunk example, this generates:
 
 ```
@@ -415,9 +421,10 @@ kernel.discover([
 await kernel.boot()
 
 # Get the app SignalPy created
-app = kernel.registry.require("IRestAPI").get_app()
+app = kernel.registry.require("IRestAPI").get_app()   # <1>
 uvicorn.run(app, port=8000)
 ```
+1. `kernel.registry.require(C)` returns the active service that satisfies contract `C` (raises if none). It's the script-level escape hatch for reaching a service when you don't have a component context. Inside a component, you'd `@requires(...)` and read `self.rt.X` instead. (`require_optional(C)` returns `None` rather than raising.)
 
 ### Library mode — mount into your existing app
 

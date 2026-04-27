@@ -244,8 +244,9 @@ libraries' implementations are not interchangeable. The honest
 trade-off is: if all you need are reactive cells in single-thread
 code, `reaktiv` is smaller and well-maintained, use it. If you need
 backend-service composition (DI, lifecycle, hot-reload, structural
-scoping for credentials/storage) and concurrency guarantees, that
-combination is what the SignalPy kernel supplies.
+scoping — per-component isolation of credentials and storage by
+default, not opt-in) and concurrency guarantees, that combination
+is what the SignalPy kernel supplies.
 
 The rest of the landscape is in different niches: pub-sub event
 buses (`blinker`), push streams (`RxPY`, `aioreactive`), notebook

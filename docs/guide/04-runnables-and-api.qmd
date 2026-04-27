@@ -7,6 +7,11 @@ subtitle: "Expose capabilities through one declaration. The kernel generates RES
 
 So far, other Python code calls `checker.check()` directly. But what if you want it callable via REST API? Or as an MCP tool? Or as a CLI command? Without the kernel, you'd write three implementations. With the kernel: declare it once.
 
+::: {.callout-note}
+## What "the bus" means
+The **bus** is the kernel's capability hub — a named dispatch table of callables (`"checker.check"`, `"config.get"`, …). Any component holding a reference to the kernel can `invoke(name, params)` by string name. `@runnable` is how you put a method on the bus; transport adapters (REST/MCP/CLI) read from the bus to expose it externally. Everything in this tutorial — and most of what follows — is about *the bus*.
+:::
+
 ## @runnable
 
 ```python
@@ -59,7 +64,7 @@ class SpellChecker:
 
 ::: {.callout-tip}
 ## Write it once
-The component never knows how it's called. `@runnable` puts a capability on the bus. `@api` tells transport adapters to expose it. REST endpoints, MCP tools, and CLI commands are generated from the same declaration.
+The component never knows how it's called. `@runnable` puts a capability on the bus. `@api` tells *transport adapters* — components that translate bus calls into REST/MCP/CLI traffic, covered in tutorial 5 — to expose it. REST endpoints, MCP tools, and CLI commands are generated from the same declaration.
 :::
 
 ## Internal Runnables

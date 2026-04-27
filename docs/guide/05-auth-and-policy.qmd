@@ -23,6 +23,11 @@ async def create_doc(self, params):
 
 Before this runnable executes, the bus extracts `__auth_token__` from params, authenticates via `IAuth`, and checks authorization for `"docs.write"`. Denied → `PermissionError`.
 
+::: {.callout-note}
+## What is `IAuth`?
+`IAuth` is a kernel contract (defined in `signalpy.kernel.contracts`) — it's how the bus asks "who is this caller, and may they perform action X?" You provide the answer by writing an `AuthProvider` component that `@provides(IAuth)`. The kernel ships an example JWT-based one; in dev, you can omit it entirely (see "Without IAuth" at the end).
+:::
+
 ```python
 # Without token → PermissionError
 await kernel.bus.invoke("doc-svc.create", {"title": "New"})
@@ -63,6 +68,15 @@ kernel.set_policy("untrusted-app", {
 ```
 
 Enforced on `self.rt.invoke()`. Direct `kernel.bus.invoke()` bypasses policy.
+
+::: {.callout-note}
+## Two paths to the same dispatch table — different guarantees
+`self.rt.invoke(target, params)` is the **policy-enforced** path that components use to call each other. The kernel knows the *caller* (the component owning `self.rt`), so it can check the policy table.
+
+`kernel.bus.invoke(target, params)` is the **lower-level** path: same dispatch, but no caller identity. Use it from tests, scripts, or transport adapters where the policy doesn't apply (the transport itself is what enforces auth at the edge).
+
+Auth (`requires_action` / `requires_role`) runs on **both** paths because it depends on the `__auth_token__` in params, not the caller. Policy runs on `self.rt.invoke()` only.
+:::
 
 ## Without IAuth
 

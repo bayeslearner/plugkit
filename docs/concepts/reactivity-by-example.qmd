@@ -51,6 +51,11 @@ class ConfigProvider:
         self._all_version.set(self._all_version.peek() + 1)
 ```
 
+::: {.callout-note}
+## `Signal.peek()` vs `Signal.get()`
+`get()` reads the current value *and* records a subscription if it's called inside an effect/computed — that's how reactive tracking works. `peek()` reads the value without recording a subscription. Use `peek()` when you need the value but don't want the surrounding effect to re-run when *this* signal changes (here, the `set` method is incrementing its own version, not consuming it reactively).
+:::
+
 ```python
 # Kernel — signalpy/kernel/reactive.py (excerpt)
 _active_consumer: ContextVar = ContextVar("_active_consumer", default=None)

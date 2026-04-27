@@ -58,8 +58,8 @@ graph LR
 |---|---|---|---|
 | **Reactivity Engine** | `reactive.py` | 327 | Signal, Computed, Effect, batch. The foundation. |
 | **Component Model** | `component.py` | 673 | 13 decorators. ComponentMeta. _finalize_meta. |
-| **Lifecycle Manager** | `lifecycle_manager.py` | 270 | State machine. Kahn's toposort. Effect disposal. |
-| **Service Registry** | `registry.py` | 199 | Provide/require. Ranking. Ref counting. Factories. |
+| **Lifecycle Manager** | `lifecycle_manager.py` | 270 | State machine. Dependency-ordered activation (topological sort). Effect disposal. |
+| **Service Registry** | `registry.py` | 199 | Provide/require. Ranking. Reference counting (tracks how many consumers hold each service). Factories. |
 | **Bus** | `bus.py` | 155 | invoke (req/res) + publish (events). Pluggable transport. |
 | **Runtime** | `runtime.py` | 151 | Reactive self.rt. Signal-backed __getattr__. |
 | **Traits** | `traits.py` | 173 | L0–L3 trait computation from metadata. |
@@ -196,8 +196,9 @@ The same three-stage pattern applies to every decorator:
   → `ReactiveComputed(wrapper)` at activation (lazy: only runs on first read).
 - `@runnable("name") fn` → `fn.__runnable_defs__` → `meta.runnables` →
   bus handler registration at activation.
-- `@subscribe("topic") fn` → `fn.__subscribe_defs__` → `meta.subscriptions`
-  → bus subscription at activation.
+- `@subscribe("topic") fn` (a not-yet-introduced decorator that registers
+  the method as an event handler — see [Decorators reference](../ref/decorators.qmd))
+  → `fn.__subscribe_defs__` → `meta.subscriptions` → bus subscription at activation.
 
 Once you see this pattern you stop wondering "what does `@runnable` do
 underneath" — they're all variations on *attach a marker, collect it later,
