@@ -358,15 +358,38 @@ class Effect(_Consumer):
     Reads after `await` may execute in a different microtask where
     _active_consumer has been reset. Design effects to read all signals
     upfront, then await with the captured values.
-    """
-    __slots__ = ("_fn", "_is_async", "_disposed", "_running")
 
-    def __init__(self, fn: Callable, *, lazy: bool = False) -> None:
+    Async supersede semantics: if a notification arrives while an async
+    body is mid-await, the engine sets ``_pending_run`` instead of
+    dropping the notification. When the body finishes, the effect runs
+    again automatically — so the body always converges on the latest
+    state. Inside the body, ``effect.is_stale()`` (or
+    ``current_effect().is_stale()``) returns True once a newer run has
+    been scheduled, so the body can short-circuit voluntarily. With
+    ``cancel_on_supersede=True``, the engine calls
+    ``task.cancel()`` on the in-flight task at supersede time — the
+    body sees ``CancelledError`` at the next await point.
+    """
+    __slots__ = (
+        "_fn", "_is_async", "_disposed", "_running",
+        "_pending_run", "_in_flight_task", "_cancel_on_supersede",
+    )
+
+    def __init__(
+        self,
+        fn: Callable,
+        *,
+        lazy: bool = False,
+        cancel_on_supersede: bool = False,
+    ) -> None:
         super().__init__()
         self._fn = fn
         self._is_async = inspect.iscoroutinefunction(fn)
         self._disposed = False
         self._running = False
+        self._pending_run = False
+        self._in_flight_task: asyncio.Task | None = None
+        self._cancel_on_supersede = cancel_on_supersede
         if not lazy:
             self.run()
 
@@ -396,9 +419,28 @@ class Effect(_Consumer):
         with interleaved reads.
         """
         with _lock:
-            if self._disposed or self._running:
+            if self._disposed:
+                return
+            if self._running:
+                # Already running. For ASYNC effects, mark a pending re-run
+                # so the body re-fires once the in-flight task finishes —
+                # this is the fix for "notification arrived mid-await and
+                # got silently dropped." Optionally cancel the in-flight
+                # task at the user's request.
+                #
+                # For SYNC effects, the only way to land here is re-entry
+                # from inside our own body's signal write under the global
+                # lock — keep the old silent-drop behavior, which matches
+                # what users have relied on (the body in-flight already
+                # observed the new value on its current read pass).
+                if self._is_async:
+                    self._pending_run = True
+                    if self._cancel_on_supersede and self._in_flight_task is not None:
+                        if not self._in_flight_task.done():
+                            self._in_flight_task.cancel()
                 return
             self._running = True
+            self._pending_run = False
             self._untrack_all()
 
             if self._is_async:
@@ -407,17 +449,35 @@ class Effect(_Consumer):
 
                 async def _tracked_async():
                     try:
-                        with batch():
-                            await self_ref._fn()
+                        # Note: no implicit ``with batch():`` here. ``_batch_depth``
+                        # is process-global, so a long-running async body would
+                        # hold depth>0 across its awaits and swallow other tasks'
+                        # cascades — including the very supersede notification
+                        # that should set ``_pending_run`` mid-await. The cost
+                        # of skipping the batch is that an async body that
+                        # writes two signals back-to-back may fire dependent
+                        # effects twice; if you need coalescing, wrap the
+                        # writes explicitly in ``with batch():``.
+                        await self_ref._fn()
+                    except asyncio.CancelledError:
+                        # Superseded via cancel_on_supersede. The replacement
+                        # run is already queued via _pending_run; let the
+                        # finally block schedule it.
+                        pass
                     except Exception:
                         log.exception("Async effect execution error")
                     finally:
                         with _lock:
                             self_ref._running = False
+                            self_ref._in_flight_task = None
+                            should_rerun = self_ref._pending_run and not self_ref._disposed
+                            self_ref._pending_run = False
+                        if should_rerun:
+                            self_ref.run()
 
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(_tracked_async())
+                    self._in_flight_task = loop.create_task(_tracked_async())
                 except RuntimeError:
                     self._running = False
                 finally:
@@ -432,6 +492,8 @@ class Effect(_Consumer):
                 finally:
                     _active_consumer.reset(token)
                     self._running = False
+                    # Sync effects never set _pending_run (the running-guard
+                    # only sets it for async), so no drain is needed here.
 
     def _notify(self) -> None:
         """Called by a signal when its value changes.
@@ -455,8 +517,40 @@ class Effect(_Consumer):
             self._disposed = True
             self._untrack_all()
 
+    def is_stale(self) -> bool:
+        """Has a newer run been scheduled while this body was in flight?
+
+        Useful inside an async effect body to short-circuit voluntarily:
+
+            @effect
+            async def reload(self):
+                url = self.rt.config.get("url")
+                await fetch(url)
+                if current_effect().is_stale():
+                    return  # newer config arrived, drop this result
+                self._apply(...)
+
+        Returns False for sync effects (they cannot be superseded
+        mid-execution under the global lock).
+        """
+        return self._pending_run
+
     def __repr__(self) -> str:
         return f"Effect({self._fn.__name__ if hasattr(self._fn, '__name__') else '...'})"
+
+
+def current_effect() -> Effect | None:
+    """Return the Effect currently executing, or None if not in one.
+
+    Pairs with ``Effect.is_stale()`` for cooperative supersede inside
+    async effect bodies. Reads the same ``_active_consumer`` slot the
+    tracking machinery uses, so it works in any thread/task that the
+    engine is currently driving.
+    """
+    consumer = _active_consumer.get()
+    if isinstance(consumer, Effect):
+        return consumer
+    return None
 
 
 # ── Batch ──────────────────────────────────────────────────────────

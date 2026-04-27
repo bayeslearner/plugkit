@@ -113,6 +113,7 @@ class EffectDef:
     """A reactive side effect — re-runs when tracked deps change."""
     fn: Callable
     is_async: bool = False
+    cancel_on_supersede: bool = False
 
 @dataclass
 class KindDef:
@@ -481,7 +482,7 @@ def computed(fn: Callable) -> Callable:
     return fn
 
 
-def effect(fn: Callable) -> Callable:
+def effect(fn: Callable | None = None, *, cancel_on_supersede: bool = False):
     """Declare a method as a reactive side effect.
 
     The method body reads from self.rt.* — those reads are tracked
@@ -494,9 +495,30 @@ def effect(fn: Callable) -> Callable:
 
     No need to declare dependencies — the kernel figures them out
     from what you read (like Vue's watchEffect).
+
+    For async effects, ``@effect(cancel_on_supersede=True)`` asks the
+    engine to cancel the in-flight task when a dependency changes
+    mid-await. The body sees ``CancelledError`` at the next await point,
+    and the engine then re-runs the effect with the latest values.
+    Without this flag (the default), the in-flight body runs to
+    completion and the engine re-fires once it returns.
+
+    Inside an async body, ``current_effect().is_stale()`` reports
+    whether a newer run has been scheduled — useful for cooperative
+    short-circuits between awaits.
     """
-    fn.__effect__ = EffectDef(fn=fn, is_async=inspect.iscoroutinefunction(fn))
-    return fn
+    def _decorate(f: Callable) -> Callable:
+        f.__effect__ = EffectDef(
+            fn=f,
+            is_async=inspect.iscoroutinefunction(f),
+            cancel_on_supersede=cancel_on_supersede,
+        )
+        return f
+    if fn is None:
+        # Called as @effect(...)
+        return _decorate
+    # Called as @effect with a function
+    return _decorate(fn)
 
 
 def kind(name: str, *, model: type, description: str = ""):

@@ -71,7 +71,13 @@ from signalpy.kernel.component import (
     subscribe,
 )
 from signalpy.kernel.lifecycle_manager import ComponentInstance, LifecycleManager, State
-from signalpy.kernel.reactive import Computed as ReactiveComputed, Effect as ReactiveEffect, Signal, batch
+from signalpy.kernel.reactive import (
+    Computed as ReactiveComputed,
+    Effect as ReactiveEffect,
+    Signal,
+    batch,
+    current_effect,
+)
 from signalpy.kernel.registry import ServiceRegistry
 from signalpy.kernel.runtime import Runtime
 from signalpy.kernel.traits import Level, TraitRegistry
@@ -401,7 +407,11 @@ class Kernel:
                 # Async effect: wrapper must be async for iscoroutinefunction detection
                 async def _async_wrapper(f=fn, inst=instance):
                     await f(inst)
-                re = ReactiveEffect(_async_wrapper, lazy=False)
+                re = ReactiveEffect(
+                    _async_wrapper,
+                    lazy=False,
+                    cancel_on_supersede=ed.cancel_on_supersede,
+                )
             else:
                 def _sync_wrapper(f=fn, inst=instance):
                     f(inst)
@@ -736,7 +746,7 @@ __all__ = [
     # Kernel
     "Kernel", "KernelState",
     # Reactive primitives
-    "Signal", "batch",
+    "Signal", "batch", "current_effect",
     # Core decorators (13 total)
     "component", "provides", "requires",          # core
     "computed", "effect",                          # reactive

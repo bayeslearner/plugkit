@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
     api, computed, effect, prop, subscribe, kind, skill, exportable,
-    Signal, batch,
+    Signal, batch, current_effect,
 )
 from signalpy.kernel.reactive import Computed, Effect, untracked, dispose_all
 from signalpy.kernel.registry import ServiceRegistry
@@ -836,3 +836,123 @@ class TestImplicitBatchGuarantees:
         a.set(2)
         assert runs == [5, 10]                 # one re-run, not two
         e.dispose()
+
+
+# ══════════════════════════════════════════════════════════════════
+# P1: Async effect supersede semantics
+# ══════════════════════════════════════════════════════════════════
+
+class TestAsyncSupersede:
+    """Async effects must not silently drop notifications that arrive
+    while the body is mid-await. The engine sets _pending_run and
+    re-runs the effect once the in-flight body finishes (or, with
+    cancel_on_supersede=True, cancels and re-runs immediately)."""
+
+    @pytest.mark.asyncio
+    async def test_async_pending_rerun_fires_after_inflight_finishes(self):
+        """Default behavior: notification mid-await schedules a re-run."""
+        sig = Signal(1)
+        runs: list[int] = []
+        gate_seen_first = asyncio.Event()
+        gate_release = asyncio.Event()
+
+        async def body():
+            v = sig.get()
+            runs.append(v)
+            if v == 1:
+                gate_seen_first.set()
+                await gate_release.wait()
+
+        e = Effect(body, lazy=True)
+        # First run starts and parks at the gate
+        e.run()
+        await gate_seen_first.wait()
+        # Notification while body is mid-await — must not be dropped
+        sig.set(2)
+        # Release the in-flight body; pending re-run should fire
+        gate_release.set()
+        # Yield enough times for finally + re-scheduled run to complete
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if len(runs) >= 2:
+                break
+        assert runs == [1, 2]
+        e.dispose()
+
+    @pytest.mark.asyncio
+    async def test_is_stale_inside_async_body(self):
+        """current_effect().is_stale() flips True after a supersede."""
+        sig = Signal(1)
+        observed: list[bool] = []
+        gate_seen_first = asyncio.Event()
+        gate_release = asyncio.Event()
+
+        async def body():
+            v = sig.get()
+            if v == 1:
+                gate_seen_first.set()
+                await gate_release.wait()
+                # After the await we should see staleness from the
+                # supersede that happened while we waited.
+                observed.append(current_effect().is_stale())
+
+        e = Effect(body, lazy=True)
+        e.run()
+        await gate_seen_first.wait()
+        sig.set(2)         # supersede while body waits
+        gate_release.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if observed:
+                break
+        assert observed == [True]
+        e.dispose()
+
+    @pytest.mark.asyncio
+    async def test_cancel_on_supersede_aborts_inflight(self):
+        """With cancel_on_supersede, the in-flight task is cancelled
+        and the effect re-runs with the latest value."""
+        sig = Signal(1)
+        runs: list[int] = []
+        cancelled_marker = []
+        gate_seen_first = asyncio.Event()
+
+        async def body():
+            v = sig.get()
+            runs.append(v)
+            if v == 1:
+                gate_seen_first.set()
+                try:
+                    await asyncio.sleep(10)  # long sleep — must be cancelled
+                except asyncio.CancelledError:
+                    cancelled_marker.append(True)
+                    raise
+
+        e = Effect(body, lazy=True, cancel_on_supersede=True)
+        e.run()
+        await gate_seen_first.wait()
+        sig.set(2)         # should cancel the in-flight task
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if len(runs) >= 2:
+                break
+        assert cancelled_marker == [True]
+        assert runs == [1, 2]
+        e.dispose()
+
+    def test_is_stale_false_for_sync_effect(self):
+        """Sync effects can't be superseded mid-execution; is_stale stays False."""
+        sig = Signal(1)
+        observed: list[bool] = []
+
+        def body():
+            sig.get()
+            observed.append(current_effect().is_stale())
+
+        e = Effect(body)
+        sig.set(2)
+        assert observed == [False, False]
+        e.dispose()
+
+    def test_current_effect_returns_none_outside_effect(self):
+        assert current_effect() is None
