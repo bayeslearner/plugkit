@@ -202,6 +202,109 @@ Once you see this pattern you stop wondering "what does `@runnable` do
 underneath" — they're all variations on *attach a marker, collect it later,
 do something useful with it at activation*.
 
+### Why this design — and not the more common "wrap the function" approach
+
+Most Python frameworks reach for one of these alternatives instead:
+
+```python
+# Alternative A — wrap the function in a closure
+def effect(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kw):
+        # …reactive setup runs here every call
+        return fn(self, *args, **kw)
+    wrapper._is_effect = True
+    return wrapper
+
+# Alternative B — replace the method with a descriptor
+class effect:
+    def __init__(self, fn): self.fn = fn
+    def __get__(self, instance, owner):
+        return BoundReactiveEffect(self.fn, instance)
+
+# Alternative C — register against a global app at decoration time
+def effect(fn):
+    _GLOBAL_APP.register_effect(fn)   # à la FastAPI / Flask routes
+    return fn
+```
+
+We chose the marker pattern over all three. Concrete reasons:
+
+**1. The kernel doesn't exist yet at decoration time.**
+Class bodies execute during module import. The runtime, the registry,
+`_active_consumer`, the instance's `self.rt` — none of those exist when
+`@effect` runs. The decorator literally has no Signal graph to subscribe
+to. Any "real work" at decoration time would need either a global kernel
+singleton (constitution rule #2 forbids globals) or deferred closures
+(which is a wrapper, see point 3).
+
+**2. Decoration declares *intent*; activation chooses *timing*.**
+Three reactive decorators, one mechanism: `@effect` is *eager* (run
+immediately at activation), `@computed` is *lazy* (run on first read),
+`@runnable` is *on-demand* (run per bus invocation). All three use the
+same marker pattern — they differ only in what stage 3 does with the
+plan. A wrapper-based approach bakes the timing into the decorator and
+then needs three different wrappers; our way separates declaration from
+execution and reuses the pipeline.
+
+**3. Methods stay plain callable Python.**
+`instance.on_url_change()` is a regular method call. You can unit-test
+it without booting a kernel. With a wrapper, calling the method outside
+an Effect context either no-ops, errors, or does something subtly
+different from what runs *inside* the engine — and now your unit tests
+have to construct an `_active_consumer` to test the body. Markers leave
+the function behaviorally untouched: bodies are tested as bodies, the
+reactive layer is tested separately.
+
+**4. Inheritance, `super()`, and method resolution work without surprises.**
+A subclass can override `on_url_change` and `super().on_url_change()`
+calls the parent's body. Descriptor-based decorators (Alternative B) can
+break MRO in confusing ways — the descriptor's `__get__` returns a new
+object every access, defeating identity comparisons and confusing
+introspection.
+
+**5. Re-decoration is idempotent.**
+Reload a module, hot-swap a class, pickle and unpickle, monkey-patch in
+a test — applying `@effect` again just overwrites `fn.__effect__` with
+an equivalent `EffectDef`. With wrappers you get wrappers-of-wrappers
+and stale closures over old instances. Marker = state; wrapper = state
+*and* behavior glued together.
+
+**6. Introspection tooling sees the original function.**
+`inspect.signature(fn)`, Sphinx autodoc, IDE go-to-definition,
+type-checkers reading `Callable[...]` — they all see the function you
+wrote. `functools.wraps` patches this *partially* for closure wrappers
+but never fully (e.g. `inspect.getsource` can still surprise you).
+Descriptor approaches require custom protocol support in every tool.
+
+**7. No coupling to a global kernel at import time.**
+A component class can be imported, type-checked, and unit-tested without
+ever instantiating a kernel. With Alternative C (global registration at
+decoration), `import myapp.search` has the side effect of mutating
+global state — which makes circular imports, test isolation, and
+multi-kernel scenarios all painful.
+
+The cost is honest: the kernel has to do a metaclass scan to collect the
+markers, and the activation step is where the real work happens. We
+think that's a good place for the work to happen — same place lifecycle,
+DI, ref-counting, and trait inference all run. One place to look when
+something's surprising at boot, instead of N places hidden inside N
+decorators' closures.
+
+| Concern | Marker (ours) | Wrapper closure | Descriptor | Global register |
+|---|---|---|---|---|
+| Kernel-free import | yes | yes | yes | **no** |
+| `inspect.signature` correct | yes | partial | varies | yes |
+| `super().method()` works | yes | yes | brittle | yes |
+| Idempotent re-decoration | yes | **no** | **no** | **no** |
+| Body unit-testable as plain method | yes | **no** | **no** | yes |
+| Same decorator → eager / lazy / on-demand | yes | needs 3 wrappers | needs 3 descriptors | yes |
+| Where to look when boot misbehaves | one stage 3 | N closures | N descriptors | one global |
+
+The marker pattern shows up in pytest fixtures, Hypothesis strategies,
+and Pydantic validators for the same reasons. It's the boring choice,
+which is why it's the right one here.
+
 
 ## ① Boot: the Effect runs for the first time
 
