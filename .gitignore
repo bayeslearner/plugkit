@@ -8,3 +8,4 @@ docs/.quarto/
 dist/
 build/
 .claude/scheduled_tasks.lock
+prismi3-backend/
