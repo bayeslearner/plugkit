@@ -75,6 +75,13 @@ class Bus:
     re-run when handlers are added or removed.
     """
 
+    # Suffixes LLMs commonly hallucinate onto tool names.
+    # Configurable: bus.junk_suffixes.add("_v2") if your deployment sees new ones.
+    DEFAULT_JUNK_SUFFIXES = frozenset({
+        "_ide", "_helper", "_fn", "_tool", "_func", "_api",
+        "_action", "_command", "_op", "_handler", "_service",
+    })
+
     def __init__(self) -> None:
         self._handlers: dict[str, Callable] = {}    # target → async fn
         self._schemas: dict[str, HandlerSchema] = {}  # target → schema
@@ -84,6 +91,9 @@ class Bus:
         self._target_routes: dict[str, dict[str, str]] = {}
         # Observable: Signal tracks registered handler names
         self.handler_signal: Signal[frozenset[str]] = Signal(frozenset())
+        # Name resolution config (hallucination hardening)
+        self.junk_suffixes: set[str] = set(self.DEFAULT_JUNK_SUFFIXES)
+        self.fuzzy_max_distance: int = 2
 
     # ── Registration (called by kernel during activation) ───────────
 
@@ -130,6 +140,57 @@ class Bus:
         """Get schema for a specific handler."""
         return self._schemas.get(target)
 
+    # ── Name resolution (hallucination hardening) ────────────────────
+
+    def resolve_handler_name(self, name: str) -> str | None:
+        """Try to resolve a hallucinated handler name to a real one.
+
+        Resolution order:
+          1. Strip known junk suffixes → exact match
+          2. Flip hyphens ↔ underscores → exact match
+          3. Fuzzy Levenshtein ≤ max_distance → unique best match only
+
+        Returns the resolved name, or None if no match found.
+        """
+        # 1. Strip junk suffixes
+        for suffix in self.junk_suffixes:
+            if name.endswith(suffix):
+                candidate = name[:-len(suffix)]
+                if candidate in self._handlers:
+                    log.debug("Resolved %r → %r (stripped %r)", name, candidate, suffix)
+                    return candidate
+
+        # 2. Flip hyphens ↔ underscores
+        if "-" in name:
+            flipped = name.replace("-", "_")
+            if flipped in self._handlers:
+                log.debug("Resolved %r → %r (hyphen→underscore)", name, flipped)
+                return flipped
+        if "_" in name:
+            flipped = name.replace("_", "-")
+            if flipped in self._handlers:
+                log.debug("Resolved %r → %r (underscore→hyphen)", name, flipped)
+                return flipped
+
+        # 3. Fuzzy Levenshtein (unique best match only)
+        if self.fuzzy_max_distance > 0:
+            best_name: str | None = None
+            best_dist = self.fuzzy_max_distance + 1
+            ambiguous = False
+            for registered in self._handlers:
+                d = _levenshtein(name, registered)
+                if d < best_dist:
+                    best_dist = d
+                    best_name = registered
+                    ambiguous = False
+                elif d == best_dist:
+                    ambiguous = True
+            if best_name and best_dist <= self.fuzzy_max_distance and not ambiguous:
+                log.debug("Resolved %r → %r (fuzzy, distance=%d)", name, best_name, best_dist)
+                return best_name
+
+        return None
+
     # ── Invoke (request/response) ───────────────────────────────────
 
     def register_target_route(
@@ -164,6 +225,13 @@ class Bus:
                 handler = self._handlers.get(instance_target)
                 if handler:
                     return await handler(p)
+
+        # Try name resolution (hallucination hardening)
+        resolved = self.resolve_handler_name(target)
+        if resolved:
+            handler = self._handlers.get(resolved)
+            if handler:
+                return await handler(p)
 
         # Try cross-process transports
         for transport in self._transports:
@@ -231,3 +299,24 @@ class Bus:
 
     def has_handler(self, target: str) -> bool:
         return target in self._handlers
+
+
+# ── Levenshtein distance (no external deps) ────────────────────────
+
+def _levenshtein(a: str, b: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    if len(a) < len(b):
+        return _levenshtein(b, a)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            curr.append(min(
+                prev[j + 1] + 1,      # deletion
+                curr[j] + 1,           # insertion
+                prev[j] + (ca != cb),  # substitution
+            ))
+        prev = curr
+    return prev[-1]

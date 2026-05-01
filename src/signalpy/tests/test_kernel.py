@@ -212,6 +212,61 @@ class TestBus:
         assert not bus.has_handler("x")
 
 
+class TestBusNameResolution:
+    """Hallucination hardening — resolve wrong tool names."""
+
+    @pytest.mark.asyncio
+    async def test_strip_junk_suffix(self):
+        bus = Bus()
+        async def h(p): return "ok"
+        bus.register_handler("splunk.query", h)
+        # LLM adds _tool suffix
+        result = await bus.invoke("splunk.query_tool")
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_flip_hyphen_to_underscore(self):
+        bus = Bus()
+        async def h(p): return "ok"
+        bus.register_handler("mcp_gitlab.list_issues", h)
+        # LLM uses hyphens
+        result = await bus.invoke("mcp-gitlab.list-issues")
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_levenshtein(self):
+        bus = Bus()
+        async def h(p): return "ok"
+        bus.register_handler("splunk.query", h)
+        # LLM typo: "qurey" (distance 2)
+        result = await bus.invoke("splunk.qurey")
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_ambiguous_no_match(self):
+        bus = Bus()
+        async def h1(p): return "h1"
+        async def h2(p): return "h2"
+        bus.register_handler("ab", h1)
+        bus.register_handler("ac", h2)
+        # "aa" is distance 1 from both — ambiguous, should NOT resolve
+        with pytest.raises(KeyError, match="No handler"):
+            await bus.invoke("aa")
+
+    def test_resolve_returns_none_for_no_match(self):
+        bus = Bus()
+        async def h(p): pass
+        bus.register_handler("splunk.query", h)
+        assert bus.resolve_handler_name("completely_different_name_xyz") is None
+
+    def test_custom_junk_suffix(self):
+        bus = Bus()
+        async def h(p): pass
+        bus.register_handler("splunk.query", h)
+        bus.junk_suffixes.add("_v2")
+        assert bus.resolve_handler_name("splunk.query_v2") == "splunk.query"
+
+
 class TestBusSchema:
     """Phase 0a: schema-carrying bus."""
 
