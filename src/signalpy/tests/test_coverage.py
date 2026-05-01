@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from signalpy.kernel import (
     Kernel, component, provides, requires,
     runnable, lifecycle, api, subscribe, prop, kind, skill,
-    exportable, computed, effect,
+    computed, effect,
 )
 from signalpy.kernel.bus import Bus, BusTransport
 from signalpy.kernel.registry import ServiceRegistry
@@ -391,20 +391,6 @@ class TestKernelCoverage:
         assert received == [{"v": 2}]
 
         await kernel.shutdown()
-
-    @pytest.mark.asyncio
-    async def test_exportable_decorator(self):
-        """@exportable sets metadata on component."""
-        @component("exported-app")
-        @provides("IExported")
-        @exportable(transport="jsonrpc", discovery="mdns")
-        class ExportedApp:
-            pass
-
-        from signalpy.kernel.component import get_meta, _finalize_meta
-        _finalize_meta(ExportedApp)
-        meta = get_meta(ExportedApp)
-        assert meta.exportable == {"transport": "jsonrpc", "discovery": "mdns"}
 
     @pytest.mark.asyncio
     async def test_kind_and_skill_registered(self):
@@ -943,22 +929,6 @@ class TestTraitsCoverage:
         assert result[0].name == "a"  # KERNEL < APP
         assert result[1].name == "b"
         assert result[2].name == "c"
-
-    def test_compute_exportable_trait(self):
-        """Trait computation detects exportable."""
-        from signalpy.kernel.component import ComponentMeta
-        from signalpy.kernel.traits import TraitRegistry, Level
-
-        tr = TraitRegistry()
-        # Register the needed traits
-        for name in ["identifiable", "lifecycle", "dependable", "registrable",
-                     "factoryable", "inspectable", "exportable"]:
-            tr.define(name, Level.KERNEL)
-
-        meta = ComponentMeta(factory_name="test")
-        meta.exportable = {"transport": "jsonrpc", "discovery": "mdns"}
-        traits = tr.compute(meta)
-        assert "exportable" in traits
 
     def test_compute_secured_via_auth(self):
         """SECURED trait computed from @requires(auth=IAuth)."""

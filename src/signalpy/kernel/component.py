@@ -177,7 +177,6 @@ class ComponentMeta:
     restore_fn: Callable | None = None
     restore_is_async: bool = False
     properties: dict[str, Any] = field(default_factory=dict)
-    exportable: dict[str, str] | None = None  # {transport, discovery}
     dependencies: list[str] = field(default_factory=list)  # factory names
 
     @property
@@ -553,17 +552,6 @@ def skill(name: str, *, content: str, triggers: list[str] | None = None, descrip
             name=name, content=content,
             triggers=triggers or [], description=description,
         ))
-        return cls
-    return decorator
-
-
-# ── Trait bundles (convenience composites) ─────────────────────────
-
-def exportable(*, transport: str = "jsonrpc", discovery: str = "mdns"):
-    """Mark this component's provided services for remote export."""
-    def decorator(cls: type) -> type:
-        meta = _get_meta(cls)
-        meta.exportable = {"transport": transport, "discovery": discovery}
         return cls
     return decorator
 

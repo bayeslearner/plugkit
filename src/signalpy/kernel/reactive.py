@@ -158,10 +158,6 @@ class Signal(Generic[T]):
             self._version += 1
             self._notify_subscribers()
 
-    def update(self, fn: Callable[[T], T]) -> None:
-        """Update value based on current: signal.update(lambda x: x + 1)"""
-        self.set(fn(self._value))
-
     def _notify_subscribers(self) -> None:
         """Notify all consumers that this signal changed.
 
@@ -599,21 +595,3 @@ def _flush_batch() -> None:
         iterations += 1
 
 
-# ── Utilities ──────────────────────────────────────────────────────
-
-def untracked(fn: Callable[[], T]) -> T:
-    """Execute fn without tracking any Signal reads.
-
-        val = untracked(lambda: some_signal.get())  # no dependency created
-    """
-    token = _active_consumer.set(None)
-    try:
-        return fn()
-    finally:
-        _active_consumer.reset(token)
-
-
-def dispose_all(*disposables: Effect | Computed) -> None:
-    """Dispose multiple effects/computeds at once."""
-    for d in disposables:
-        d.dispose()

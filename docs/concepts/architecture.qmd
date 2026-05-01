@@ -26,7 +26,7 @@ Non-negotiable design rules. Every decision traces back to one of these.
 graph LR
     subgraph "Axis 1: The Mechanism (irreplaceable)"
         R[reactive.py<br/>Signal/Computed/Effect]
-        C[component.py<br/>13 decorators]
+        C[component.py<br/>12 decorators]
         L[lifecycle_manager.py<br/>State machine + toposort]
         REG[registry.py<br/>Service provide/require]
         B[bus.py<br/>invoke + publish]
@@ -57,7 +57,7 @@ graph LR
 | Primitive | File | Lines | Purpose |
 |---|---|---|---|
 | **Reactivity Engine** | `reactive.py` | 327 | Signal, Computed, Effect, batch. The foundation. |
-| **Component Model** | `component.py` | 673 | 13 decorators. ComponentMeta. _finalize_meta. |
+| **Component Model** | `component.py` | 673 | 12 decorators. ComponentMeta. _finalize_meta. |
 | **Lifecycle Manager** | `lifecycle_manager.py` | 270 | State machine. Dependency-ordered activation (topological sort). Effect disposal. |
 | **Service Registry** | `registry.py` | 199 | Provide/require. Ranking. Reference counting (tracks how many consumers hold each service). Factories. |
 | **Bus** | `bus.py` | 155 | invoke (req/res) + publish (events). Pluggable transport. |
@@ -68,7 +68,7 @@ graph LR
 
 ## Decoration → Activation
 
-The 13 decorators don't *do* much at decoration time. They attach a small
+The 12 decorators don't *do* much at decoration time. They attach a small
 marker dataclass to the function and return the function unchanged. The
 real wiring happens later, in three stages.
 
@@ -340,8 +340,8 @@ The kernel auto-computes traits from what a component declares:
 | Level | Traits | How acquired |
 |---|---|---|
 | **L0 Kernel** | identifiable, lifecycle, dependable, registrable, inspectable, factoryable | Every component |
-| **L1 Platform** | observable, configurable, secured, storable, communicable, exportable | From `@requires` |
+| **L1 Platform** | observable, configurable, secured, storable, communicable | From `@requires` |
 | **L2 App** | runnable, subscribable, kinded, skillful, routable, **reactive**, adaptable | From decorators |
-| **L3 Instance** | targeted, scoped, profiled, versioned | From properties/metadata |
+| **L3 Instance** | targeted, scoped, versioned | From properties/metadata |
 
 Queryable at runtime via `kernel.status()`.

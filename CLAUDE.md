@@ -2,7 +2,7 @@
 
 ## What this is
 
-A Signal-based reactive component kernel for backend services. 13 decorators,
+A Signal-based reactive component kernel for backend services. 12 decorators,
 ~2,600 lines across 9 files. Source-embeddable package. Two-axis architecture:
 
 - **Axis 1** (`src/signalpy/kernel/`) -- the irreplaceable mechanism: reactivity
@@ -24,27 +24,27 @@ graph handles propagation automatically.
 2. Components give and take. No globals, no singletons, no ambient state.
 3. The kernel has zero business logic.
 4. Transport is an adapter, never a core concern.
-5. Distribution is transparent.
+5. Distribution can be transparent — the bus supports pluggable transports.
 6. Apps are deployment units, components are composition units.
 7. Lifecycle is explicit and managed.
-8. Every API has a client counterpart.
+8. Every API is transport-agnostic.
 9. The kernel is small. Readable in one sitting.
 
-## The 13 decorators
+## The 12 decorators
 
 ```
 @component  @provides  @requires           # core
 @computed   @effect                         # reactive
 @lifecycle.activate/deactivate/health       # lifecycle
-@runnable   @api   @exportable              # surface
+@runnable   @api                            # surface
 @prop   @kind   @skill                      # metadata
 @subscribe                                  # events
 ```
 
 Down from 21 in v1. Removed: `@requires_aggregate`, `@requires_map`,
-`@requires_best`, `@bind`, `@unbind`, `@on_change`, `@platform_app`.
-Unified `@requires` handles all injection modes. `@computed` and `@effect`
-replace manual dependency callbacks.
+`@requires_best`, `@bind`, `@unbind`, `@on_change`, `@platform_app`,
+`@exportable`. Unified `@requires` handles all injection modes.
+`@computed` and `@effect` replace manual dependency callbacks.
 
 ## How to write a component
 
@@ -293,9 +293,9 @@ await kernel.shutdown()
 | Level | Name | Traits | Inferred from |
 |-------|------|--------|---------------|
 | L0 | Kernel | identifiable, lifecycle, dependable, registrable, factoryable, inspectable | every component / `@lifecycle.health` |
-| L1 | Platform | configurable, observable, secured, storable, communicable, exportable | `@requires(config=IConfig)`, runnables, `@exportable` |
+| L1 | Platform | configurable, observable, secured, storable, communicable | `@requires(config=IConfig)`, runnables |
 | L2 | App | runnable, subscribable, kinded, skillful, routable, reactive | `@runnable`, `@subscribe`, `@kind`, `@skill`, `@api`, `@computed`/`@effect` |
-| L3 | Instance | targeted, scoped, profiled, versioned | properties, `version=` |
+| L3 | Instance | targeted, scoped, versioned | `@prop`, `@requires(creds/storage)`, `version=` |
 
 ## Project layout
 
@@ -303,7 +303,7 @@ await kernel.shutdown()
 src/signalpy/
   kernel/                  Axis 1 -- reactive kernel v2 (~2,600 lines, 9 files)
     reactive.py              Signal, Computed, Effect, batch
-    component.py             13 decorators + metadata
+    component.py             12 decorators + metadata
     runtime.py               ReactiveRuntime with signal-backed injection
     registry.py              ServiceRegistry with ref counting
     bus.py                   invoke/publish/subscribe

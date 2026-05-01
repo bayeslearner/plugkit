@@ -1,6 +1,6 @@
 ---
 title: "Decorators"
-subtitle: "All 13 decorators — signature, parameters, example."
+subtitle: "All 12 decorators — signature, parameters, example."
 ---
 
 > **What do these decorators actually do to the function?** Almost nothing
@@ -204,14 +204,6 @@ Declare an API surface for a transport. Stack multiple for multi-transport.
 @api("mcp", name="search-tools")
 class SearchApp: ...
 ```
-
-### @exportable
-
-```python
-@exportable(*, transport: str = "jsonrpc", discovery: str = "mdns")
-```
-
-Mark for remote service export (cross-process).
 
 ## Metadata
 

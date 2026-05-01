@@ -103,8 +103,6 @@ class TraitRegistry:
             traits.append(SECURED)
         if "IStorage" in contracts:
             traits.append(STORABLE)
-        if meta.exportable:
-            traits.append(EXPORTABLE)
         # Communicable — every component with runnables or subscriptions uses the bus
         if meta.runnables or meta.subscriptions:
             traits.append(COMMUNICABLE)
@@ -127,6 +125,10 @@ class TraitRegistry:
         # L3 — inferred from properties/metadata
         if meta.version and meta.version != "0.0.0":
             traits.append(VERSIONED)
+        if meta.property_defs:
+            traits.append(TARGETED)
+        if "ICredentials" in contracts or "IStorage" in contracts:
+            traits.append(SCOPED)
 
         return traits
 
@@ -153,7 +155,6 @@ CONFIGURABLE = "configurable"
 SECURED = "secured"
 STORABLE = "storable"
 COMMUNICABLE = "communicable"
-EXPORTABLE = "exportable"
 
 # ── L2 trait names (registered by apps) ─────────────────────────────
 
@@ -169,5 +170,4 @@ REACTIVE = "reactive"    # has @computed or @effect
 
 TARGETED = "targeted"
 SCOPED = "scoped"
-PROFILED = "profiled"
 VERSIONED = "versioned"

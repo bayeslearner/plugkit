@@ -74,7 +74,7 @@ When you write `self.rt.config.get("url")` inside an `@effect`:
 @component  @provides  @requires           # core
 @computed   @effect                         # reactive
 @lifecycle.activate/deactivate/health       # lifecycle
-@runnable   @api   @exportable              # surface
+@runnable   @api                            # surface
 @prop   @kind   @skill                      # metadata
 @subscribe                                  # events
 ```
@@ -98,7 +98,7 @@ Tutorials teach one concept at a time. Each builds on the last.
 | Page | What's in it |
 |------|-------------|
 | [Traits (L0–L3)](ref/traits.qmd) | 23 traits across 4 levels — what each is, how you get it, example |
-| [Decorators](ref/decorators.qmd) | All 13 decorators — signature, parameters, example |
+| [Decorators](ref/decorators.qmd) | All 12 decorators — signature, parameters, example |
 | [Contracts](ref/contracts.qmd) | 8 Protocol interfaces — methods, providers, usage |
 | [Kernel API](ref/kernel-api.qmd) | `Kernel`, `ServiceRegistry`, `Bus`, `Runtime`, `Signal`/`Computed`/`Effect` |
 
@@ -139,7 +139,7 @@ Read in this order — each builds on the last:
 | | |
 |---|---|
 | Kernel core | ~2600 lines, 9 files, zero required dependencies |
-| Decorators | 13: `@component`, `@provides`, `@requires`, `@computed`, `@effect`, `@runnable`, `@api`, `@lifecycle.*`, `@prop`, `@kind`, `@skill`, `@subscribe`, `@exportable` |
+| Decorators | 12: `@component`, `@provides`, `@requires`, `@computed`, `@effect`, `@runnable`, `@api`, `@lifecycle.*`, `@prop`, `@kind`, `@skill`, `@subscribe` |
 | Reactivity | Signal, Computed, Effect — Vue 3-style, zero dependencies |
 | Providers | 9: config, logging, credentials, storage, auth, tracing, workspace, gateway, configadmin |
 | Adapters | 3: REST (FastAPI), MCP, CLI (Click) |

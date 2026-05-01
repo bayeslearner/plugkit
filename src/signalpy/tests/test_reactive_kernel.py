@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
-    api, computed, effect, prop, subscribe, kind, skill, exportable,
+    api, computed, effect, prop, subscribe, kind, skill,
     Signal, batch, is_stale,
 )
-from signalpy.kernel.reactive import Computed, Effect, untracked, dispose_all
+from signalpy.kernel.reactive import Computed, Effect
 from signalpy.kernel.registry import ServiceRegistry
 from signalpy.kernel.runtime import Runtime
 from signalpy.kernel.bus import Bus
@@ -31,11 +31,6 @@ class TestSignal:
         assert s.get() == 0
         s.set(5)
         assert s.get() == 5
-
-    def test_update(self):
-        s = Signal(10)
-        s.update(lambda x: x + 1)
-        assert s.get() == 11
 
     def test_peek_no_tracking(self):
         s = Signal("hello")
@@ -149,27 +144,6 @@ class TestBatch:
                 s.set(2)
             # inner batch ends but outer still active
         assert log == [0, 2]
-
-
-class TestUntracked:
-    def test_no_dependency(self):
-        s = Signal("tracked")
-        log = []
-        e = Effect(lambda: log.append(untracked(lambda: s.get())))
-        s.set("changed")
-        assert len(log) == 1
-
-
-class TestDisposeAll:
-    def test_disposes_multiple(self):
-        s = Signal(0)
-        log1, log2 = [], []
-        e1 = Effect(lambda: log1.append(s.get()))
-        e2 = Effect(lambda: log2.append(s.get()))
-        dispose_all(e1, e2)
-        s.set(99)
-        assert len(log1) == 1
-        assert len(log2) == 1
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -775,7 +749,9 @@ class TestImplicitBatchGuarantees:
         s.set(7)
         # All three fire once, in creation order — not set-iteration order
         assert order == [("e1", 7), ("e2", 7), ("e3", 7)]
-        dispose_all(e1, e2, e3)
+        e1.dispose()
+        e2.dispose()
+        e3.dispose()
 
     def test_writes_from_effect_body_coalesce(self):
         """An effect that writes two signals causes one downstream re-run, not two."""

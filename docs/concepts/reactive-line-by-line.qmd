@@ -685,15 +685,11 @@ in the reactive graph.
 | Computed | 172-278 | Lazy cached value, push-pull, propagation |
 | Effect | 283-373 | Side-effect runner, async support, re-entrancy |
 | Batch | 378-428 | Grouping, ordering, flush loop |
-| Utilities | 433-448 | `untracked()`, `dispose_all()` |
 | **Total** | **~350** | |
 
 That's the entire reactive engine.
 
 ::: {.callout-note}
-## The four less-used Signal/utility methods
-- **`Signal.update(fn)`** — convenience for `sig.set(fn(sig.peek()))`. Useful for mutations like increments without an extra `peek` line.
-- **`Signal.peek()`** — read the value without recording a subscription (won't make the surrounding effect depend on this signal).
-- **`untracked(fn)`** — runs `fn()` with `_active_consumer` cleared, so any signal reads inside it don't create subscriptions. The function-form sibling of `peek()`.
-- **`dispose_all(items)`** — calls `dispose()` on each Effect/Computed in `items`. Convenience for tearing down a batch of reactive nodes (e.g., on component deactivation).
+## Signal.peek()
+**`Signal.peek()`** — read the value without recording a subscription (won't make the surrounding effect depend on this signal). Used internally by the runtime and useful in lifecycle callbacks where you need a value without creating a reactive dependency.
 :::

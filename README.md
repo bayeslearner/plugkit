@@ -92,9 +92,9 @@ know which transport serves them.
   is a tracked read — when config changes, the effect re-runs automatically.
   No manual callbacks, no `@on_change`, no re-injection hacks.
 
-- **13 decorators total.** `@component`, `@provides`, `@requires`, `@computed`,
+- **12 decorators total.** `@component`, `@provides`, `@requires`, `@computed`,
   `@effect`, `@lifecycle.*`, `@runnable`, `@api`, `@subscribe`, `@kind`, `@skill`,
-  `@prop`, `@exportable`. That's the whole API surface.
+  `@prop`. That's the whole API surface.
 
 - **Two-axis architecture.** Axis 1 (the kernel) is irreplaceable mechanism: ~2,600
   LOC across 9 files, zero required dependencies. Axis 2 is replaceable vocabulary:
@@ -132,7 +132,7 @@ src/signalpy/
 │                            credentials, storage, auth, tracing, gateway, …)
 ├── adapters/                Axis 2 — transport adapters (REST/FastAPI, MCP, CLI/Click)
 ├── examples/                Progressive examples 01–07
-└── tests/                   298 tests
+└── tests/                   ~290 tests
 ```
 
 ## Constitution (the non-negotiable rules)
@@ -141,10 +141,10 @@ src/signalpy/
 2. Components give and take. No globals, singletons, or ambient state.
 3. The kernel has zero business logic.
 4. Transport is an adapter, never a core concern.
-5. Distribution is transparent — in-process or cross-network, the caller doesn't know.
+5. Distribution can be transparent — the bus is designed for pluggable transports.
 6. Apps are deployment units, components are composition units.
 7. Lifecycle is explicit and managed.
-8. Every API has a client counterpart.
+8. Every API is transport-agnostic.
 9. The kernel is small. Readable in one sitting.
 
 ## Inspiration

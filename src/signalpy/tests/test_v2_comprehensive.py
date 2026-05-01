@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
-    api, computed, effect, prop, subscribe, kind, skill, exportable,
+    api, computed, effect, prop, subscribe, kind, skill,
     Signal, batch,
 )
 from signalpy.kernel.reactive import Computed, Effect

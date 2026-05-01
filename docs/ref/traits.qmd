@@ -20,7 +20,6 @@ Traits are computed from what a component declares. You don't label them — the
 | secured | L1 | `@requires(auth=IAuth)` | Has auth/credentials |
 | storable | L1 | `@requires(storage=IStorage)` | Has storage |
 | communicable | L1 | has `@runnable` or `@subscribe` | Uses the bus |
-| exportable | L1 | `@exportable()` | Can be exported remotely |
 | runnable | L2 | `@runnable` | Has callable functions |
 | subscribable | L2 | `@subscribe` | Reacts to events |
 | kinded | L2 | `@kind` | Defines data schemas |
@@ -28,9 +27,8 @@ Traits are computed from what a component declares. You don't label them — the
 | routable | L2 | `@api` | Has API surface declarations |
 | reactive | L2 | `@computed` or `@effect` | Has reactive properties/effects |
 | adaptable | L2 | (aspirational) | Wraps external tools |
-| targeted | L3 | `properties.target` | Parameterized with a target |
-| scoped | L3 | (aspirational) | Workspace-scoped |
-| profiled | L3 | (aspirational) | Activation profile |
+| targeted | L3 | has `@prop` declarations | Parameterized with properties |
+| scoped | L3 | `@requires(creds=ICredentials)` or `@requires(storage=IStorage)` | Uses structurally-scoped services |
 | versioned | L3 | `version != "0.0.0"` | Has a version |
 
 ## How Traits Are Computed

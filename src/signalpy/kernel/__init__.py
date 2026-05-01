@@ -58,7 +58,6 @@ from signalpy.kernel.component import (
     component,
     computed,
     effect,
-    exportable,
     get_meta,
     has_meta,
     kind,
@@ -747,11 +746,11 @@ __all__ = [
     "Kernel", "KernelState",
     # Reactive primitives
     "Signal", "batch", "is_stale",
-    # Core decorators (13 total)
+    # Core decorators (12 total)
     "component", "provides", "requires",          # core
     "computed", "effect",                          # reactive
     "lifecycle",                                   # lifecycle (.activate, .deactivate, .health)
-    "runnable", "api", "exportable",               # surface
+    "runnable", "api",                             # surface
     "prop", "kind", "skill",                       # metadata
     "subscribe",                                   # events
     # Infrastructure

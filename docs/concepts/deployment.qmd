@@ -84,17 +84,4 @@ Kernel = agent's tool provider. MCPTransport exposes runnables as MCP tools.
 
 The Bus supports pluggable `BusTransport` — a class that implements the bus's transport interface (resolve/invoke a remote target) and is registered with the kernel bus alongside local handlers. When `invoke()` can't find a local handler, it tries registered transports in order.
 
-`@exportable(transport="jsonrpc", discovery="mdns")` marks a component for remote export — the counterpart to `@provides` for cross-process visibility. A RemoteAdapter transport would read this metadata and register proxy handlers on remote kernels so they can `invoke()` this component as if it were local.
-
-```python
-# Machine A — provides
-@component("splunk")
-@provides("ISplunkQuery")
-@exportable(transport="jsonrpc", discovery="mdns")
-class SplunkApp: ...
-
-# Machine B — consumes (code identical to local)
-@component("system")
-@requires(splunk="ISplunkQuery")  # kernel finds via mDNS, injects proxy
-class SystemApp: ...
-```
+The framework for remote export is designed but not yet implemented. A `BusTransport` subclass would need to provide the `resolve()` and `invoke()` methods for a specific wire protocol (JSON-RPC, gRPC, etc.). The component code on both sides remains identical — only the transport layer changes.
