@@ -212,6 +212,130 @@ class TestBus:
         assert not bus.has_handler("x")
 
 
+class TestBusSchema:
+    """Phase 0a: schema-carrying bus."""
+
+    def test_register_with_schema(self):
+        from signalpy.kernel.bus import HandlerSchema
+        bus = Bus()
+        async def h(p): pass
+        schema = HandlerSchema(name="greet", description="Say hello", provider="greeter")
+        bus.register_handler("greeter.greet", h, schema=schema)
+        schemas = bus.schemas()
+        assert len(schemas) == 1
+        assert schemas[0].name == "greet"
+        assert schemas[0].description == "Say hello"
+        assert schemas[0].provider == "greeter"
+
+    def test_schemas_excludes_internal(self):
+        from signalpy.kernel.bus import HandlerSchema
+        bus = Bus()
+        async def h(p): pass
+        bus.register_handler("public.op", h, schema=HandlerSchema(name="op", description="Public"))
+        bus.register_handler("internal.op", h, schema=HandlerSchema(name="op", internal=True))
+        assert len(bus.schemas()) == 1
+        assert len(bus.schemas(include_internal=True)) == 2
+
+    def test_unregister_removes_schema(self):
+        from signalpy.kernel.bus import HandlerSchema
+        bus = Bus()
+        async def h(p): pass
+        bus.register_handler("x.y", h, schema=HandlerSchema(name="y"))
+        bus.unregister_handler("x.y")
+        assert bus.schemas() == []
+
+    def test_get_schema(self):
+        from signalpy.kernel.bus import HandlerSchema
+        bus = Bus()
+        async def h(p): pass
+        bus.register_handler("x.y", h, schema=HandlerSchema(name="y", description="test"))
+        assert bus.get_schema("x.y").description == "test"
+        assert bus.get_schema("nonexistent") is None
+
+
+class TestBusObservable:
+    """Phase 0b: observable bus via Signal."""
+
+    def test_handler_signal_updates_on_register(self):
+        bus = Bus()
+        async def h(p): pass
+        assert bus.handler_signal.get() == frozenset()
+        bus.register_handler("a.b", h)
+        assert "a.b" in bus.handler_signal.get()
+
+    def test_handler_signal_updates_on_unregister(self):
+        bus = Bus()
+        async def h(p): pass
+        bus.register_handler("a.b", h)
+        bus.unregister_handler("a.b")
+        assert bus.handler_signal.get() == frozenset()
+
+    def test_effect_fires_on_handler_change(self):
+        from signalpy.kernel.reactive import Effect
+        bus = Bus()
+        log = []
+
+        def track():
+            names = bus.handler_signal.get()
+            log.append(frozenset(names))
+
+        Effect(track)
+        assert log == [frozenset()]  # initial run
+
+        async def h(p): pass
+        bus.register_handler("x.y", h)
+        assert log[-1] == frozenset({"x.y"})
+
+        bus.register_handler("a.b", h)
+        assert log[-1] == frozenset({"x.y", "a.b"})
+
+        bus.unregister_handler("x.y")
+        assert log[-1] == frozenset({"a.b"})
+
+
+class TestKernelGraph:
+    """Phase 0c: kernel.graph() introspection."""
+
+    @pytest.mark.asyncio
+    async def test_graph_has_components_and_edges(self):
+        from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle
+        from signalpy.providers.config import ConfigProvider
+        from signalpy.providers.logging_provider import LoggingProvider
+
+        @component("test-app", version="1.0")
+        @requires(config="IConfig")
+        @provides("ITestService")
+        class TestApp:
+            @lifecycle.activate
+            def activate(self): pass
+
+            @runnable("do_thing", params=None, description="Does a thing")
+            async def do_thing(self, params):
+                return {"ok": True}
+
+        kernel = Kernel()
+        kernel.discover([ConfigProvider, LoggingProvider, TestApp])
+        await kernel.boot()
+
+        g = kernel.graph()
+        assert "test-app" in g["components"]
+        assert g["components"]["test-app"]["provides"] == ["ITestService"]
+        assert g["components"]["test-app"]["requires"] == {"config": "IConfig"}
+
+        # Dependency edge: config → test-app via IConfig
+        dep_edges = g["edges"]["dependencies"]
+        config_to_test = [e for e in dep_edges if e["to"] == "test-app" and e["contract"] == "IConfig"]
+        assert len(config_to_test) >= 1
+
+        # Bus handler registered with schema
+        bus_handlers = g["bus"]["handlers"]
+        test_handler = [h for h in bus_handlers if h["target"] == "test-app.do_thing"]
+        assert len(test_handler) == 1
+        assert test_handler[0]["description"] == "Does a thing"
+
+        await kernel.shutdown()
+
+
 # ── LifecycleManager ──────────────────────────────────────────────
 
 

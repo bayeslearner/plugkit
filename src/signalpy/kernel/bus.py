@@ -2,6 +2,9 @@
 
 Locality-transparent: in-process by default, pluggable transport
 for cross-process (JSON-RPC, Dapr, etc.).
+
+The bus carries schemas alongside handlers (Phase 0a) and is observable
+via a Signal tracking registered handler names (Phase 0b).
 """
 from __future__ import annotations
 
@@ -9,7 +12,38 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from signalpy.kernel.reactive import Signal
+
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class HandlerSchema:
+    """Schema metadata for a bus handler — enables tool discovery."""
+    name: str
+    description: str = ""
+    params_model: type | None = None
+    return_type: type | None = None
+    internal: bool = False
+    destructive: bool = False
+    requires_action: str = ""
+    requires_role: str = ""
+    provider: str = ""  # component that registered this handler
+
+    @classmethod
+    def from_runnable_def(cls, rd: Any, provider_name: str = "") -> HandlerSchema:
+        """Build from a RunnableDef (kernel activation path)."""
+        return cls(
+            name=rd.name,
+            description=rd.description,
+            params_model=rd.params_model,
+            return_type=rd.return_type,
+            internal=rd.internal,
+            destructive=rd.destructive,
+            requires_action=rd.requires_action,
+            requires_role=rd.requires_role,
+            provider=provider_name,
+        )
 
 
 @dataclass
@@ -17,7 +51,7 @@ class BusTransport:
     """Pluggable transport for cross-process bus calls.
 
     The default transport is in-process (direct function call).
-    RemoteAdapter / DaprAdapter provide cross-process transports.
+    Subclass for JSON-RPC, gRPC, etc.
     """
     name: str = "local"
 
@@ -31,33 +65,70 @@ class BusTransport:
 class Bus:
     """Cross-component communication bus.
 
-    invoke(target, params) → result    Request/response
+    invoke(target, params) → result    Request/response (weak dependency)
     publish(event_type, data)          Fan-out to all subscribers
     subscribe(event_type, handler)     Register an event handler
+    schemas()                          Discover all registered handlers + metadata
+
+    The bus is observable: `self.handler_signal` is a Signal containing the
+    frozenset of registered handler names. Any @effect that reads it will
+    re-run when handlers are added or removed.
     """
 
     def __init__(self) -> None:
         self._handlers: dict[str, Callable] = {}    # target → async fn
+        self._schemas: dict[str, HandlerSchema] = {}  # target → schema
         self._subscribers: dict[str, list[Callable]] = {}  # event_type → [handlers]
         self._transports: list[BusTransport] = []
         # Target routing: factory_name.runnable → {target → instance_name.runnable}
         self._target_routes: dict[str, dict[str, str]] = {}
+        # Observable: Signal tracks registered handler names
+        self.handler_signal: Signal[frozenset[str]] = Signal(frozenset())
 
     # ── Registration (called by kernel during activation) ───────────
 
-    def register_handler(self, target: str, handler: Callable) -> None:
-        """Register an invocation handler for a target name."""
+    def register_handler(
+        self,
+        target: str,
+        handler: Callable,
+        schema: HandlerSchema | None = None,
+    ) -> None:
+        """Register an invocation handler for a target name.
+
+        Optionally attach schema metadata for tool discovery.
+        """
         if target in self._handlers:
             raise ValueError(f"Handler already registered for {target!r}")
         self._handlers[target] = handler
+        if schema is not None:
+            self._schemas[target] = schema
+        self.handler_signal.set(frozenset(self._handlers.keys()))
         log.debug("Bus handler registered: %s", target)
 
     def unregister_handler(self, target: str) -> None:
         self._handlers.pop(target, None)
+        self._schemas.pop(target, None)
+        self.handler_signal.set(frozenset(self._handlers.keys()))
 
     def add_transport(self, transport: BusTransport) -> None:
         """Add a cross-process transport (for remote invocations)."""
         self._transports.append(transport)
+
+    # ── Schema discovery ────────────────────────────────────────────
+
+    def schemas(self, include_internal: bool = False) -> list[HandlerSchema]:
+        """Return all registered handler schemas.
+
+        This is the discovery mechanism — gateway, agent, and transports
+        read from here to know what operations are available.
+        """
+        if include_internal:
+            return list(self._schemas.values())
+        return [s for s in self._schemas.values() if not s.internal]
+
+    def get_schema(self, target: str) -> HandlerSchema | None:
+        """Get schema for a specific handler."""
+        return self._schemas.get(target)
 
     # ── Invoke (request/response) ───────────────────────────────────
 

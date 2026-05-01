@@ -39,7 +39,7 @@ import logging
 from enum import Enum, auto
 from typing import Any, Callable
 
-from signalpy.kernel.bus import Bus
+from signalpy.kernel.bus import Bus, HandlerSchema
 from signalpy.kernel.component import (
     APIDef,
     ComponentMeta,
@@ -337,10 +337,13 @@ class Kernel:
         for contract in ci.meta.provides:
             self.registry.provide(contract, ci.instance, ci.name, svc_properties)
 
-        # Register bus handlers for runnables
+        # Register bus handlers for runnables (with schema for discovery)
         for rd in ci.meta.runnables:
             handler_name = f"{ci.name}.{rd.name}"
-            self.bus.register_handler(handler_name, self._make_bus_handler(rd, ci.instance, ci))
+            schema = HandlerSchema.from_runnable_def(rd, provider_name=ci.name)
+            self.bus.register_handler(
+                handler_name, self._make_bus_handler(rd, ci.instance, ci), schema=schema,
+            )
             target_value = ci.properties.get("target")
             if target_value and ci.name != ci.meta.factory_name:
                 factory_handler = f"{ci.meta.factory_name}.{rd.name}"
@@ -701,6 +704,86 @@ class Kernel:
             "bus_handlers": self.bus.handlers,
             "kinds": list(self.kinds.keys()),
             "skills": list(self.skills.keys()),
+        }
+
+    def graph(self) -> dict[str, Any]:
+        """Return the live component graph — all relationships at a glance.
+
+        Exposes:
+        - dependency edges (who @requires whom — boot order)
+        - service edges (who @provides what, who consumes it)
+        - bus handlers (what operations are registered, with schemas)
+        - event subscriptions (who publishes, who subscribes)
+        - reactive edges (computed/effect declarations per component)
+        """
+        components = {}
+        dependency_edges = []
+        service_edges = []
+
+        for ci in self.lifecycle.all_instances():
+            requires_map = dict(ci.meta.requires)  # {attr: contract}
+            components[ci.name] = {
+                "factory": ci.meta.factory_name,
+                "state": ci.state.name,
+                "provides": list(ci.meta.provides),
+                "requires": requires_map,
+                "runnables": [r.name for r in ci.meta.runnables],
+                "reactive": {
+                    "computed": [cd.fn.__name__ for cd in ci.meta.computed_defs],
+                    "effects": [ed.fn.__name__ for ed in ci.meta.effect_defs],
+                },
+            }
+
+            # Dependency edges: this component requires contracts provided by others
+            for attr, contract in requires_map.items():
+                # Find who provides this contract
+                for entry in self.registry.entries_for(contract):
+                    dependency_edges.append({
+                        "from": entry.provider_name,
+                        "to": ci.name,
+                        "contract": contract,
+                        "type": "strong",
+                    })
+
+            # Service provision edges
+            for contract in ci.meta.provides:
+                service_edges.append({
+                    "provider": ci.name,
+                    "contract": contract,
+                })
+
+        # Bus handlers with schemas
+        bus_handlers = []
+        for target in self.bus.handlers:
+            schema = self.bus.get_schema(target)
+            entry = {"target": target}
+            if schema:
+                entry["provider"] = schema.provider
+                entry["description"] = schema.description
+                entry["internal"] = schema.internal
+            bus_handlers.append(entry)
+
+        # Event subscriptions
+        event_edges = []
+        for event_type in self.bus.event_types:
+            event_edges.append({
+                "event": event_type,
+                "subscriber_count": len(
+                    self.bus._subscribers.get(event_type, [])
+                ),
+            })
+
+        return {
+            "components": components,
+            "edges": {
+                "dependencies": dependency_edges,
+                "services": service_edges,
+            },
+            "bus": {
+                "handlers": bus_handlers,
+                "handler_count": len(bus_handlers),
+            },
+            "events": event_edges,
         }
 
 
