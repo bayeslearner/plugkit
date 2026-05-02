@@ -72,6 +72,11 @@ class LifecycleManager:
         log.debug("Factory replaced: %s", meta.factory_name)
         return meta
 
+    def unregister_factory(self, factory_name: str) -> None:
+        """Unregister a factory so it can be re-added later."""
+        self._factories.pop(factory_name, None)
+        log.debug("Factory unregistered: %s", factory_name)
+
     def remove_instance(self, name: str) -> None:
         """Remove an instance from tracking (after deactivation)."""
         self._instances.pop(name, None)

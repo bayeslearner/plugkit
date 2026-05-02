@@ -557,8 +557,12 @@ class Kernel:
         ci = self.lifecycle.get_instance(name)
         if ci is None:
             raise KeyError(f"No instance named {name!r}")
-        for rd in ci.meta.runnables:
-            self.bus.unregister_handler(f"{ci.name}.{rd.name}")
+
+        from signalpy.kernel.reactive import batch as _batch
+        with _batch():
+            for rd in ci.meta.runnables:
+                self.bus.unregister_handler(f"{ci.name}.{rd.name}")
+
         for entry in self.registry.query():
             if entry.provider_name == ci.name:
                 self.registry.unprovide(entry)
@@ -566,6 +570,16 @@ class Kernel:
         for attr_name, contract in ci.meta.requires.items():
             self.registry.release(contract, ci.name)
         await self.lifecycle.deactivate(name, self._build_runtime)
+
+        # Remove instance + factory so the class can be re-added
+        self.lifecycle.remove_instance(name)
+        factory_name = ci.meta.factory_name
+        # Only unregister factory if no other instances of this factory remain
+        remaining = [c for c in self.lifecycle.all_instances()
+                     if c.meta.factory_name == factory_name]
+        if not remaining:
+            self.lifecycle.unregister_factory(factory_name)
+
         gw = self.registry.require_optional("IGateway")
         if gw and hasattr(gw, "_rebuild"):
             gw._rebuild()
