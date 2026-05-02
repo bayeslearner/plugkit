@@ -299,13 +299,22 @@ class Kernel:
 
             validated = Params(params)
             if runnable_def.params_model is not None:
-                try:
-                    model = runnable_def.params_model
-                    if hasattr(model, "model_validate"):
+                model = runnable_def.params_model
+                # Validate if it's a Pydantic subclass with actual fields.
+                # Skip bare BaseModel (no fields) — used as a "no params" marker.
+                _is_real_model = (
+                    hasattr(model, "model_validate")
+                    and hasattr(model, "model_fields")
+                    and (model.__name__ != "BaseModel")
+                )
+                if _is_real_model:
+                    try:
                         obj = model.model_validate(params)
                         validated = Params(obj.model_dump())
-                except Exception:
-                    pass
+                    except Exception as ve:
+                        raise ValueError(
+                            f"Invalid params for {ci.name}.{runnable_def.name}: {ve}"
+                        ) from ve
 
             if wants_rt:
                 rt = self._build_runtime(ci)
@@ -337,7 +346,14 @@ class Kernel:
         for contract in ci.meta.provides:
             self.registry.provide(contract, ci.instance, ci.name, svc_properties)
 
-        # Register bus handlers for runnables (with schema for discovery)
+        # Register bus handlers for runnables (with schema for discovery).
+        # Batch so handler_signal fires ONCE per component, not per-handler.
+        from signalpy.kernel.reactive import batch as _batch
+        with _batch():
+            self._register_bus_handlers(ci)
+
+    def _register_bus_handlers(self, ci: ComponentInstance) -> None:
+        """Register bus handlers — split out so batch() wraps all at once."""
         for rd in ci.meta.runnables:
             handler_name = f"{ci.name}.{rd.name}"
             schema = HandlerSchema.from_runnable_def(rd, provider_name=ci.name)
