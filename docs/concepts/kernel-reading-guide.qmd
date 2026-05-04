@@ -1,0 +1,572 @@
+---
+title: "Reading the Kernel: A Complete Guide"
+subtitle: "Every file in src/signalpy/kernel/, explained from scratch."
+---
+
+This page walks you through the entire kernel source code. It assumes you
+know Python but nothing about this project. By the end you will understand
+every file, every data structure, and how they connect.
+
+The kernel is 9 files, ~3,100 lines. You can read the whole thing in one
+sitting. Here is the order that will make the most sense.
+
+## Reading order
+
+```{mermaid}
+flowchart LR
+    A["1. reactive.py<br/><i>~600 lines</i>"] --> B["2. component.py<br/><i>~750 lines</i>"]
+    B --> C["3. contracts.py<br/><i>~80 lines</i>"]
+    C --> D["4. runtime.py<br/><i>~170 lines</i>"]
+    D --> E["5. registry.py<br/><i>~200 lines</i>"]
+    E --> F["6. bus.py<br/><i>~400 lines</i>"]
+    F --> G["7. lifecycle_manager.py<br/><i>~560 lines</i>"]
+    G --> H["8. traits.py<br/><i>~180 lines</i>"]
+    H --> I["9. __init__.py<br/><i>~900 lines</i>"]
+```
+
+**Why this order?** Each file only depends on the ones before it. If you
+read them in this sequence, you will never hit a concept you haven't seen
+yet.
+
+---
+
+## File 1: `reactive.py` --- The Foundation {#reactive}
+
+**What it is:** Three primitives (Signal, Computed, Effect) and a batch
+mechanism. This is the reactivity engine. Everything else in the kernel
+builds on top of it.
+
+**Zero dependencies.** This file imports nothing from the rest of the
+kernel. It only uses Python's standard library (`threading`, `asyncio`,
+`contextvars`).
+
+### Key concepts
+
+**Signal** --- a box that holds a value. When you read it, the reader is
+tracked. When you write it, all tracked readers are notified.
+
+```python
+counter = Signal(0)
+counter.get()   # read --- if inside an Effect, the Effect is now subscribed
+counter.set(5)  # write --- all subscribers are notified
+counter.peek()  # read without subscribing
+```
+
+**Computed** --- a cached derived value. It wraps a function. The function
+runs once, and its result is cached. When any Signal it read changes, the
+cache is marked dirty. On the next `.get()`, it recomputes.
+
+```python
+doubled = Computed(lambda: counter.get() * 2)
+doubled.get()      # 10 (runs the function, caches result)
+doubled.get()      # 10 (cache hit, function does NOT run)
+counter.set(6)     # marks doubled as dirty
+doubled.get()      # 12 (recomputes)
+```
+
+**Effect** --- a side effect function that re-runs automatically. Like
+Computed, but instead of caching a value, it runs for its side effects.
+
+```python
+Effect(lambda: print(f"Counter is {counter.get()}"))
+# Prints "Counter is 5"
+counter.set(10)
+# Automatically prints "Counter is 10"
+```
+
+**batch()** --- group multiple writes so effects fire once, not per-write.
+
+```python
+with batch():
+    a.set(1)
+    b.set(2)
+# Effects that depend on a OR b run ONCE here, not twice
+```
+
+### How tracking works
+
+There is one global variable: `_active_consumer`. It holds whichever
+Effect or Computed is currently executing (or `None`).
+
+1. An Effect starts running. The engine sets `_active_consumer = this_effect`.
+2. The Effect's body calls `some_signal.get()`.
+3. Inside `Signal.get()`: "Is there an active consumer? Yes. Record this
+   signal as a dependency of that consumer."
+4. The Effect finishes. The engine clears `_active_consumer`.
+
+Later, when `some_signal.set(new_value)` is called, the Signal looks at
+its subscriber list and calls `._notify()` on each one. Effects re-run.
+Computeds mark themselves dirty.
+
+### Thread safety
+
+A single `threading.RLock` serializes all mutations. This means:
+
+- Two threads writing to the same Signal will not corrupt it.
+- An Effect that writes to a Signal it reads won't deadlock (RLock is
+  reentrant).
+- The tradeoff: throughput. Only one thread can mutate reactive state at
+  a time. For I/O-bound services this is fine.
+
+### What to look for when reading
+
+- `Signal.__init__`, `Signal.get`, `Signal.set` --- the core.
+- `_active_consumer` ContextVar --- the tracking mechanism.
+- `Computed._recompute` --- where lazy evaluation happens.
+- `Effect.run` --- where the consumer sets `_active_consumer` and tracks deps.
+- `_flush_batch` --- effects are sorted by creation order (parent before child).
+
+---
+
+## File 2: `component.py` --- Decorators and Metadata {#component}
+
+**What it is:** The 12 decorators that turn a plain Python class into a
+kernel-managed component. Every decorator does one thing: attach metadata
+to the class. Nothing runs at decoration time.
+
+### The mental model
+
+Decorators are just sticky notes. `@runnable("search", ...)` is a sticky
+note that says "this method is a runnable named search." The kernel reads
+the sticky notes later.
+
+### Key data structures
+
+| Dataclass | What it stores |
+|---|---|
+| `ComponentMeta` | Everything the kernel needs about a class: name, version, provides, requires, runnables, effects, computeds, subscriptions, APIs, lifecycle callbacks, supervision |
+| `RequirementDef` | One `@requires` entry: attr name, contract name, aggregate/optional/key flags |
+| `RunnableDef` | One `@runnable`: name, params model, description, auth requirements |
+| `EffectDef` | One `@effect`: the function, async flag, cancel_on_supersede |
+| `ComputedDef` | One `@computed`: the function |
+| `SupervisionDef` | One `@lifecycle.supervision`: strategy, max_restarts, backoff config |
+| `APIDef` | One `@api`: transport type, prefix, auth, include/exclude |
+
+### The lifecycle namespace
+
+`lifecycle` is a class with static methods. Each method is a decorator:
+
+```python
+@lifecycle.activate          # called when component starts
+@lifecycle.deactivate        # called when component stops
+@lifecycle.health            # returns health status
+@lifecycle.snapshot          # serializes state before hot_update
+@lifecycle.restore           # deserializes state after hot_update
+@lifecycle.supervision(...)  # supervision strategy for child failures
+```
+
+### `_finalize_meta(cls)` --- the bridge
+
+This function is called once per class, at discovery time. It:
+
+1. Scans all methods for sticky-note markers (`__runnable_defs__`,
+   `__lifecycle__`, `__effect__`, `__computed__`, etc.)
+2. Scans type annotations for implicit `@requires` (if you annotate a
+   field with a contract type, it becomes a requirement)
+3. Auto-infers dependencies from contracts (`IConfig` means you depend on
+   the `config` factory)
+4. Collects everything into `ComponentMeta`
+
+### What to look for when reading
+
+- The 12 decorator functions (each is 5-15 lines).
+- `ComponentMeta` --- the central data structure.
+- `_finalize_meta` --- the only complex function. Read it top-to-bottom.
+
+---
+
+## File 3: `contracts.py` --- Protocol Interfaces {#contracts}
+
+**What it is:** Python `Protocol` classes that define what a service looks
+like. These are the "shapes" that providers must match.
+
+```python
+@runtime_checkable
+class IConfig(Protocol):
+    def get(self, key: str, default: Any = None) -> Any: ...
+    def set(self, key: str, value: Any) -> None: ...
+    def all(self) -> dict[str, Any]: ...
+```
+
+When you write `@requires(config=IConfig)`, you're saying "I need
+something that matches the IConfig shape." The kernel finds a provider
+that `@provides(IConfig)` and injects it.
+
+### The 8 contracts
+
+| Contract | What it provides | Used by |
+|---|---|---|
+| `IConfig` | Key-value configuration | Almost everything |
+| `ILogger` | Structured logging | Almost everything |
+| `ICredentials` | Scoped secrets access | Apps that need API keys |
+| `IStorage` | Async key-value storage | Apps that persist data |
+| `IAuth` | Token authentication + authorization | Auth-protected runnables |
+| `ITracer` | OpenTelemetry-style span tracing | Observability |
+| `IWorkspace` | Working directory + settings | File-based apps |
+| `IConfigAdmin` | Managed service configuration | ConfigProvider itself |
+
+This is the shortest file. Read it in 2 minutes.
+
+---
+
+## File 4: `runtime.py` --- The Component's Window {#runtime}
+
+**What it is:** The `Runtime` dataclass. Every component gets one. It is
+the *only* object a component interacts with. Accessed as `self.rt`.
+
+### Why it exists
+
+Components never see the kernel, the registry, or the bus directly. They
+see `self.rt`, which exposes a curated, policy-checked API.
+
+### How reactive injection works
+
+Every injected service is wrapped in a `Signal`:
+
+```python
+self._signals = {
+    "config": Signal(config_service),
+    "logger": Signal(logger_service),
+}
+```
+
+When you access `self.rt.config`, Python calls `Runtime.__getattr__("config")`,
+which calls `self._signals["config"].get()`. If you're inside an `@effect`,
+that read is tracked. When the config service changes, your effect re-runs.
+
+### Key methods
+
+| Method | What it does |
+|---|---|
+| `self.rt.config` | Reactive read of injected service |
+| `self.rt.peek("config")` | Non-reactive read (no tracking) |
+| `await self.rt.invoke(target, params, timeout=)` | Call another component's runnable via the bus. Policy-checked. Optional timeout. |
+| `self.rt.invoke_nowait(target, params)` | Fire-and-forget invocation. Returns immediately. |
+| `await self.rt.publish(event, data)` | Publish a bus event. Policy-checked. |
+| `self.rt.on(event, handler)` | Subscribe to bus events |
+| `await self.rt.spawn(factory, name, props)` | Create a child component |
+
+### Policy enforcement
+
+The kernel sets `_invoke_allow`, `_invoke_deny`, `_publish_allow` on each
+Runtime. Every `invoke()` and `publish()` call checks these lists before
+proceeding. A component can only call what its policy allows.
+
+### What to look for when reading
+
+- `__getattr__` --- the reactive read mechanism.
+- `inject()` --- how the kernel pushes service updates.
+- `_check_permission` --- fnmatch-based allow/deny.
+
+---
+
+## File 5: `registry.py` --- Service Registry {#registry}
+
+**What it is:** A dictionary of "who provides what." When component A says
+`@provides(IConfig)` and component B says `@requires(config=IConfig)`, the
+registry connects them.
+
+### Key concepts
+
+**ServiceEntry** --- one row in the registry:
+```
+contract="IConfig", impl=<ConfigProvider instance>, provider_name="config",
+properties={"service.ranking": 0}
+```
+
+**Ranking** --- when multiple components provide the same contract, the
+registry returns the one with the lowest `service.ranking`. This is how
+you override a default provider with a better one.
+
+**Ref counting** --- `acquire(contract, consumer)` increments a counter.
+`release(contract, consumer)` decrements it. `ref_count(contract)` tells
+you how many consumers are using a service. Hot-remove uses this for
+cleanup.
+
+**Change listeners** --- `on_change(callback)` lets you react when
+services are added or removed. The kernel uses this for reactive
+propagation: when a service changes, update all consumer Runtimes.
+
+### What to look for when reading
+
+- `provide()` / `unprovide()` --- add/remove services.
+- `require()` / `require_all()` / `require_map()` --- the three retrieval modes.
+- `_listeners` and `_notify()` --- how the kernel knows a service changed.
+
+---
+
+## File 6: `bus.py` --- Communication {#bus}
+
+**What it is:** The message bus. Two patterns:
+
+- **invoke(target, params)** --- call a specific handler, get a result back.
+  Like a function call across components.
+- **publish(event_type, data)** --- broadcast an event to all subscribers.
+  Like a radio station.
+
+### invoke flow
+
+```
+caller → Bus.invoke("splunk.query", params)
+    1. Exact handler match?     → call it
+    2. L3 target routing?       → route by "target" param to instance
+    3. Name resolution?         → fix hallucinated names (fuzzy match)
+    4. Cross-process transport?  → try remote transports
+    5. None found?              → dead letter + KeyError
+```
+
+### Reliability features
+
+| Feature | Method | What it does |
+|---|---|---|
+| Timeout | `invoke(t, p, timeout=5.0)` | `asyncio.TimeoutError` if handler takes too long |
+| Fire-and-forget | `invoke_nowait(t, p)` | Schedules on event loop, returns immediately |
+| Dead letter | `_dead_letter(t, p, reason)` | Publishes to `__dead_letter__` channel on failure |
+
+### Observability
+
+`handler_signal` is a `Signal[frozenset[str]]` containing all registered
+handler names. Any `@effect` that reads it gets notified when handlers
+are added or removed. This is how the agent's tool list auto-updates.
+
+### What to look for when reading
+
+- `invoke()` --- the routing chain.
+- `_resolve_handler()` --- extracted for reuse by invoke and invoke_nowait.
+- `resolve_handler_name()` --- the hallucination hardening (junk suffix
+  stripping, hyphen/underscore flipping, Levenshtein distance).
+- `_dead_letter()` --- failure recording.
+
+---
+
+## File 7: `lifecycle_manager.py` --- State Machine {#lifecycle}
+
+**What it is:** Manages every component through its lifecycle:
+
+```{mermaid}
+stateDiagram-v2
+    [*] --> DISCOVERED
+    DISCOVERED --> RESOLVED : resolve_all() (toposort)
+    RESOLVED --> ACTIVATING : activate()
+    ACTIVATING --> ACTIVE : success
+    ACTIVATING --> ERRORED : exception
+    ERRORED --> RESTARTING : supervised retry
+    RESTARTING --> RESOLVED : backoff complete
+    ACTIVE --> DEACTIVATING : deactivate()
+    DEACTIVATING --> STOPPED : always
+    ERRORED --> RESOLVED : retry_erroneous() (manual)
+```
+
+### Key data structure: ComponentInstance
+
+```python
+@dataclass
+class ComponentInstance:
+    factory_class: type          # the @component class
+    meta: ComponentMeta          # all metadata from decorators
+    name: str                    # instance name
+    properties: dict             # runtime properties
+    state: State                 # DISCOVERED, RESOLVED, ACTIVATING, ...
+    instance: Any                # the actual Python object (created at activation)
+    error: Exception | None      # set if ERRORED
+    parent: str | None           # parent instance name
+    children: list[str]          # child instance names
+    _disposables: list           # Effects/Computeds to clean up
+    _restart_tracker             # sliding window for supervision
+```
+
+### What happens at activation
+
+1. The class is instantiated: `ci.instance = ci.factory_class()`
+2. A Runtime is built (services injected as Signals)
+3. `self.rt` is attached to the instance
+4. The `@lifecycle.activate` callback is called
+5. State transitions to ACTIVE
+
+### Dependency ordering
+
+`resolve_all()` runs Kahn's algorithm (topological sort) on the
+dependency graph. If A requires B, B activates first. Circular
+dependencies raise `RuntimeError`.
+
+### Shutdown
+
+`shutdown()` deactivates in reverse activation order. Children are
+deactivated before parents. All `@effect` and `@computed` disposables
+are disposed.
+
+### Supervision
+
+When a child component fails activation and its parent has
+`@lifecycle.supervision`:
+
+1. The `RestartTracker` records the failure timestamp.
+2. If restarts within the window exceed `max_restarts`, escalate to the
+   parent's supervisor.
+3. Otherwise, call the supervision callback. If it returns `True`:
+   - **one_for_one:** restart just the failed child.
+   - **one_for_all:** restart ALL siblings.
+   - **rest_for_one:** restart the failed child + everything started
+     after it.
+4. Backoff delay (constant, linear, or exponential) before retry.
+
+### What to look for when reading
+
+- `State` enum --- all 8 states.
+- `activate()` --- the activation sequence.
+- `resolve_all()` --- Kahn's algorithm.
+- `deactivate()` --- recursive child-first shutdown.
+- `_handle_activation_failure()` --- the supervision entry point.
+- `_restart_one()`, `_restart_all_children()`, `_restart_from()` --- the
+  three strategies.
+
+---
+
+## File 8: `traits.py` --- The Trait System {#traits}
+
+**What it is:** A registry of traits organized by level (L0--L3). Traits
+are inferred from what a component declares, not labeled by the developer.
+
+### The levels
+
+| Level | Name | What makes it this level |
+|---|---|---|
+| L0 | Kernel | Every component has these (identifiable, lifecycle, etc.) |
+| L1 | Platform | Infrastructure services (configurable, observable, supervisable) |
+| L2 | App | Domain capabilities (runnable, reactive, routable) |
+| L3 | Instance | Per-instance parameterization (targeted, scoped, versioned) |
+
+### How inference works
+
+`TraitRegistry.compute(meta)` reads the `ComponentMeta` and returns a
+list of trait names. For example:
+
+- Has `@requires(config=IConfig)` in its requirements? -> configurable.
+- Has `@runnable` declarations? -> runnable, communicable.
+- Has `@lifecycle.supervision` defined? -> supervisable.
+- Has `@computed` or `@effect`? -> reactive.
+
+### What to look for when reading
+
+- `compute()` method --- all the inference rules in one place.
+- The trait name constants at the bottom of the file.
+
+---
+
+## File 9: `__init__.py` --- The Kernel Orchestrator {#kernel}
+
+**What it is:** The `Kernel` class that ties everything together. This is
+the last file because it imports and uses all the others.
+
+### What the Kernel owns
+
+```python
+class Kernel:
+    traits = TraitRegistry()
+    registry = ServiceRegistry()
+    bus = Bus()
+    lifecycle = LifecycleManager()
+```
+
+### Boot sequence
+
+```python
+kernel = Kernel()
+kernel.discover([ConfigProvider, LoggingProvider, MyApp, RESTTransport])
+await kernel.boot()
+```
+
+`boot()` does:
+
+1. **Setup reactive propagation** --- registers a listener on the
+   ServiceRegistry so that when any service changes, all consumer
+   Runtimes get updated.
+2. **Instantiate** --- creates one ComponentInstance per factory.
+3. **Resolve** --- topological sort to determine activation order.
+4. **Activate each** --- build Runtime, inject services, call
+   `@lifecycle.activate`, register bus handlers, set up `@effect`/`@computed`.
+5. **Gateway rebuild** --- the API gateway reads all `@api` declarations
+   and builds transport surfaces. Transports are re-activated.
+
+### Key methods to read
+
+| Method | What it does |
+|---|---|
+| `_build_runtime(ci)` | Constructs a reactive Runtime for a component. This is where services become Signals. |
+| `_setup_reactive_propagation()` | The global listener that propagates service changes to Runtimes. |
+| `_make_bus_handler(rd, instance, ci)` | Wraps a `@runnable` method into an async bus handler with auth + param validation. |
+| `_register_component_bus(ci)` | Registers all bus handlers, subscriptions, kinds, skills for a component. |
+| `_setup_reactive(ci)` | Creates `ReactiveComputed` and `ReactiveEffect` wrappers for `@computed`/`@effect` methods. |
+| `_spawn_child(...)` | Creates and activates a child component with supervision support. |
+| `hot_add(cls)` / `hot_remove(name)` | Live component add/remove. |
+| `hot_update(new_cls)` | Blue-green replacement: snapshot state, tear down, replace factory, re-activate, restore. |
+
+### Structural scoping
+
+At the bottom of the file: `_ScopedCredentials` and `_ScopedStorage`.
+These wrappers ensure a component can only see its own credentials and
+its own storage prefix. This is enforced structurally --- there is no
+configuration to disable it.
+
+### What to look for when reading
+
+- `boot()` --- the full startup sequence.
+- `_build_runtime()` --- the bridge between the registry and reactive injection.
+- `_setup_reactive_propagation()` --- the heart of the reactive graph.
+- `hot_update()` --- the most complex method (blue-green replacement).
+
+---
+
+## How everything connects
+
+```{mermaid}
+flowchart TB
+    subgraph "Decoration Time (import)"
+        Dec["@component, @provides, @requires, @runnable, ..."]
+        Dec -->|"attach markers"| Meta["ComponentMeta<br/>(sticky notes on the class)"]
+    end
+
+    subgraph "Discovery Time (kernel.discover)"
+        Meta -->|"_finalize_meta()"| Fin["Scan methods,<br/>collect all markers,<br/>infer dependencies"]
+    end
+
+    subgraph "Boot Time (kernel.boot)"
+        Fin --> Inst["Instantiate<br/>(create POPO)"]
+        Inst --> Resolve["resolve_all()<br/>(toposort)"]
+        Resolve --> Act["Activate:<br/>1. Build Runtime (Signals)<br/>2. Inject services<br/>3. Call @lifecycle.activate<br/>4. Register bus handlers<br/>5. Set up @effect/@computed"]
+    end
+
+    subgraph "Run Time"
+        Act --> RT["self.rt.config<br/>(reactive read)"]
+        RT --> Sig["Signal.get()<br/>(tracks consumer)"]
+        Sig --> Eff["@effect re-runs<br/>when Signal changes"]
+        Act --> Bus["rt.invoke() / rt.publish()<br/>(bus communication)"]
+    end
+```
+
+## Suggested exercise
+
+After reading, try this:
+
+1. Open `src/signalpy/examples/03_reactive_config.py` and run it.
+2. Trace the flow: which decorator fires first? When does the Runtime get
+   built? When does the `@effect` first run?
+3. Modify the config and watch the effect re-run.
+4. Read `test_kernel.py` --- the tests show every feature in isolation.
+
+---
+
+## Quick reference: file sizes
+
+| File | Lines | Purpose |
+|---|---|---|
+| `reactive.py` | ~600 | Signal, Computed, Effect, batch |
+| `component.py` | ~750 | 12 decorators + metadata dataclasses |
+| `contracts.py` | ~80 | 8 Protocol interfaces |
+| `runtime.py` | ~170 | The self.rt object |
+| `registry.py` | ~200 | Service registry + ref counting |
+| `bus.py` | ~400 | invoke + publish + timeout + dead letter |
+| `lifecycle_manager.py` | ~560 | State machine + supervision |
+| `traits.py` | ~180 | L0-L3 trait inference |
+| `__init__.py` | ~900 | Kernel orchestrator |
+| **Total** | **~3,100** | |

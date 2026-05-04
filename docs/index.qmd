@@ -68,7 +68,7 @@ When you write `self.rt.config.get("url")` inside an `@effect`:
 
 **This is Vue 3's reactivity model applied to service injection.** Same algorithm (dependency tracking via a context variable), same composability (Computed chains, Effects compose), different domain (backend services instead of DOM).
 
-## The 13 Decorators
+## The 12 Decorators
 
 ```
 @component  @provides  @requires           # core
@@ -109,10 +109,12 @@ Read in this order — each builds on the last:
 | Page | What it explains |
 |------|-----------------|
 | [Architecture](concepts/architecture.qmd) | Constitution, two-axis model, what's in the kernel |
+| [**Reading the Kernel**](concepts/kernel-reading-guide.qmd) | **Every file explained from scratch. Start here for a thorough read-through.** |
 | [**Reactivity by Example**](concepts/reactivity-by-example.qmd) | **Consumer / Provider / Kernel side-by-side, one full cycle from boot to re-run** |
 | [Context, ContextVar, Active Consumer](concepts/contextvar-and-tracking.qmd) | Why a single `_active_consumer` ContextVar is enough for many effects |
 | [Reactive Engine: Line by Line](concepts/reactive-line-by-line.qmd) | Every line of `reactive.py` annotated |
 | [Threading Model](concepts/threading-model.qmd) | Threads, asyncio, RLock, ContextVar isolation, vs stdlib |
+| [Supervision and Reliability](concepts/supervision.qmd) | Bus timeout, fire-and-forget, dead letter, Erlang-style supervision |
 | [Bridging External Systems](concepts/bridging.qmd) | Bridge pattern, three access levels, 7 rules |
 | [Deployment Scales](concepts/deployment.qmd) | Monolith → containers → Dapr → agent system |
 
@@ -138,10 +140,11 @@ Read in this order — each builds on the last:
 
 | | |
 |---|---|
-| Kernel core | ~2600 lines, 9 files, zero required dependencies |
+| Kernel core | ~3,100 lines, 9 files, zero required dependencies |
 | Decorators | 12: `@component`, `@provides`, `@requires`, `@computed`, `@effect`, `@runnable`, `@api`, `@lifecycle.*`, `@prop`, `@kind`, `@skill`, `@subscribe` |
 | Reactivity | Signal, Computed, Effect — Vue 3-style, zero dependencies |
+| Reliability | Bus timeout, fire-and-forget invoke, dead letter channel, Erlang-style supervision trees |
 | Providers | 9: config, logging, credentials, storage, auth, tracing, workspace, gateway, configadmin |
 | Adapters | 3: REST (FastAPI), MCP, CLI (Click) |
-| Tests | 58 |
-| Traits | 23 across 4 levels (L0 Kernel, L1 Platform, L2 App, L3 Instance) |
+| Tests | 335 |
+| Traits | 24 across 4 levels (L0 Kernel, L1 Platform, L2 App, L3 Instance) |

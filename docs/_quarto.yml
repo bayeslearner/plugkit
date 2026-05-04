@@ -29,6 +29,8 @@ website:
         menu:
           - text: "Architecture"
             href: concepts/architecture.qmd
+          - text: "Reading the Kernel"
+            href: concepts/kernel-reading-guide.qmd
           - text: "Reactivity by Example"
             href: concepts/reactivity-by-example.qmd
           - text: "Context, ContextVar, Active Consumer"
@@ -37,6 +39,8 @@ website:
             href: concepts/reactive-line-by-line.qmd
           - text: "Threading Model"
             href: concepts/threading-model.qmd
+          - text: "Supervision and Reliability"
+            href: concepts/supervision.qmd
           - text: "Bridging External Systems"
             href: concepts/bridging.qmd
           - text: "Deployment Scales"
@@ -87,10 +91,12 @@ website:
     - title: "Concepts"
       contents:
         - concepts/architecture.qmd
+        - concepts/kernel-reading-guide.qmd
         - concepts/reactivity-by-example.qmd
         - concepts/contextvar-and-tracking.qmd
         - concepts/reactive-line-by-line.qmd
         - concepts/threading-model.qmd
+        - concepts/supervision.qmd
         - concepts/bridging.qmd
         - concepts/deployment.qmd
     - title: "Patterns"

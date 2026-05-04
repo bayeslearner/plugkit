@@ -59,10 +59,22 @@ The orchestrator. `from signalpy.kernel import Kernel`
 | Method | Description |
 |---|---|
 | `register_handler(target, handler)` | Register invocation handler |
-| `await invoke(target, params?)` | Call a handler. Exact → target routing → transports |
+| `await invoke(target, params?, *, timeout?)` | Call a handler. Optional timeout (raises `asyncio.TimeoutError`). Exact → target routing → name resolution → transports |
+| `invoke_nowait(target, params?)` | Fire-and-forget. Schedules on event loop, returns immediately. Errors go to dead letter. |
 | `subscribe(event_type, handler)` | Register event handler |
 | `await publish(event_type, data?)` | Fan-out to subscribers + transports |
 | `add_transport(transport)` | Add cross-process transport |
+
+### Dead Letter Channel
+
+Subscribe to `Bus.DEAD_LETTER_CHANNEL` (`"__dead_letter__"`) to receive failure envelopes:
+
+```python
+bus.subscribe(Bus.DEAD_LETTER_CHANNEL, lambda et, data: print(data))
+# data = {"target": ..., "params": ..., "reason": ..., "error": ..., "timestamp": ...}
+```
+
+Reasons: `no_handler`, `handler_error`, `timeout`.
 
 ## Runtime (self.rt)
 
@@ -72,10 +84,11 @@ Per-component reactive context.
 |---|---|
 | `self.rt.config` | Injected service — **reactive read** |
 | `self.rt.peek("config")` | Read **without** reactive tracking |
-| `await self.rt.invoke(target, params?)` | Bus call (policy-checked) |
+| `await self.rt.invoke(target, params?, *, timeout?)` | Bus call (policy-checked). Optional timeout raises `asyncio.TimeoutError`. |
+| `self.rt.invoke_nowait(target, params?)` | Fire-and-forget invocation. Returns immediately. |
 | `await self.rt.publish(event_type, data?)` | Bus event (policy-checked) |
 | `self.rt.on(event_type, handler)` | Subscribe to events |
-| `await self.rt.spawn(factory, name?, props?)` | Create child component |
+| `await self.rt.spawn(factory, name?, props?)` | Create child component (supervised if parent has `@lifecycle.supervision`) |
 | `self.rt.bus` | Raw bus (escape hatch for adapters) |
 
 ## Signal / Computed / Effect

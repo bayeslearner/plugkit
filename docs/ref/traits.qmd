@@ -20,6 +20,7 @@ Traits are computed from what a component declares. You don't label them — the
 | secured | L1 | `@requires(auth=IAuth)` | Has auth/credentials |
 | storable | L1 | `@requires(storage=IStorage)` | Has storage |
 | communicable | L1 | has `@runnable` or `@subscribe` | Uses the bus |
+| supervisable | L1 | `@lifecycle.supervision` | Supervises child components |
 | runnable | L2 | `@runnable` | Has callable functions |
 | subscribable | L2 | `@subscribe` | Reacts to events |
 | kinded | L2 | `@kind` | Defines data schemas |

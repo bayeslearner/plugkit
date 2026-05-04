@@ -1,0 +1,267 @@
+---
+title: "Supervision and Reliability"
+subtitle: "Bus timeout, fire-and-forget, dead letter, and Erlang-style supervision trees."
+---
+
+This page explains the reliability features added in spec 010. These
+were motivated by comparing the actor model (Pykka) against our reactive
+kernel. The conclusion: we don't need actors, but we need the specific
+reliability patterns that make actor systems robust.
+
+## Bus reliability
+
+### invoke with timeout
+
+By default, `rt.invoke()` waits forever. If a handler hangs, the caller
+hangs. The `timeout` parameter fixes this:
+
+```python
+try:
+    result = await self.rt.invoke("upstream.fetch", params, timeout=5.0)
+except asyncio.TimeoutError:
+    self.rt.logger.warning("upstream.fetch timed out after 5s")
+```
+
+When the timeout fires:
+
+1. The handler's asyncio task is cancelled (standard `asyncio` cancellation).
+2. `asyncio.TimeoutError` propagates to the caller.
+3. A dead letter envelope is published (see below).
+
+### Fire-and-forget: invoke_nowait
+
+Sometimes you want to trigger a runnable without waiting for its result.
+`publish()` is wrong because it's a fan-out event, not a targeted call.
+`invoke_nowait` fills this gap:
+
+```python
+self.rt.invoke_nowait("indexer.reindex", {"force": True})
+# Returns immediately. Handler runs in the background.
+```
+
+- Errors in the handler are logged and sent to the dead letter channel.
+- Policy checks still apply.
+- Name resolution (hallucination hardening) still works.
+
+### Dead letter channel
+
+When a bus dispatch fails, the failure is recorded on a reserved event
+channel called `__dead_letter__`. Any component can subscribe to it:
+
+```python
+@lifecycle.activate
+def activate(self):
+    self.rt.on("__dead_letter__", self._on_failure)
+
+def _on_failure(self, event_type, data):
+    self.rt.logger.error(
+        "Dead letter: target=%s reason=%s error=%s",
+        data["target"], data["reason"], data.get("error"),
+    )
+```
+
+Dead letter envelopes have this shape:
+
+```python
+{
+    "target": "missing.handler",
+    "params": {"key": "value"},
+    "reason": "no_handler",     # or "handler_error" or "timeout"
+    "error": "...",             # string repr of the exception, or None
+    "timestamp": 1714838400.0,
+}
+```
+
+Scenarios that fire dead letters:
+
+| Scenario | reason |
+|---|---|
+| `invoke()` target not found | `no_handler` |
+| `invoke_nowait()` target not found | `no_handler` |
+| `invoke_nowait()` handler throws | `handler_error` |
+| `invoke()` timeout | `timeout` |
+
+---
+
+## Supervision trees
+
+### The problem
+
+When a child component fails to activate (missing config, broken
+dependency, network error), the kernel marks it ERRORED and moves on.
+Recovery requires manual intervention: fix the issue, call
+`kernel.retry_erroneous("name")`.
+
+For a system that should self-heal, this is not enough. We need automatic
+restart with backoff, and we need a parent component to decide the restart
+strategy.
+
+### The idea: Erlang/OTP supervision
+
+Erlang/OTP systems are famous for reliability. The key idea: organize
+components into trees where parent components *supervise* their children.
+When a child fails, the parent decides what to do based on a *strategy*.
+
+We grafted this idea onto our reactive lifecycle without changing the
+concurrency model.
+
+### Declaring a supervisor
+
+A supervisor is any component that:
+
+1. Spawns children via `self.rt.spawn()`
+2. Has a `@lifecycle.supervision` callback
+
+```python
+@component("my-supervisor", version="1.0")
+class MySupervisor:
+
+    @lifecycle.activate
+    async def activate(self):
+        await self.rt.spawn("worker-a")
+        await self.rt.spawn("worker-b")
+        await self.rt.spawn("worker-c")
+
+    @lifecycle.supervision(
+        strategy="one_for_one",
+        max_restarts=3,
+        within_seconds=60,
+        backoff="exponential",
+        base_delay=2.0,
+    )
+    async def on_child_failure(self, child_name, error, attempt, context):
+        self.rt.logger.warning(
+            "Child %s failed (attempt %d): %s",
+            child_name, attempt, error,
+        )
+        return True  # proceed with restart
+```
+
+### The three strategies
+
+```{mermaid}
+flowchart LR
+    subgraph "one_for_one"
+        A1[A] ~~~ B1["B (failed)"] ~~~ C1[C]
+        B1 -->|restart| B1r["B (new)"]
+    end
+```
+
+**one_for_one** --- restart only the failed child. A and C are untouched.
+Use this when children are independent.
+
+```{mermaid}
+flowchart LR
+    subgraph "one_for_all"
+        A2["A (restarted)"] ~~~ B2["B (failed, restarted)"] ~~~ C2["C (restarted)"]
+    end
+```
+
+**one_for_all** --- restart ALL children. Use this when children are
+interdependent (e.g., they share state and a partial restart would be
+inconsistent).
+
+```{mermaid}
+flowchart LR
+    subgraph "rest_for_one"
+        A3[A] ~~~ B3["B (failed, restarted)"] ~~~ C3["C (restarted)"]
+    end
+```
+
+**rest_for_one** --- restart the failed child and everything started
+after it. A is untouched. Use this when later children depend on earlier
+ones (e.g., C reads from B's output).
+
+### Lifecycle state machine with supervision
+
+```{mermaid}
+stateDiagram-v2
+    [*] --> DISCOVERED
+    DISCOVERED --> RESOLVED
+    RESOLVED --> ACTIVATING
+    ACTIVATING --> ACTIVE : success
+    ACTIVATING --> ERRORED : failure
+    ERRORED --> RESTARTING : supervisor decides to retry
+    RESTARTING --> RESOLVED : backoff delay complete
+    ERRORED --> RESOLVED : manual retry_erroneous()
+    ACTIVE --> DEACTIVATING
+    DEACTIVATING --> STOPPED
+```
+
+**RESTARTING** is a new state. It means "the supervisor has decided to
+restart this component, and we are waiting for the backoff delay."
+
+### Backoff strategies
+
+| Strategy | Delay formula | Example (base=2s) |
+|---|---|---|
+| `constant` | `base` | 2s, 2s, 2s, ... |
+| `linear` | `base * attempt` | 2s, 4s, 6s, ... |
+| `exponential` | `base * 2^(attempt-1)` | 2s, 4s, 8s, 16s, ... |
+
+All delays are capped at 60 seconds.
+
+### Restart window
+
+Restarts are tracked in a sliding window. If a component is restarted
+`max_restarts` times within `within_seconds`, the supervisor gives up
+and *escalates*.
+
+```python
+@lifecycle.supervision(
+    max_restarts=3,       # at most 3 restarts...
+    within_seconds=60,    # ...within any 60-second window
+)
+```
+
+### Escalation
+
+When a supervisor exceeds its restart limit, it marks itself as ERRORED
+and notifies *its* supervisor (if any). This creates a chain:
+
+```
+Root Supervisor
+  └── Data Pipeline Supervisor    ← escalates here if workers keep failing
+        ├── Fetcher Worker
+        ├── Processor Worker       ← keeps failing
+        └── Writer Worker
+```
+
+If the Root Supervisor also can't handle it, the component stays ERRORED
+and requires manual intervention.
+
+### SupervisionContext
+
+The supervision callback receives a `SupervisionContext` that lets you
+inspect and influence the restart:
+
+```python
+@lifecycle.supervision(strategy="one_for_one", max_restarts=5)
+async def on_child_failure(self, child_name, error, attempt, context):
+    # Inspect
+    print(context.child_factory)     # factory name
+    print(context.attempt)           # which attempt (1-indexed)
+    print(context.restarts_in_window)  # total restarts in the window
+    print(context.strategy)          # "one_for_one"
+
+    # Influence: change child properties before restart
+    if isinstance(error, ConnectionError) and attempt >= 2:
+        context.update_properties({"endpoint": "fallback.example.com"})
+
+    return True   # True = restart, False = give up
+```
+
+### The supervisable trait
+
+Components with `@lifecycle.supervision` automatically get the
+**supervisable** trait at L1. This shows up in `kernel.status()`.
+
+### What supervision does NOT do
+
+- **No runtime error supervision.** An `@effect` that throws at runtime
+  is caught by the reactive engine and logged. It does not trigger
+  supervision. Supervision handles activation/startup failures only.
+- **No automatic health-check restarts.** `@lifecycle.health` reports
+  status but does not trigger restarts.
+- **No process-level isolation.** Everything is in one Python process.
+  For OOM/segfault isolation, use external supervisors (systemd, K8s).

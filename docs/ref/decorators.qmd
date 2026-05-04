@@ -167,6 +167,40 @@ def method(self) -> dict: ...
 
 Health check callback.
 
+### @lifecycle.supervision
+
+```python
+@lifecycle.supervision(
+    *,
+    strategy: str = "one_for_one",
+    max_restarts: int = 3,
+    within_seconds: float = 60.0,
+    backoff: str = "exponential",
+    base_delay: float = 1.0,
+)
+def method(self, child_name, error, attempt, context) -> bool: ...
+```
+
+Declare a supervision callback for child component failures. The decorated method is called when a child spawned via `self.rt.spawn()` fails activation. Return `True` to restart, `False` to give up.
+
+Strategies: `one_for_one` (restart failed child), `one_for_all` (restart all siblings), `rest_for_one` (restart failed + everything after it).
+
+```python
+@lifecycle.supervision(
+    strategy="one_for_one",
+    max_restarts=3,
+    within_seconds=60,
+    backoff="exponential",
+    base_delay=2.0,
+)
+async def on_child_failure(self, child_name, error, attempt, context):
+    if isinstance(error, ConnectionError):
+        context.update_properties({"endpoint": "fallback.url"})
+    return True
+```
+
+See [Supervision and Reliability](../concepts/supervision.qmd) for the full explanation.
+
 ## Surface
 
 ### @runnable
