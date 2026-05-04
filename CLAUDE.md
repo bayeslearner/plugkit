@@ -159,6 +159,8 @@ reactive (tracks dependencies when inside `@effect` or `@computed`):
 - `self.rt.creds` -- ICredentials (scoped to component's credential namespace)
 - `self.rt.storage` -- IStorage (scoped to component's storage prefix)
 - `self.rt.invoke("other.runnable", params)` -- bus call (policy-checked)
+- `self.rt.invoke("x", params, timeout=5.0)` -- bus call with timeout (spec 010)
+- `self.rt.invoke_nowait("other.runnable", params)` -- fire-and-forget (spec 010)
 - `self.rt.publish("event.type", data)` -- bus event
 - `self.rt.spawn("factory", "name", props)` -- create child component
 - `self.rt.properties` -- instance properties (for L3 targeted)
@@ -247,6 +249,40 @@ consumer Runtimes. Because injected services are Signals, any `@effect`
 or `@computed` that reads the changed service re-runs automatically.
 No manual wiring needed.
 
+**Supervision trees (spec 010).** Components that spawn children can
+declare a supervision strategy. When a child fails activation, the
+supervisor decides whether/how to restart:
+
+```python
+@component("my-supervisor", version="1.0")
+class MySupervisor:
+    @lifecycle.activate
+    async def activate(self):
+        await self.rt.spawn("worker-a")
+        await self.rt.spawn("worker-b")
+
+    @lifecycle.supervision(
+        strategy="one_for_one",      # one_for_one | one_for_all | rest_for_one
+        max_restarts=3,
+        within_seconds=60,
+        backoff="exponential",
+        base_delay=2.0,
+    )
+    async def on_child_failure(self, child_name, error, attempt, context):
+        return True  # proceed with restart
+```
+
+Strategies: `one_for_one` (restart failed child), `one_for_all` (restart
+all siblings), `rest_for_one` (restart failed + everything after it).
+Exceeding max_restarts escalates to the supervisor's own supervisor.
+
+**Dead letter channel.** Failed bus dispatches (no handler, handler error,
+timeout) are published to `__dead_letter__` for monitoring:
+
+```python
+self.rt.on("__dead_letter__", self._on_failure)
+```
+
 **Batch updates.** Group multiple signal changes so effects fire once:
 ```python
 from signalpy.kernel import batch
@@ -255,6 +291,14 @@ with batch():
     name_signal.set("Alice")
     age_signal.set(30)
 # Effects that depend on name or age run ONCE here, not twice
+```
+
+## Lifecycle states
+
+```
+DISCOVERED → RESOLVED → ACTIVATING → ACTIVE → DEACTIVATING → STOPPED
+                  ↑              ↘ ERRORED
+                  └── RESTARTING ←┘  (supervised retry with backoff)
 ```
 
 ## Boot sequence
@@ -268,7 +312,8 @@ await kernel.boot()
 # 3. Resolve dependency order
 # 4. Activate in order: build Runtime (Signal-backed), register bus handlers,
 #    set up @computed and @effect wrappers
-# 5. Gateway rebuilds surfaces, transports re-activate
+# 5. If activation fails and component has a supervisor → supervised restart
+# 6. Gateway rebuilds surfaces, transports re-activate
 await kernel.shutdown()
 # Deactivates in reverse order, disposes effects/computeds
 ```
@@ -293,7 +338,7 @@ await kernel.shutdown()
 | Level | Name | Traits | Inferred from |
 |-------|------|--------|---------------|
 | L0 | Kernel | identifiable, lifecycle, dependable, registrable, factoryable, inspectable | every component / `@lifecycle.health` |
-| L1 | Platform | configurable, observable, secured, storable, communicable | `@requires(config=IConfig)`, runnables |
+| L1 | Platform | configurable, observable, secured, storable, communicable, supervisable | `@requires(config=IConfig)`, runnables, `@lifecycle.supervision` |
 | L2 | App | runnable, subscribable, kinded, skillful, routable, reactive | `@runnable`, `@subscribe`, `@kind`, `@skill`, `@api`, `@computed`/`@effect` |
 | L3 | Instance | targeted, scoped, versioned | `@prop`, `@requires(creds/storage)`, `version=` |
 
