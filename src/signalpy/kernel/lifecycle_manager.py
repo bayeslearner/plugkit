@@ -3,17 +3,21 @@
 Every component transitions through:
   Discovered → Resolved → Activating → Active → Deactivating → Stopped
 
-Errored is a terminal state reachable from Activating.
+Errored is reachable from Activating. With supervision, a supervised
+component transitions: Errored → Restarting → Resolved → Activating
+(with backoff delay between attempts).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
-from signalpy.kernel.component import ComponentMeta, _finalize_meta, get_meta
+from signalpy.kernel.component import ComponentMeta, SupervisionDef, _finalize_meta, get_meta
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +30,56 @@ class State(Enum):
     DEACTIVATING = auto()
     STOPPED = auto()
     ERRORED = auto()
+    RESTARTING = auto()  # supervised retry in progress (with backoff)
+
+
+class SupervisionEscalation(Exception):
+    """Raised by a supervision callback to escalate failure to the parent supervisor."""
+    def __init__(self, child_name: str, original_error: Exception) -> None:
+        self.child_name = child_name
+        self.original_error = original_error
+        super().__init__(f"Supervision escalation: {child_name}: {original_error}")
+
+
+@dataclass
+class RestartTracker:
+    """Tracks restart attempts within a sliding window."""
+    timestamps: list[float] = field(default_factory=list)
+
+    def record(self, now: float) -> None:
+        self.timestamps.append(now)
+
+    def count_within(self, now: float, window_seconds: float) -> int:
+        cutoff = now - window_seconds
+        self.timestamps = [t for t in self.timestamps if t > cutoff]
+        return len(self.timestamps)
+
+
+@dataclass
+class SupervisionContext:
+    """Passed to supervision callbacks so they can inspect and influence restarts."""
+    child_name: str
+    child_factory: str
+    error: Exception
+    attempt: int
+    restarts_in_window: int
+    strategy: str
+    _properties_override: dict | None = None
+
+    def update_properties(self, props: dict) -> None:
+        """Override child properties for the restart attempt."""
+        self._properties_override = props
+
+
+def _compute_delay(base: float, attempt: int, strategy: str) -> float:
+    """Compute backoff delay for a given attempt."""
+    if strategy == "constant":
+        return base
+    elif strategy == "linear":
+        return base * attempt
+    elif strategy == "exponential":
+        return base * (2 ** (attempt - 1))
+    return base
 
 
 @dataclass
@@ -42,6 +96,8 @@ class ComponentInstance:
     children: list[str] = field(default_factory=list)  # child instance names
     # Reactive disposables — Effects and Computeds created during activation
     _disposables: list = field(default_factory=list)
+    # Supervision restart tracking
+    _restart_tracker: RestartTracker = field(default_factory=RestartTracker)
 
 
 class LifecycleManager:
@@ -273,6 +329,231 @@ class LifecycleManager:
         ci.error = None
         ci.instance = None
         await self.activate(name, runtime_builder)
+
+    # ── Supervision ─────────────────────────────────────────────────
+
+    def _find_supervisor(self, ci: ComponentInstance) -> ComponentInstance | None:
+        """Walk up the parent chain to find the nearest ancestor with a supervision_def."""
+        current = ci
+        while current.parent:
+            parent = self._instances.get(current.parent)
+            if parent is None:
+                break
+            if parent.meta.supervision_def is not None:
+                return parent
+            current = parent
+        return None
+
+    async def activate_supervised(self, name: str, runtime_builder,
+                                  register_bus: Any = None) -> None:
+        """Activate a component with supervision support.
+
+        If activation fails and the component has a supervisor parent,
+        the supervisor's strategy handles retry/restart.
+        If no supervisor, behaves identically to activate() (error propagates).
+        If supervision escalates (supervisor itself fails), raises
+        SupervisionEscalation so the caller knows.
+
+        Args:
+            register_bus: Optional callable(ci) to register bus handlers after
+                          successful activation. Passed from kernel.boot().
+        """
+        ci = self._instances.get(name)
+        if ci is None:
+            raise KeyError(f"No instance named {name!r}")
+
+        try:
+            await self.activate(name, runtime_builder)
+            if register_bus and ci.state == State.ACTIVE:
+                register_bus(ci)
+        except Exception as exc:
+            # Check for supervisor
+            supervisor = self._find_supervisor(ci)
+            if supervisor is None:
+                raise
+            await self._handle_activation_failure(
+                ci, exc, supervisor, runtime_builder, register_bus
+            )
+            # If escalation marked the supervisor as ERRORED, propagate
+            if supervisor.state == State.ERRORED:
+                raise SupervisionEscalation(
+                    ci.name, exc
+                ) from exc
+
+    async def _handle_activation_failure(
+        self,
+        ci: ComponentInstance,
+        error: Exception,
+        supervisor_ci: ComponentInstance,
+        runtime_builder,
+        register_bus: Any = None,
+    ) -> None:
+        """Handle activation failure with supervision."""
+        sup_def = supervisor_ci.meta.supervision_def
+        if sup_def is None:
+            return
+
+        now = time.monotonic()
+        ci._restart_tracker.record(now)
+        restarts = ci._restart_tracker.count_within(now, sup_def.within_seconds)
+
+        if restarts > sup_def.max_restarts:
+            log.error(
+                "Supervisor %s: max restarts (%d) exceeded for %s within %.0fs",
+                supervisor_ci.name, sup_def.max_restarts, ci.name,
+                sup_def.within_seconds,
+            )
+            await self._escalate_to_parent(supervisor_ci, ci.name, error, runtime_builder)
+            return
+
+        attempt = restarts
+        context = SupervisionContext(
+            child_name=ci.name,
+            child_factory=ci.meta.factory_name,
+            error=error,
+            attempt=attempt,
+            restarts_in_window=restarts,
+            strategy=sup_def.strategy,
+        )
+
+        # Call the supervisor's callback
+        try:
+            should_restart = sup_def.fn(supervisor_ci.instance, ci.name,
+                                        error, attempt, context)
+            if sup_def.is_async:
+                should_restart = await should_restart
+        except SupervisionEscalation:
+            await self._escalate_to_parent(supervisor_ci, ci.name, error, runtime_builder)
+            return
+        except Exception:
+            log.exception("Supervision callback error for %s", ci.name)
+            return
+
+        if not should_restart:
+            log.info("Supervisor %s declined restart for %s", supervisor_ci.name, ci.name)
+            return
+
+        # Apply strategy
+        ci.state = State.RESTARTING
+        delay = _compute_delay(sup_def.base_delay, attempt, sup_def.backoff)
+        delay = min(delay, 60.0)
+
+        log.info(
+            "Supervisor %s: restarting %s in %.1fs (attempt %d/%d, strategy=%s)",
+            supervisor_ci.name, ci.name, delay, attempt, sup_def.max_restarts,
+            sup_def.strategy,
+        )
+
+        await asyncio.sleep(delay)
+
+        if sup_def.strategy == "one_for_one":
+            await self._restart_one(ci, context, runtime_builder, register_bus)
+        elif sup_def.strategy == "one_for_all":
+            await self._restart_all_children(
+                supervisor_ci, runtime_builder, register_bus
+            )
+        elif sup_def.strategy == "rest_for_one":
+            await self._restart_from(
+                supervisor_ci, ci, runtime_builder, register_bus
+            )
+
+    async def _restart_one(self, ci: ComponentInstance, context: SupervisionContext,
+                           runtime_builder, register_bus=None) -> None:
+        """Restart a single child component (one_for_one)."""
+        ci.state = State.RESOLVED
+        ci.error = None
+        ci.instance = None
+        if context._properties_override:
+            ci.properties.update(context._properties_override)
+        try:
+            await self.activate(ci.name, runtime_builder)
+            if register_bus and ci.state == State.ACTIVE:
+                register_bus(ci)
+        except Exception as exc:
+            ci.state = State.ERRORED
+            ci.error = exc
+            # Recursive: try supervision again
+            supervisor = self._find_supervisor(ci)
+            if supervisor:
+                await self._handle_activation_failure(
+                    ci, exc, supervisor, runtime_builder, register_bus
+                )
+
+    async def _restart_all_children(self, supervisor_ci: ComponentInstance,
+                                    runtime_builder, register_bus=None) -> None:
+        """Restart ALL children of the supervisor (one_for_all)."""
+        # Deactivate all active children in reverse order
+        for child_name in reversed(list(supervisor_ci.children)):
+            child_ci = self._instances.get(child_name)
+            if child_ci and child_ci.state == State.ACTIVE:
+                await self.deactivate(child_name, runtime_builder)
+
+        # Re-activate all in original order
+        for child_name in supervisor_ci.children:
+            child_ci = self._instances.get(child_name)
+            if child_ci:
+                child_ci.state = State.RESOLVED
+                child_ci.error = None
+                child_ci.instance = None
+                try:
+                    await self.activate(child_name, runtime_builder)
+                    if register_bus and child_ci.state == State.ACTIVE:
+                        register_bus(child_ci)
+                except Exception as exc:
+                    log.error("Failed to restart child %s: %s", child_name, exc)
+                    child_ci.state = State.ERRORED
+                    child_ci.error = exc
+
+    async def _restart_from(self, supervisor_ci: ComponentInstance,
+                            failed_ci: ComponentInstance,
+                            runtime_builder, register_bus=None) -> None:
+        """Restart the failed child + everything started after it (rest_for_one)."""
+        children = list(supervisor_ci.children)
+        idx = children.index(failed_ci.name) if failed_ci.name in children else 0
+        to_restart = children[idx:]
+
+        # Deactivate in reverse
+        for child_name in reversed(to_restart):
+            child_ci = self._instances.get(child_name)
+            if child_ci and child_ci.state in (
+                State.ACTIVE, State.ERRORED, State.RESTARTING
+            ):
+                if child_ci.state == State.ACTIVE:
+                    await self.deactivate(child_name, runtime_builder)
+                child_ci.state = State.RESOLVED
+                child_ci.error = None
+                child_ci.instance = None
+
+        # Re-activate in order
+        for child_name in to_restart:
+            child_ci = self._instances.get(child_name)
+            if child_ci:
+                try:
+                    await self.activate(child_name, runtime_builder)
+                    if register_bus and child_ci.state == State.ACTIVE:
+                        register_bus(child_ci)
+                except Exception as exc:
+                    log.error("Failed to restart child %s: %s", child_name, exc)
+                    child_ci.state = State.ERRORED
+                    child_ci.error = exc
+
+    async def _escalate_to_parent(self, supervisor_ci: ComponentInstance,
+                                  child_name: str, error: Exception,
+                                  runtime_builder) -> None:
+        """Supervisor gives up — escalate to its own supervisor."""
+        escalation = SupervisionEscalation(child_name, error)
+        supervisor_ci.state = State.ERRORED
+        supervisor_ci.error = escalation
+        log.error(
+            "Supervisor %s escalated failure from %s",
+            supervisor_ci.name, child_name,
+        )
+        # Recursive: check if this supervisor itself has a supervisor
+        parent_supervisor = self._find_supervisor(supervisor_ci)
+        if parent_supervisor:
+            await self._handle_activation_failure(
+                supervisor_ci, escalation, parent_supervisor, runtime_builder
+            )
 
     # ── Inspection ──────────────────────────────────────────────────
 

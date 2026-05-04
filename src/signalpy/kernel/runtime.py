@@ -91,8 +91,14 @@ class Runtime:
 
     # ── BUS: invoke / publish / subscribe (integrated) ──────────
 
-    async def invoke(self, target: str, params: dict | None = None) -> Any:
-        """Invoke another component's runnable via the bus. Policy-checked."""
+    async def invoke(self, target: str, params: dict | None = None,
+                     *, timeout: float | None = None) -> Any:
+        """Invoke another component's runnable via the bus. Policy-checked.
+
+        Args:
+            timeout: Optional timeout in seconds. Raises asyncio.TimeoutError
+                     if the handler doesn't complete within the deadline.
+        """
         if not self._check_permission(target, self._invoke_allow, self._invoke_deny):
             raise PermissionError(
                 f"Component {self.component_name!r} cannot invoke {target!r}"
@@ -100,7 +106,22 @@ class Runtime:
         if self._audit:
             log.info('{"action":"invoke","caller":"%s","target":"%s"}',
                      self.component_name, target)
-        return await self._bus.invoke(target, params)
+        return await self._bus.invoke(target, params, timeout=timeout)
+
+    def invoke_nowait(self, target: str, params: dict | None = None) -> None:
+        """Fire-and-forget invocation via the bus. Policy-checked.
+
+        Schedules the handler on the event loop. Caller doesn't wait for result.
+        Errors are logged and sent to the dead letter channel.
+        """
+        if not self._check_permission(target, self._invoke_allow, self._invoke_deny):
+            raise PermissionError(
+                f"Component {self.component_name!r} cannot invoke {target!r}"
+            )
+        if self._audit:
+            log.info('{"action":"invoke_nowait","caller":"%s","target":"%s"}',
+                     self.component_name, target)
+        self._bus.invoke_nowait(target, params)
 
     async def publish(self, event_type: str, data: Any = None) -> None:
         """Publish an event to the bus. Policy-checked."""

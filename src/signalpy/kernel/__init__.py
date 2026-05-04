@@ -51,6 +51,7 @@ from signalpy.kernel.component import (
     RunnableDef,
     SkillDef,
     SubscribeDef,
+    SupervisionDef,
     _contract_name,
     _finalize_meta,
     _is_contract_type,
@@ -69,7 +70,13 @@ from signalpy.kernel.component import (
     skill,
     subscribe,
 )
-from signalpy.kernel.lifecycle_manager import ComponentInstance, LifecycleManager, State
+from signalpy.kernel.lifecycle_manager import (
+    ComponentInstance,
+    LifecycleManager,
+    State,
+    SupervisionContext,
+    SupervisionEscalation,
+)
 from signalpy.kernel.reactive import (
     Computed as ReactiveComputed,
     Effect as ReactiveEffect,
@@ -464,8 +471,12 @@ class Kernel:
             parent_ci = self.lifecycle.get_instance(parent_name)
             if parent_ci:
                 parent_ci.children.append(ci.name)
-        await self.lifecycle.activate(ci.name, self._build_runtime)
-        self._register_component_bus(ci)
+        # Use supervised activation — if parent has @lifecycle.supervision,
+        # failures trigger the supervision strategy instead of propagating.
+        await self.lifecycle.activate_supervised(
+            ci.name, self._build_runtime,
+            register_bus=self._register_component_bus,
+        )
         log.info("Spawned child: %s (parent=%s)", ci.name, parent_name)
         return ci.instance
 
@@ -862,10 +873,12 @@ __all__ = [
     # Core decorators (12 total)
     "component", "provides", "requires",          # core
     "computed", "effect",                          # reactive
-    "lifecycle",                                   # lifecycle (.activate, .deactivate, .health)
+    "lifecycle",                                   # lifecycle (.activate, .deactivate, .health, .supervision)
     "runnable", "api",                             # surface
     "prop", "kind", "skill",                       # metadata
     "subscribe",                                   # events
+    # Supervision
+    "SupervisionContext", "SupervisionEscalation", "SupervisionDef",
     # Infrastructure
     "Bus", "Level", "Runtime", "ServiceRegistry", "TraitRegistry",
 ]

@@ -106,6 +106,8 @@ class TraitRegistry:
         # Communicable — every component with runnables or subscriptions uses the bus
         if meta.runnables or meta.subscriptions:
             traits.append(COMMUNICABLE)
+        if getattr(meta, "supervision_def", None) is not None:
+            traits.append(SUPERVISABLE)
 
         # L2 — inferred from what the component contributes
         if meta.runnables:
@@ -155,6 +157,7 @@ CONFIGURABLE = "configurable"
 SECURED = "secured"
 STORABLE = "storable"
 COMMUNICABLE = "communicable"
+SUPERVISABLE = "supervisable"
 
 # ── L2 trait names (registered by apps) ─────────────────────────────
 

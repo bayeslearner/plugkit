@@ -3,7 +3,7 @@
 ## What this is
 
 A Signal-based reactive component kernel for backend services. 12 decorators,
-~2,600 lines across 9 files. Source-embeddable package. Two-axis architecture:
+~3,100 lines across 9 files. Source-embeddable package. Two-axis architecture:
 
 - **Axis 1** (`src/signalpy/kernel/`) -- the irreplaceable mechanism: reactivity
   engine, lifecycle, registry with ref counting, bus, runtime, component model,
@@ -348,17 +348,17 @@ await kernel.shutdown()
 src/signalpy/
   kernel/                  Axis 1 -- reactive kernel v2 (~2,600 lines, 9 files)
     reactive.py              Signal, Computed, Effect, batch
-    component.py             12 decorators + metadata
+    component.py             12 decorators + metadata + SupervisionDef
     runtime.py               ReactiveRuntime with signal-backed injection
     registry.py              ServiceRegistry with ref counting
-    bus.py                   invoke/publish/subscribe
-    lifecycle_manager.py     state machine + effect lifecycle
+    bus.py                   invoke/publish/subscribe + timeout + invoke_nowait + dead letter
+    lifecycle_manager.py     state machine + supervision strategies
     traits.py                L0-L3 trait system
     contracts.py             Protocol interfaces
     __init__.py              Kernel orchestrator
   providers/               Axis 2 -- platform components
   adapters/                Axis 2 -- transport adapters (REST, MCP, CLI)
-  tests/                   Test suite (253 tests)
+  tests/                   Test suite (335 tests)
   examples/                Progressive examples (01-07)
 ```
 

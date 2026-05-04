@@ -116,6 +116,18 @@ class EffectDef:
     cancel_on_supersede: bool = False
 
 @dataclass
+class SupervisionDef:
+    """Supervision strategy for child components — Erlang/OTP style."""
+    fn: Callable
+    is_async: bool = False
+    strategy: str = "one_for_one"   # one_for_one | one_for_all | rest_for_one
+    max_restarts: int = 3
+    within_seconds: float = 60.0
+    backoff: str = "exponential"    # constant | linear | exponential
+    base_delay: float = 1.0
+
+
+@dataclass
 class KindDef:
     """A declared data schema — a named Pydantic model contributed by a component."""
     name: str
@@ -176,6 +188,7 @@ class ComponentMeta:
     snapshot_is_async: bool = False
     restore_fn: Callable | None = None
     restore_is_async: bool = False
+    supervision_def: SupervisionDef | None = None
     properties: dict[str, Any] = field(default_factory=dict)
     dependencies: list[str] = field(default_factory=list)  # factory names
 
@@ -589,6 +602,48 @@ class lifecycle:
         fn.__lifecycle__ = "restore"
         return fn
 
+    @staticmethod
+    def supervision(
+        *,
+        strategy: str = "one_for_one",
+        max_restarts: int = 3,
+        within_seconds: float = 60.0,
+        backoff: str = "exponential",
+        base_delay: float = 1.0,
+    ):
+        """Declare a supervision callback for child component failures.
+
+        Strategies (Erlang/OTP):
+            one_for_one  — restart only the failed child
+            one_for_all  — restart ALL children
+            rest_for_one — restart the failed child + everything started after it
+
+        The decorated method is called with:
+            (self, child_name: str, error: Exception, attempt: int, context: SupervisionContext)
+        Return True to proceed with restart, False to give up.
+        Raise SupervisionEscalation to fail this supervisor upward.
+
+            @lifecycle.supervision(strategy="one_for_one", max_restarts=3, within_seconds=60)
+            async def on_child_failure(self, child_name, error, attempt, context):
+                return True  # proceed with restart
+        """
+        if strategy not in ("one_for_one", "one_for_all", "rest_for_one"):
+            raise ValueError(f"Unknown supervision strategy: {strategy!r}")
+        if backoff not in ("constant", "linear", "exponential"):
+            raise ValueError(f"Unknown backoff strategy: {backoff!r}")
+
+        def decorator(fn: Callable) -> Callable:
+            fn.__lifecycle__ = "supervision"
+            fn.__supervision_config__ = {
+                "strategy": strategy,
+                "max_restarts": max_restarts,
+                "within_seconds": within_seconds,
+                "backoff": backoff,
+                "base_delay": base_delay,
+            }
+            return fn
+        return decorator
+
 
 def _finalize_meta(cls: type) -> ComponentMeta:
     """Scan a decorated class and collect all metadata into ComponentMeta.
@@ -684,6 +739,13 @@ def _finalize_meta(cls: type) -> ComponentMeta:
         elif lc == "restore":
             meta.restore_fn = obj
             meta.restore_is_async = inspect.iscoroutinefunction(obj)
+        elif lc == "supervision":
+            cfg = getattr(obj, "__supervision_config__", {})
+            meta.supervision_def = SupervisionDef(
+                fn=obj,
+                is_async=inspect.iscoroutinefunction(obj),
+                **cfg,
+            )
 
     # Auto-infer dependencies from @requires contracts
     # Convention: IConfig → "config", ILogger → "logging", etc.

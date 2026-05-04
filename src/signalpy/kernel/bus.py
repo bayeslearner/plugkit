@@ -5,10 +5,17 @@ for cross-process (JSON-RPC, Dapr, etc.).
 
 The bus carries schemas alongside handlers (Phase 0a) and is observable
 via a Signal tracking registered handler names (Phase 0b).
+
+Reliability features (spec 010):
+  - invoke() supports optional timeout (asyncio.TimeoutError on expiry)
+  - invoke_nowait() for fire-and-forget invocation
+  - Dead letter channel (__dead_letter__) for failed dispatches
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -81,6 +88,8 @@ class Bus:
         "_ide", "_helper", "_fn", "_tool", "_func", "_api",
         "_action", "_command", "_op", "_handler", "_service",
     })
+
+    DEAD_LETTER_CHANNEL = "__dead_letter__"
 
     def __init__(self) -> None:
         self._handlers: dict[str, Callable] = {}    # target → async fn
@@ -203,44 +212,126 @@ class Bus:
         """
         self._target_routes.setdefault(factory_runnable, {})[target] = instance_runnable
 
-    async def invoke(self, target: str, params: dict | None = None) -> Any:
+    async def invoke(self, target: str, params: dict | None = None,
+                     *, timeout: float | None = None) -> Any:
         """Invoke a handler by target name.
+
+        Args:
+            target: Handler name (e.g. "my-app.search").
+            params: Parameters dict passed to the handler.
+            timeout: Optional timeout in seconds. Raises asyncio.TimeoutError
+                     if the handler doesn't complete within the deadline.
 
         Routing order:
           1. Exact match on handler name
           2. Target routing: if params has 'target' and factory.runnable has routes
-          3. Cross-process transports
+          3. Name resolution (hallucination hardening)
+          4. Cross-process transports
         """
         p = params or {}
+        handler = self._resolve_handler(target, p)
+
+        if handler is not None:
+            try:
+                if timeout is not None:
+                    return await asyncio.wait_for(handler(p), timeout=timeout)
+                return await handler(p)
+            except asyncio.TimeoutError:
+                self._dead_letter(target, p, reason="timeout")
+                raise
+
+        # Try cross-process transports
+        for transport in self._transports:
+            try:
+                coro = transport.invoke(target, p)
+                if timeout is not None:
+                    return await asyncio.wait_for(coro, timeout=timeout)
+                return await coro
+            except NotImplementedError:
+                continue
+            except asyncio.TimeoutError:
+                self._dead_letter(target, p, reason="timeout")
+                raise
+
+        self._dead_letter(target, p, reason="no_handler")
+        raise KeyError(f"No handler for bus target {target!r} (local or remote)")
+
+    def invoke_nowait(self, target: str, params: dict | None = None) -> None:
+        """Schedule a handler invocation on the event loop. Fire-and-forget.
+
+        Errors in the handler are logged and sent to the dead letter channel.
+        Policy checks are the caller's responsibility (Runtime.invoke_nowait
+        checks policy before calling this).
+        """
+        p = params or {}
+        handler = self._resolve_handler(target, p)
+
+        if handler is None:
+            self._dead_letter(target, p, reason="no_handler")
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._invoke_nowait_wrapper(target, handler, p))
+        except RuntimeError:
+            log.warning("invoke_nowait(%s): no running event loop", target)
+
+    async def _invoke_nowait_wrapper(self, target: str, handler: Callable,
+                                     params: dict) -> None:
+        """Wrapper that catches and logs errors from fire-and-forget invocations."""
+        try:
+            await handler(params)
+        except Exception as exc:
+            log.exception("invoke_nowait handler error: %s", target)
+            self._dead_letter(target, params, reason="handler_error", error=exc)
+
+    def _resolve_handler(self, target: str, params: dict) -> Callable | None:
+        """Resolve a target name to a handler function.
+
+        Checks: exact match → L3 target routing → name resolution.
+        Returns None if no local handler found (caller may try transports).
+        """
         handler = self._handlers.get(target)
         if handler is not None:
-            return await handler(p)
+            return handler
 
         # L3 target routing: factory.runnable + target param → instance.runnable
-        target_value = p.get("target")
+        target_value = params.get("target") if isinstance(params, dict) else None
         if target_value and target in self._target_routes:
             routes = self._target_routes[target]
             instance_target = routes.get(target_value)
             if instance_target:
                 handler = self._handlers.get(instance_target)
                 if handler:
-                    return await handler(p)
+                    return handler
 
         # Try name resolution (hallucination hardening)
         resolved = self.resolve_handler_name(target)
         if resolved:
             handler = self._handlers.get(resolved)
             if handler:
-                return await handler(p)
+                return handler
 
-        # Try cross-process transports
-        for transport in self._transports:
+        return None
+
+    # ── Dead letter channel ────────────────────────────────────────────
+
+    def _dead_letter(self, target: str, params: dict | None,
+                     reason: str, error: Exception | None = None) -> None:
+        """Record a failed dispatch to the dead letter channel."""
+        envelope = {
+            "target": target,
+            "params": params,
+            "reason": reason,
+            "error": str(error) if error else None,
+            "timestamp": time.time(),
+        }
+        log.warning("Dead letter: %s → %s", target, reason)
+        for handler in self._subscribers.get(self.DEAD_LETTER_CHANNEL, []):
             try:
-                return await transport.invoke(target, p)
-            except NotImplementedError:
-                continue
-
-        raise KeyError(f"No handler for bus target {target!r} (local or remote)")
+                handler(self.DEAD_LETTER_CHANNEL, envelope)
+            except Exception:
+                pass  # dead letter handler must not throw
 
     # ── Publish / Subscribe (events) ────────────────────────────────
 
