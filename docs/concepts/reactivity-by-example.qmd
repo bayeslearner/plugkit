@@ -3,6 +3,10 @@ title: "Reactivity by Example"
 subtitle: "Consumer, Provider, and Kernel — side by side, one cycle from first run to re-run."
 ---
 
+> **Reading order:** [Architecture](architecture.qmd) ->
+> [Reading the Kernel](kernel-reading-guide.qmd) -> **You are here** ->
+> [ContextVar and Tracking](contextvar-and-tracking.qmd) (deeper dive into the tracking mechanism).
+
 The reactive engine is small (~450 lines) but the value of reading any one
 file in isolation is limited. The interesting question is: **when a consumer
 calls a provider, what does the kernel do underneath, and how does that

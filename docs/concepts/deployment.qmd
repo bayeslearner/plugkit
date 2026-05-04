@@ -3,6 +3,8 @@ title: "Deployment Scales"
 subtitle: "Monolith → containers → Dapr → agent system. Same components, different deployment."
 ---
 
+> **Reading order:** [Bridging External Systems](bridging.qmd) -> **You are here** (last concepts page).
+
 ## Scale 1: Monolith
 
 One kernel, all in-process. Bus = direct function call. Zero serialization.

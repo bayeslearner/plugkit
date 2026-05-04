@@ -3,6 +3,10 @@ title: "Reading the Kernel: A Complete Guide"
 subtitle: "Every file in src/signalpy/kernel/, explained from scratch."
 ---
 
+> **Reading order:** [Architecture](architecture.qmd) (the "why") **->
+> You are here** (the "how") ->
+> [Reactivity by Example](reactivity-by-example.qmd) (one full cycle traced).
+
 This page walks you through the entire kernel source code. It assumes you
 know Python but nothing about this project. By the end you will understand
 every file, every data structure, and how they connect.

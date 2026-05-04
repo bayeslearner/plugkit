@@ -3,6 +3,10 @@ title: "Threading Model"
 subtitle: "Does this work with threads? How do two threads share a Signal? Are we reinventing the wheel?"
 ---
 
+> **Reading order:** [Reactive Engine: Line by Line](reactive-line-by-line.qmd) ->
+> **You are here** ->
+> [Supervision and Reliability](supervision.qmd).
+
 When people first read the reactive engine they tend to ask three questions
 in this order:
 

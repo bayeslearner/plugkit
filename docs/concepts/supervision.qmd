@@ -3,6 +3,11 @@ title: "Supervision and Reliability"
 subtitle: "Bus timeout, fire-and-forget, dead letter, and Erlang-style supervision trees."
 ---
 
+> **Reading order:** [Threading Model](threading-model.qmd) ->
+> **You are here** ->
+> [Bridging External Systems](bridging.qmd).
+> For API reference, see [Kernel API](../ref/kernel-api.qmd).
+
 This page explains the reliability features added in spec 010. These
 were motivated by comparing the actor model (Pykka) against our reactive
 kernel. The conclusion: we don't need actors, but we need the specific
@@ -60,26 +65,10 @@ def _on_failure(self, event_type, data):
     )
 ```
 
-Dead letter envelopes have this shape:
-
-```python
-{
-    "target": "missing.handler",
-    "params": {"key": "value"},
-    "reason": "no_handler",     # or "handler_error" or "timeout"
-    "error": "...",             # string repr of the exception, or None
-    "timestamp": 1714838400.0,
-}
-```
-
-Scenarios that fire dead letters:
-
-| Scenario | reason |
-|---|---|
-| `invoke()` target not found | `no_handler` |
-| `invoke_nowait()` target not found | `no_handler` |
-| `invoke_nowait()` handler throws | `handler_error` |
-| `invoke()` timeout | `timeout` |
+Each envelope contains `target`, `params`, `reason`, `error`, and
+`timestamp`. Reasons: `no_handler`, `handler_error`, `timeout`. See
+[Kernel API: Dead Letter Channel](../ref/kernel-api.qmd#dead-letter-channel)
+for the full shape.
 
 ---
 

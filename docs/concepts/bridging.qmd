@@ -3,6 +3,10 @@ title: "Bridging External Systems"
 subtitle: "How the kernel integrates with systems it doesn't own."
 ---
 
+> **Reading order:** [Supervision and Reliability](supervision.qmd) ->
+> **You are here** ->
+> [Deployment Scales](deployment.qmd).
+
 ## The Problem
 
 Real apps integrate with PostgreSQL, Redis, Phoenix, Celery. Each has its own lifecycle, config, SDK. The kernel must make these trivially easy to wrap without reimplementing or fighting them.

@@ -36,37 +36,11 @@ No `@bind`. No `@unbind`. No manual event wiring. The reactive graph handles pro
 
 ## How Reactivity Works
 
-Three primitives, implemented in 327 lines of pure Python:
+Three primitives power the whole kernel: **Signal** (holds a value, tracks readers), **Computed** (cached derived value), **Effect** (re-runs when dependencies change). Every `self.rt.config` access is a Signal read. Inside `@effect`, that read is tracked. When config changes, your effect re-runs automatically.
 
-| Primitive | What it does | In the kernel |
-|---|---|---|
-| **Signal** | Holds a value. Reading tracks the caller. Writing notifies all readers. | Each `self.rt.config`, `self.rt.db` is a Signal |
-| **Computed** | Derives a value from Signals. Caches. Recomputes only when deps change. | `@computed` decorator on component methods |
-| **Effect** | Runs a function. Re-runs when any Signal it read changes. | `@effect` decorator on component methods |
+No `@bind`. No `@unbind`. No manual event wiring. The reactive graph handles propagation.
 
-```{mermaid}
-sequenceDiagram
-    participant S as Signal (self.rt.config)
-    participant E as @effect method
-    participant C as @computed property
-
-    Note over S,C: Boot: effect runs once, tracks deps
-    E->>S: reads config → tracked
-    S-->>E: subscriber registered
-
-    Note over S,C: Later: config changes
-    S->>E: notify → effect re-runs
-    S->>C: notify → computed marked dirty
-    C->>C: next read → recomputes
-```
-
-When you write `self.rt.config.get("url")` inside an `@effect`:
-
-1. `self.rt.config` → calls `Signal.get()` → kernel records "this Effect depends on this Signal"
-2. Later, config changes → `Signal.set(new_config)` → kernel notifies all subscribers
-3. Your `@effect` re-runs automatically — reads the new config, does whatever it needs
-
-**This is Vue 3's reactivity model applied to service injection.** Same algorithm (dependency tracking via a context variable), same composability (Computed chains, Effects compose), different domain (backend services instead of DOM).
+For the full explanation with code, see [Reading the Kernel: reactive.py](concepts/kernel-reading-guide.qmd#reactive).
 
 ## The 12 Decorators
 
@@ -89,9 +63,9 @@ Tutorials teach one concept at a time. Each builds on the last.
 | 2 | [Give and Take](guide/02-give-and-take.qmd) | `@provides`, `@requires`, typed contracts, `self.rt` |
 | 3 | [Dynamic Services](guide/03-dynamic-services.qmd) | `list[C]` aggregate, `@effect`, `hot_add`/`hot_remove` |
 | 4 | [Runnables & API](guide/04-runnables-and-api.qmd) | `@runnable`, `@api`, bus invocation, transports |
-| 5 | [Auth & Policy](guide/05-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
-| 6 | [Building a Provider](guide/06-building-a-provider.qmd) | Write your own `ICache` or `IDatabase`, bridge pattern |
-| 7 | [Commercial Patterns](patterns/index.qmd) | Secret rotation, A/B testing, multi-tenant, extension bundles, circuit breaker, audit trail |
+| 6 | [Auth & Policy](guide/06-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
+| 7 | [Building a Provider](guide/07-building-a-provider.qmd) | Write your own `ICache` or `IDatabase`, bridge pattern |
+| | [Advanced Patterns](patterns/index.qmd) | Secret rotation, A/B testing, multi-tenant, extension bundles, circuit breaker, audit trail |
 
 ## Reference
 

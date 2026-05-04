@@ -22,9 +22,12 @@ website:
           - text: "5. Gateway & Transports"
             href: guide/05-gateway-and-transports.qmd
           - text: "6. Auth & Policy"
-            href: guide/05-auth-and-policy.qmd
+            href: guide/06-auth-and-policy.qmd
           - text: "7. Building a Provider"
-            href: guide/06-building-a-provider.qmd
+            href: guide/07-building-a-provider.qmd
+          - text: "---"
+          - text: "Advanced Patterns"
+            href: patterns/index.qmd
       - text: "Concepts"
         menu:
           - text: "Architecture"
@@ -86,8 +89,8 @@ website:
         - guide/03-dynamic-services.qmd
         - guide/04-runnables-and-api.qmd
         - guide/05-gateway-and-transports.qmd
-        - guide/05-auth-and-policy.qmd
-        - guide/06-building-a-provider.qmd
+        - guide/06-auth-and-policy.qmd
+        - guide/07-building-a-provider.qmd
     - title: "Concepts"
       contents:
         - concepts/architecture.qmd

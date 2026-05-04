@@ -3,6 +3,9 @@ title: "Architecture"
 subtitle: "Constitution, two-axis model, reactive foundation."
 ---
 
+> **Reading order:** This is the starting point for concepts.
+> Next: [Reading the Kernel](kernel-reading-guide.qmd) (file-by-file walkthrough).
+
 ## Constitution
 
 Non-negotiable design rules. Every decision traces back to one of these.
@@ -16,7 +19,7 @@ Non-negotiable design rules. Every decision traces back to one of these.
 7. **Apps are deployment units, components are composition units.**
 8. **Lifecycle is explicit and managed.** Dependency-ordered activation, reverse shutdown.
 9. **Every API has a client counterpart.** One declaration, every surface.
-10. **The kernel is small.** ~2600 lines across 9 files. Readable in one sitting.
+10. **The kernel is small.** ~3,100 lines across 9 files. Readable in one sitting.
 11. **Scoping is structural, not opt-in.** Credentials and storage are per-component by default.
 12. **Concurrency is correct by default.** Per-flow tracking via `ContextVar`, shared-state mutation via `RLock`. Threads and asyncio tasks share Signals safely without consumer code touching a lock. ([Threading Model](threading-model.qmd))
 
@@ -48,7 +51,7 @@ graph LR
     U --> REG
 ```
 
-**Axis 1** is the kernel — the irreplaceable mechanism. ~2600 lines. Cannot be swapped.
+**Axis 1** is the kernel — the irreplaceable mechanism. ~3,100 lines. Cannot be swapped.
 
 **Axis 2** is everything written *using* the kernel. Providers, adapters, your apps. All components. All replaceable.
 
@@ -56,15 +59,15 @@ graph LR
 
 | Primitive | File | Lines | Purpose |
 |---|---|---|---|
-| **Reactivity Engine** | `reactive.py` | 327 | Signal, Computed, Effect, batch. The foundation. |
-| **Component Model** | `component.py` | 673 | 12 decorators. ComponentMeta. _finalize_meta. |
-| **Lifecycle Manager** | `lifecycle_manager.py` | 270 | State machine. Dependency-ordered activation (topological sort). Effect disposal. |
-| **Service Registry** | `registry.py` | 199 | Provide/require. Ranking. Reference counting (tracks how many consumers hold each service). Factories. |
-| **Bus** | `bus.py` | 155 | invoke (req/res) + publish (events). Pluggable transport. |
-| **Runtime** | `runtime.py` | 151 | Reactive self.rt. Signal-backed __getattr__. |
-| **Traits** | `traits.py` | 173 | L0–L3 trait computation from metadata. |
-| **Contracts** | `contracts.py` | 74 | Protocol interfaces (IConfig, ILogger, etc.) |
-| **Kernel** | `__init__.py` | 639 | Orchestration. Boot, shutdown, hot_add, status. |
+| **Reactivity Engine** | `reactive.py` | ~600 | Signal, Computed, Effect, batch. The foundation. |
+| **Component Model** | `component.py` | ~750 | 12 decorators. ComponentMeta. _finalize_meta. |
+| **Lifecycle Manager** | `lifecycle_manager.py` | ~560 | State machine. Supervision. Dependency-ordered activation. |
+| **Service Registry** | `registry.py` | ~200 | Provide/require. Ranking. Reference counting. |
+| **Bus** | `bus.py` | ~400 | invoke + publish + timeout + dead letter. Pluggable transport. |
+| **Runtime** | `runtime.py` | ~170 | Reactive self.rt. Signal-backed __getattr__. |
+| **Traits** | `traits.py` | ~180 | L0–L3 trait computation from metadata. |
+| **Contracts** | `contracts.py` | ~80 | Protocol interfaces (IConfig, ILogger, etc.) |
+| **Kernel** | `__init__.py` | ~900 | Orchestration. Boot, shutdown, hot_add, supervision wiring. |
 
 ## Decoration → Activation
 
@@ -312,36 +315,9 @@ wired up — first run, dependency tracking, mutation, re-run — see
 [Reactivity by Example](reactivity-by-example.qmd).
 
 
-## The Reactive Foundation
+## Further reading
 
-v2's key insight: **reactivity IS the kernel**, not a feature bolted on.
-
-Every injected service is a `Signal`. Reading `self.rt.config` inside an `@effect` or `@computed` is a reactive read — the kernel tracks the dependency. When the service changes, the consumer is notified automatically.
-
-```{mermaid}
-sequenceDiagram
-    participant CA as ConfigAdmin
-    participant R as Registry
-    participant RT as Runtime (Signal)
-    participant E as @effect
-
-    CA->>R: update("printer", {width: 80})
-    R->>RT: Signal.set(new_service)
-    RT->>E: notify()
-    E->>E: re-run (reads new config)
-```
-
-This replaces manual `@bind`/`@unbind` callbacks, manual config polling, and manual state synchronization.
-
-## Traits
-
-The kernel auto-computes traits from what a component declares:
-
-| Level | Traits | How acquired |
-|---|---|---|
-| **L0 Kernel** | identifiable, lifecycle, dependable, registrable, inspectable, factoryable | Every component |
-| **L1 Platform** | observable, configurable, secured, storable, communicable | From `@requires` |
-| **L2 App** | runnable, subscribable, kinded, skillful, routable, **reactive**, adaptable | From decorators |
-| **L3 Instance** | targeted, scoped, versioned | From properties/metadata |
-
-Queryable at runtime via `kernel.status()`.
+- **[Reading the Kernel](kernel-reading-guide.qmd)** — every file, every data structure, in dependency order. Start here for a thorough code walk-through.
+- **[Reactivity by Example](reactivity-by-example.qmd)** — one full cycle traced from boot to re-run.
+- **[Traits (L0--L3)](../ref/traits.qmd)** — the full trait table and inference rules.
+- **[Supervision and Reliability](supervision.qmd)** — bus timeout, fire-and-forget, dead letter, Erlang-style supervision trees.

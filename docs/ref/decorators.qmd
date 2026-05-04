@@ -50,7 +50,8 @@ Declare services this component provides. Accepts types or strings.
 @requires(*, optional: bool = False, key: str = "", **deps: str | type)
 ```
 
-Declare services this component requires. One decorator, three injection modes:
+Declare services this component requires. One decorator, three injection modes.
+See [Contracts](contracts.qmd) for the built-in contract types.
 
 ```python
 @requires(config=IConfig)                   # single (highest-ranked)

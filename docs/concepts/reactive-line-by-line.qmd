@@ -3,7 +3,11 @@ title: "Reactive Engine: Line by Line"
 subtitle: "A complete walkthrough of reactive.py — every data structure, every method, every edge case."
 ---
 
-The entire reactive engine is one file: `src/signalpy/kernel/reactive.py` (~350 lines).
+> **Reading order:** [ContextVar and Tracking](contextvar-and-tracking.qmd) ->
+> **You are here** ->
+> [Threading Model](threading-model.qmd).
+
+The entire reactive engine is one file: `src/signalpy/kernel/reactive.py` (~600 lines).
 This tutorial walks through it top to bottom, then traces three scenarios through
 the data structures to show exactly what happens at runtime.
 

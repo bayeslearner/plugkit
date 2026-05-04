@@ -3,6 +3,10 @@ title: "Context, ContextVar, and the Active Consumer"
 subtitle: "How a single ContextVar can correctly route reactive tracking for any number of effects, providers, and threads."
 ---
 
+> **Reading order:** [Reactivity by Example](reactivity-by-example.qmd) ->
+> **You are here** ->
+> [Reactive Engine: Line by Line](reactive-line-by-line.qmd).
+
 A common confusion when reading the reactive engine for the first time:
 
 > *There's only one `_active_consumer`. It's a single `ContextVar`. The program has many effects, many signals, many computeds. **How can one variable possibly track all of that?***
