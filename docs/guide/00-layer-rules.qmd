@@ -83,14 +83,27 @@ Wire it in before I wake up."
 @requires(creds=ICredentials, storage=IStorage)
 ```
 
-### bus.invoke — "I want another component to do something"
+### bus.invoke — The universal inbound router
+
+The primary purpose of `bus.invoke` is **routing requests from the outside world
+into your component graph.** Every transport (REST, MCP, CLI, LLM agent) uses
+the same mechanism:
+
+```
+HTTP POST /api/v1/orders/place   ──→ bus.invoke("orders.place", body)   ──→ @runnable
+MCP tool call "search.query"     ──→ bus.invoke("search.query", args)   ──→ @runnable
+CLI: myapp orders place          ──→ bus.invoke("orders.place", args)   ──→ @runnable
+LLM agent tool use               ──→ bus.invoke("docs.summarize", args) ──→ @runnable
+```
+
+The component never knows what called it. The caller never knows what implements it.
+The bus name string is the only connection.
+
+**Secondary use:** one component asking another to do something:
 
 ```python
 result = await self.rt.invoke("email-service.send", {"to": "user@x.com", "body": "..."})
 ```
-
-**What it means:** "I'm asking a peer to perform an action. It's a request,
-not a structural dependency."
 
 **What happens:**
 
@@ -117,32 +130,50 @@ await self.rt.invoke("email-service.send", {"to": addr, "body": msg})
 
 # "Hey search service, run this query"
 results = await self.rt.invoke("search.query", {"q": "hello"})
-
-# "Hey config, update this setting" (admin operation)
-await self.rt.invoke("config.update", {"pid": "printer", "properties": {"width": 80}})
 ```
 
-### The Decision Flowchart
+::: {.callout-warning}
+## bus.invoke can fail — handle it
 
-Ask yourself these questions in order:
+Unlike `@requires` (guaranteed at boot), `bus.invoke` is a runtime dispatch.
+Wrap it in try/except when the result matters to your logic:
 
+```python
+try:
+    result = await self.rt.invoke("payments.charge", {"amount": 100}, timeout=5.0)
+except asyncio.TimeoutError:
+    self.rt.logger.error("Payment timed out")
+except KeyError:
+    self.rt.logger.error("Payment service not available")
 ```
-1. Do I need this to EXIST before I can function?
-   YES → @requires
-   NO  → continue
 
-2. Do I need to REACT when it changes?
-   YES → @requires (so you get reactive tracking via self.rt)
-   NO  → continue
+For fire-and-forget side effects (notifications, audit), use `invoke_nowait`:
 
-3. Am I asking a peer to DO something (an action/command)?
-   YES → bus.invoke
-   NO  → continue
-
-4. Is it an infrastructure contract (IConfig, ILogger, ICredentials, IStorage)?
-   YES → @requires (these are your structural dependencies)
-   NO  → bus.invoke (it's a capability you're using, not part of your identity)
+```python
+self.rt.invoke_nowait("notifications.send", {"user": user_id, "msg": "Done!"})
+# Returns immediately. Errors go to dead letter channel.
 ```
+:::
+
+### The Decision Rule: Nouns vs Verbs
+
+Forget flowcharts. One rule:
+
+> **If it's a noun (something you HAVE), `@requires` it.**
+> **If it's a verb (something you ASK someone to DO), `invoke` it.**
+
+| Thing | Noun or verb? | Use |
+|---|---|---|
+| Config | Noun — "I have config" | `@requires(config=IConfig)` → `self.rt.config.get(...)` |
+| Logger | Noun — "I have a logger" | `@requires(logger=ILogger)` → `self.rt.logger.info(...)` |
+| Credentials | Noun — "I have creds" | `@requires(creds=ICredentials)` → `self.rt.creds.get(...)` |
+| Storage | Noun — "I have storage" | `@requires(storage=IStorage)` → `await self.rt.storage.put(...)` |
+| "Send an email" | Verb — action on a peer | `await self.rt.invoke("email.send", {...})` |
+| "Run a search" | Verb — action on a peer | `await self.rt.invoke("search.query", {...})` |
+| "Process payment" | Verb — action on a peer | `await self.rt.invoke("payments.charge", {...})` |
+
+**Infrastructure contracts (IConfig, ILogger, ICredentials, IStorage) are ALWAYS `@requires`.** No exceptions.
+**Business actions on peer components are ALWAYS `invoke`.** They're verbs.
 
 ### Why both exist — the deeper reason
 
