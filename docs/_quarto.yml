@@ -11,6 +11,8 @@ website:
     left:
       - text: "Tutorials"
         menu:
+          - text: "0. Layer Rules & Decision Guide"
+            href: guide/00-layer-rules.qmd
           - text: "1. First Component"
             href: guide/01-first-component.qmd
           - text: "2. Give and Take"
@@ -84,6 +86,7 @@ website:
   sidebar:
     - title: "Tutorials"
       contents:
+        - guide/00-layer-rules.qmd
         - guide/01-first-component.qmd
         - guide/02-give-and-take.qmd
         - guide/03-dynamic-services.qmd

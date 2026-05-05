@@ -1,0 +1,446 @@
+---
+title: "0. Layer Rules & Decision Guide"
+subtitle: "What you're allowed to touch depends on where you are. This page answers: which API do I use?"
+---
+
+> **Read this first.** Every other tutorial teaches mechanics — *how* things work.
+> This page tells you *which* mechanism to reach for when you're writing real code.
+
+## The Three Layers
+
+Every piece of code in a SignalPy system lives in exactly one of these layers.
+Each layer has a strict boundary — cross it and you've introduced a bug that
+won't show up until something changes at runtime.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  APP LAYER  — your business logic                       │
+│  You ARE a component. You use decorators + self.rt.     │
+├─────────────────────────────────────────────────────────┤
+│  PLATFORM LAYER  — boot + wiring + HTTP shell           │
+│  You ASSEMBLE components. You expose bus to transport.  │
+├─────────────────────────────────────────────────────────┤
+│  KERNEL  — the reactive engine (you don't touch this)   │
+│  Signal, Computed, Effect, Registry, Bus, Lifecycle.    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### What each layer is allowed to touch
+
+| | App Layer | Platform Layer | Kernel (don't touch) |
+|---|---|---|---|
+| **Imports from kernel** | decorators, contracts | `Kernel` class only | — |
+| **Creates a Kernel?** | Never | Yes, exactly once | — |
+| **Calls registry.require?** | Never | Only at boot script level | — |
+| **Calls bus.invoke?** | Via `self.rt.invoke()` | Via `app.state.bus.invoke()` | — |
+| **Reads config?** | Via `self.rt.config.get()` | Via bus.invoke to a runnable | — |
+| **Holds kernel reference?** | Never | Only in boot script, never on app.state | — |
+
+---
+
+## The Big Question: @requires vs bus.invoke
+
+These are the two ways a component gets at another component's stuff.
+They are **not interchangeable.** They serve fundamentally different purposes.
+
+### @requires — "I am structurally made of this"
+
+```python
+@requires(config=IConfig, logger=ILogger)
+class MyApp: ...
+```
+
+**What it means:** "I cannot exist without this. It's part of my identity.
+Wire it in before I wake up."
+
+**What happens:**
+
+1. The kernel reads your `@requires` at boot
+2. It refuses to activate you until every required service exists
+3. It injects the service as a Signal on `self.rt`
+4. Every read is reactive — `@effect` and `@computed` auto-track it
+5. If the service is hot-swapped later, your effects re-run automatically
+
+**Properties:**
+
+- Resolved at **boot time** (before your `@lifecycle.activate` runs)
+- **Guaranteed** to exist when you access it — the kernel ensures this
+- **Reactive** — reading `self.rt.config.get("x")` inside `@effect` subscribes you
+- **No auth check** — you already proved you need it by declaring `@requires`
+- **Direct method calls** — `self.rt.config.get("key")`, not `await invoke(...)`
+- **Structural** — shows up in dependency graph, affects activation order
+
+**Use it for:** infrastructure services that define what your component *is*.
+
+```python
+# "I am a configurable, observable search service"
+@requires(config=IConfig, logger=ILogger)
+
+# "I am a spell checker that needs dictionaries"
+@requires(dicts=list[IDictionary])
+
+# "I need credentials to talk to my backing store"
+@requires(creds=ICredentials, storage=IStorage)
+```
+
+### bus.invoke — "I want another component to do something"
+
+```python
+result = await self.rt.invoke("email-service.send", {"to": "user@x.com", "body": "..."})
+```
+
+**What it means:** "I'm asking a peer to perform an action. It's a request,
+not a structural dependency."
+
+**What happens:**
+
+1. The bus looks up the handler by name at runtime
+2. The params are validated through the target's Pydantic model
+3. Auth/policy is checked (does the caller have permission?)
+4. The target's `@runnable` method executes
+5. The result comes back (or: timeout, error, dead letter)
+
+**Properties:**
+
+- Resolved at **runtime** (every single call)
+- **Can fail** — target might not exist, might timeout, might deny auth
+- **Not reactive** — it's a one-shot request/response, not a subscription
+- **Auth-checked** — the bus enforces `requires_action`/`requires_role`
+- **Async always** — `await self.rt.invoke(...)` because it crosses a boundary
+- **Loose coupling** — caller only knows the name string, not the type
+
+**Use it for:** actions you want a peer component to perform.
+
+```python
+# "Hey email service, send this notification"
+await self.rt.invoke("email-service.send", {"to": addr, "body": msg})
+
+# "Hey search service, run this query"
+results = await self.rt.invoke("search.query", {"q": "hello"})
+
+# "Hey config, update this setting" (admin operation)
+await self.rt.invoke("config.update", {"pid": "printer", "properties": {"width": 80}})
+```
+
+### The Decision Flowchart
+
+Ask yourself these questions in order:
+
+```
+1. Do I need this to EXIST before I can function?
+   YES → @requires
+   NO  → continue
+
+2. Do I need to REACT when it changes?
+   YES → @requires (so you get reactive tracking via self.rt)
+   NO  → continue
+
+3. Am I asking a peer to DO something (an action/command)?
+   YES → bus.invoke
+   NO  → continue
+
+4. Is it an infrastructure contract (IConfig, ILogger, ICredentials, IStorage)?
+   YES → @requires (these are your structural dependencies)
+   NO  → bus.invoke (it's a capability you're using, not part of your identity)
+```
+
+### Why both exist — the deeper reason
+
+This maps to a fundamental distinction in distributed systems:
+**dependencies vs interactions.**
+
+| Concept | @requires | bus.invoke |
+|---|---|---|
+| OOP analogy | Constructor injection | Method call on a collaborator |
+| Distributed analogy | Service mesh sidecar (always there) | RPC to another service |
+| Database analogy | Foreign key (structural) | Query (behavioral) |
+| English | "I **have** a config" | "I **ask** search to find things" |
+| Failure mode | Boot fails (loud, immediate) | Call fails (runtime, handleable) |
+| Change propagation | Automatic (reactive graph) | Manual (call again if you want fresh data) |
+
+If you get this wrong:
+
+- Using `@requires` for a peer action → your component can't boot without that peer.
+  Now you have a hard dependency on an optional collaborator.
+- Using `bus.invoke` for structural infrastructure → you lose reactivity, you have
+  to handle "not found" errors for things that should always be there, and you're
+  doing async I/O for what should be a synchronous attribute read.
+
+### Concrete example: right and wrong
+
+```python
+# ❌ WRONG — bus.invoke for structural dependency
+@component("my-app")
+class MyApp:
+    @runnable("do-thing", params=BaseModel, description="Do thing")
+    async def do_thing(self, params):
+        # Why is this wrong? Because:
+        # 1. You're doing async I/O for a synchronous config read
+        # 2. You can't react to config changes (no reactive tracking)
+        # 3. If config service isn't up, this fails at runtime instead of boot
+        config = await self.rt.invoke("config.get_app_config", {"pid": "my-app"})
+        url = config["url"]
+        ...
+
+# ✅ RIGHT — @requires for structural dependency
+@component("my-app")
+@requires(config=IConfig)
+class MyApp:
+    @computed
+    def url(self):
+        # Reactive! Auto-recomputes when config changes.
+        # Guaranteed to exist. Synchronous. No error handling needed.
+        return self.rt.config.get("my-app.url", "http://localhost")
+
+    @runnable("do-thing", params=BaseModel, description="Do thing")
+    async def do_thing(self, params):
+        # self.url is always fresh, always available
+        ...
+```
+
+```python
+# ❌ WRONG — @requires for a peer action
+@component("my-app")
+@requires(email="IEmailService")  # Now my-app can't boot without email service!
+class MyApp:
+    @runnable("submit", params=SubmitParams, description="Submit")
+    async def submit(self, params):
+        self.rt.email.send(params.to, params.body)  # Direct call, no auth check
+
+# ✅ RIGHT — bus.invoke for a peer action
+@component("my-app")
+@requires(config=IConfig, logger=ILogger)  # Only structural deps
+class MyApp:
+    @runnable("submit", params=SubmitParams, description="Submit")
+    async def submit(self, params):
+        # Loose coupling: email service can be deployed independently
+        # Auth-checked: bus enforces policy
+        # Failure is handleable: timeout, retry, dead letter
+        await self.rt.invoke("email-service.send", {
+            "to": params.to, "body": params.body
+        })
+```
+
+---
+
+## Platform Layer: What Routes Are Allowed to Do
+
+If you're writing FastAPI route handlers (the platform layer), you have
+**one tool**: `bus.invoke`. That's it.
+
+### Why only bus?
+
+Routes are the outermost shell. They receive bytes from the network and
+translate them into kernel actions. They are **not** components — they don't
+have `self.rt`, they don't participate in the reactive graph, they don't
+have lifecycle.
+
+If a route could call `registry.require("IConfig")`:
+
+1. It bypasses auth (the registry doesn't check permissions)
+2. It bypasses validation (no Pydantic model for the params)
+3. It creates invisible coupling (nothing in the dependency graph shows this)
+4. It can't be traced/audited (the bus has observability hooks, direct calls don't)
+5. It breaks the testing model (you can't mock at the bus boundary)
+
+### How to set up the platform layer correctly
+
+```python
+# platform/boot.py — the boot script
+
+from signalpy.kernel import Kernel
+from signalpy.providers.config import ConfigProvider
+from signalpy.providers.logging_provider import LoggingProvider
+from signalpy.providers.auth import AuthProvider
+from signalpy.providers.gateway import APIGateway
+from signalpy.adapters.rest import RESTTransport
+
+async def boot():
+    kernel = Kernel()
+    kernel.discover([
+        ConfigProvider, LoggingProvider, AuthProvider,
+        APIGateway, RESTTransport,
+        # ... your app components
+    ])
+    await kernel.boot()
+    return kernel
+```
+
+```python
+# platform/app.py — the FastAPI app
+
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup():
+    kernel = await boot()
+    # ✅ ONLY expose the bus. Never the kernel. Never the registry.
+    app.state.bus = kernel.bus
+    # Keep kernel ref only for shutdown
+    app.state._kernel = kernel
+
+@app.on_event("shutdown")
+async def shutdown():
+    await app.state._kernel.shutdown()
+```
+
+```python
+# platform/routes.py — route handlers
+
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+@router.post("/api/tasks/list")
+async def list_tasks(request: Request):
+    # ✅ The only thing routes do: translate HTTP → bus → HTTP
+    body = await request.json()
+    result = await request.app.state.bus.invoke("task-service.list", body)
+    return {"ok": True, "data": result}
+
+@router.post("/api/tasks/create")
+async def create_task(request: Request):
+    body = await request.json()
+    # Auth token forwarding (if using header-based auth):
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+    result = await request.app.state.bus.invoke(
+        "task-service.create", body, context={"auth_token": token}
+    )
+    return {"ok": True, "data": result}
+```
+
+::: {.callout-warning}
+## What if I need config in a route?
+
+You don't read config directly. You invoke a runnable that returns it:
+
+```python
+# ❌ WRONG
+config = kernel.registry.require("IConfig")
+url = config.get("app.url")
+
+# ✅ RIGHT — expose a runnable on your config-bearing component
+result = await request.app.state.bus.invoke("my-app.get_config", {})
+url = result["url"]
+```
+
+If this feels verbose, that's the point. Routes shouldn't need config.
+Config belongs inside components. If a route needs data, a component
+should compute and expose it via a runnable.
+:::
+
+### But wait — what about the RESTTransport?
+
+If you're using SignalPy's built-in `RESTTransport` or `mount_rest()`, you
+don't write route handlers at all! The transport auto-generates them from
+`@api` declarations. The routes above are only for when you have a custom
+FastAPI app with routes that aren't auto-generated.
+
+In practice:
+
+- **Simple case:** Use `RESTTransport` or `mount_rest()`. No hand-written routes needed.
+- **Custom routes:** For routes that do something beyond "forward to bus" (e.g.,
+  file uploads, SSE streams, WebSocket), write them by hand using `bus.invoke`.
+
+---
+
+## The @subscribe Decorator — Events (Tell, Don't Ask)
+
+There's a third communication pattern beyond `@requires` and `bus.invoke`:
+events via `@subscribe`.
+
+```python
+@component("audit-logger")
+@requires(logger=ILogger)
+class AuditLogger:
+    @subscribe("orders.*", description="Log all order events")
+    async def on_order_event(self, event_type, data):
+        self.rt.logger.info(f"Audit: {event_type}", data=data)
+```
+
+**How it differs from bus.invoke:**
+
+| | bus.invoke | @subscribe |
+|---|---|---|
+| Direction | Request → Response (ask) | Fire → Forget (tell) |
+| Coupling | Caller knows target name | Publisher doesn't know subscribers |
+| Return value | Yes (result from target) | No (void) |
+| Failure | Caller sees error | Publisher never knows |
+| Pattern | Command / Query | Event / Notification |
+| Analogy | "Hey search, find me X" | "FYI: an order was placed" |
+
+**When to use events:**
+
+- You want to **announce** something happened without caring who listens
+- Multiple components might react to the same event
+- The publisher shouldn't depend on the subscriber (reverse coupling is wrong)
+
+```python
+# Inside a component that processes orders:
+@runnable("place-order", params=OrderParams, description="Place an order")
+async def place_order(self, params):
+    order = await self._save_order(params)
+    # Tell the world. Don't care who's listening.
+    self.rt.publish("orders.placed", {"order_id": order.id, "total": order.total})
+    return {"order_id": order.id}
+```
+
+Now any component can `@subscribe("orders.placed")` — audit logger, analytics,
+notification sender — without the order service knowing about any of them.
+
+---
+
+## Summary: The Communication Triangle
+
+```
+        @requires
+        (I have it, it's part of me)
+            │
+            │   structural, reactive,
+            │   boot-time, guaranteed
+            │
+    ┌───────┴────────┐
+    │   Component    │
+    └───┬────────┬───┘
+        │        │
+bus.invoke    self.rt.publish
+(I ask it     (I announce to
+ to do X)      whoever cares)
+        │        │
+   runtime,   fire-and-forget,
+   auth-checked,  loose coupling,
+   can fail      many listeners
+```
+
+Three mechanisms, three purposes:
+
+1. **@requires** — structural dependency. "I need this to be what I am."
+2. **bus.invoke** — command/query to a peer. "Do this for me / tell me X."
+3. **@subscribe + publish** — event notification. "Something happened, FYI."
+
+If you're reaching for `registry.require()` from outside a component,
+you're in the wrong layer. Step back and ask: should this be a `@requires`
+inside a component, or a `bus.invoke` from a route?
+
+---
+
+## Quick Reference: "I want to X, which do I use?"
+
+| I want to... | Use |
+|---|---|
+| Read config reactively | `@requires(config=IConfig)` → `self.rt.config.get(...)` |
+| Log something | `@requires(logger=ILogger)` → `self.rt.logger.info(...)` |
+| Read credentials | `@requires(creds=ICredentials)` → `self.rt.creds.get(...)` |
+| Store/retrieve data | `@requires(storage=IStorage)` → `await self.rt.storage.put(...)` |
+| Call another component's action | `await self.rt.invoke("comp.action", {...})` |
+| Announce an event | `self.rt.publish("event.type", {...})` |
+| React to another component's event | `@subscribe("event.type")` on a method |
+| React when a dependency changes | `@effect` — reads are auto-tracked |
+| Cache a derived value | `@computed` — recomputes only when deps change |
+| Expose an action to the outside world | `@runnable("name", params=Model)` |
+| Make a runnable accessible via REST/MCP/CLI | `@api("rest", ...)` on the class |
+| Wire up the system at startup | Platform layer: `Kernel()`, `.discover()`, `.boot()` |
+| Handle HTTP in a custom route | `await request.app.state.bus.invoke("comp.action", body)` |
+| Get a service reference in a boot script | `kernel.registry.require("IContract")` (boot only!) |
