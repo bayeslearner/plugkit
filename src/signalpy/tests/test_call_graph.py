@@ -73,6 +73,83 @@ def test_no_invoke_targets_when_none_in_source():
     assert meta.publish_events == []
 
 
+# ── Module-level function following ─────────────────────────────────
+
+
+# These module-level helpers simulate the pattern where a component
+# method delegates to a function in the same module that contains
+# the actual bus calls.
+
+def _mount_routes(app, bus):
+    """Simulates a large route-mounting function with bus calls."""
+    async def list_cases():
+        return await bus.invoke("case-store.list", {})
+    async def list_chats():
+        return await bus.invoke("conversation-store.list", {})
+
+
+def _setup_listeners(rt):
+    """Module-level helper that publishes events."""
+    rt.publish("system.ready", {"status": "ok"})
+    rt.publish("audit.login", {"user": "admin"})
+
+
+def _no_bus_calls():
+    """A helper with no invoke/publish calls."""
+    return 42
+
+
+@component("delegator-app", version="1.0")
+class DelegatorApp:
+    """Component that delegates to module-level functions."""
+
+    @lifecycle.activate
+    def activate(self):
+        _mount_routes(None, self.rt)
+        _setup_listeners(self.rt)
+
+    @runnable("direct", params=BaseModel, description="Direct call")
+    async def direct(self, params):
+        # This one is directly in the method
+        return await self.rt.invoke("direct-svc.action", {})
+
+
+def test_follows_module_level_invoke_targets():
+    """Static analysis follows module-level functions for invoke targets."""
+    meta = _finalize_meta(DelegatorApp)
+    assert "case-store.list" in meta.invoke_targets
+    assert "conversation-store.list" in meta.invoke_targets
+    # Direct calls in class methods still work
+    assert "direct-svc.action" in meta.invoke_targets
+
+
+def test_follows_module_level_publish_events():
+    """Static analysis follows module-level functions for publish events."""
+    meta = _finalize_meta(DelegatorApp)
+    assert "system.ready" in meta.publish_events
+    assert "audit.login" in meta.publish_events
+
+
+@component("no-delegate", version="1.0")
+class NoDelegateApp:
+    """Component that calls a module-level function with no bus calls."""
+
+    @lifecycle.activate
+    def activate(self):
+        _no_bus_calls()
+
+    @runnable("noop", params=BaseModel, description="Noop")
+    async def noop(self, params):
+        return {"ok": True}
+
+
+def test_module_level_without_bus_calls_yields_nothing():
+    """Following a module-level function without bus calls adds no targets."""
+    meta = _finalize_meta(NoDelegateApp)
+    assert meta.invoke_targets == []
+    assert meta.publish_events == []
+
+
 # ── Runtime call graph recording ─────────────────────────────────────
 
 

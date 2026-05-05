@@ -789,6 +789,9 @@ _PUBLISH_PATTERN = re.compile(
 )
 
 
+_FUNC_CALL_PATTERN = re.compile(r'\b(\w+)\s*\(')
+
+
 def _extract_call_targets(cls: type, kind: str) -> list[str]:
     """Extract invoke/publish target strings from component method source code.
 
@@ -796,9 +799,14 @@ def _extract_call_targets(cls: type, kind: str) -> list[str]:
     .publish() calls. This is best-effort static analysis — it won't catch
     dynamically constructed target names, but catches the common case of
     literal strings which covers 95%+ of real usage.
+
+    Follows one level of function calls into same-module functions so that
+    patterns like ``method() -> module_level_helper()`` are covered.
     """
     pattern = _INVOKE_PATTERN if kind == "invoke" else _PUBLISH_PATTERN
     targets: set[str] = set()
+    module = inspect.getmodule(cls)
+    scanned_funcs: set[str] = set()
 
     for attr_name in dir(cls):
         obj = getattr(cls, attr_name, None)
@@ -810,5 +818,21 @@ def _extract_call_targets(cls: type, kind: str) -> list[str]:
             continue
         for match in pattern.finditer(source):
             targets.add(match.group(1))
+
+        # Follow function calls to module-level functions (1 level deep)
+        if module:
+            for call_match in _FUNC_CALL_PATTERN.finditer(source):
+                func_name = call_match.group(1)
+                if func_name in scanned_funcs:
+                    continue
+                func = getattr(module, func_name, None)
+                if func and callable(func) and func is not obj:
+                    scanned_funcs.add(func_name)
+                    try:
+                        func_source = inspect.getsource(func)
+                    except (OSError, TypeError):
+                        continue
+                    for m in pattern.finditer(func_source):
+                        targets.add(m.group(1))
 
     return sorted(targets)
