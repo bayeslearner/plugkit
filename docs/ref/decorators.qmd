@@ -1,6 +1,6 @@
 ---
 title: "Decorators"
-subtitle: "All 12 decorators — signature, parameters, example."
+subtitle: "All 11 decorators — signature, parameters, example."
 ---
 
 > **What do these decorators actually do to the function?** Almost nothing
@@ -20,14 +20,22 @@ subtitle: "All 12 decorators — signature, parameters, example."
 ### @component
 
 ```python
-@component(name: str, *, namespace: str = "", version: str = "0.0.0", depends: list[str] | None = None)
+@component(name: str, *, namespace: str = "", version: str = "0.0.0",
+           depends: list[str] | None = None, **transports)
 ```
 
-Mark a class as a component factory.
+Mark a class as a component factory. Transport configuration (formerly `@api`)
+is passed as keyword arguments.
 
 ```python
 @component("greeter", version="1.0")
 class GreeterApp: ...
+
+# With transport config:
+@component("search", version="1.0",
+           rest={"prefix": "/search", "version": "v1"},
+           mcp={"name": "search-tools"})
+class SearchApp: ...
 ```
 
 ### @provides
@@ -209,11 +217,17 @@ See [Supervision and Reliability](../concepts/supervision.qmd) for the full expl
 ```python
 @runnable(name: str, *, params: type, returns: type | None = None,
           description: str = "", timeout_s: float | None = None,
-          destructive: bool = False, internal: bool = False,
+          destructive: bool = False, transports: list[str] | None = None,
           requires_action: str = "", requires_role: str = "")
 ```
 
-Typed callable on the bus. Transport adapters auto-generate REST/MCP/CLI bindings.
+Schema-only declaration. Declares name, params, and description. No bus
+handler registration -- transport adapters discover schemas via
+`kernel.runnables()` and call `schema.handler` directly.
+
+Use `transports=["native"]` to restrict a runnable to kernel-internal
+calls only (replaces the old `internal=True`). By default all transports
+can discover the runnable.
 
 ```python
 @runnable("search", params=SearchParams, description="Search")
@@ -222,22 +236,10 @@ async def search(self, params):
 
 @runnable("delete", params=DeleteParams, requires_role="admin")
 async def delete(self, params): ...
-```
 
-### @api
-
-```python
-@api(transport: str, *, prefix: str = "", name: str = "", auth: bool = False,
-     version: str = "", rate_limit: str = "", include: list[str] | None = None,
-     exclude: list[str] | None = None)
-```
-
-Declare an API surface for a transport. Stack multiple for multi-transport.
-
-```python
-@api("rest", prefix="/search", version="v1")
-@api("mcp", name="search-tools")
-class SearchApp: ...
+@runnable("_reindex", params=BaseModel, transports=["native"],
+          description="Internal reindex")
+async def reindex(self, params): ...
 ```
 
 ## Metadata

@@ -122,7 +122,7 @@ A single `threading.RLock` serializes all mutations. This means:
 
 ## File 2: `component.py` --- Decorators and Metadata {#component}
 
-**What it is:** The 12 decorators that turn a plain Python class into a
+**What it is:** The 11 decorators that turn a plain Python class into a
 kernel-managed component. Every decorator does one thing: attach metadata
 to the class. Nothing runs at decoration time.
 
@@ -136,13 +136,12 @@ the sticky notes later.
 
 | Dataclass | What it stores |
 |---|---|
-| `ComponentMeta` | Everything the kernel needs about a class: name, version, provides, requires, runnables, effects, computeds, subscriptions, APIs, lifecycle callbacks, supervision |
+| `ComponentMeta` | Everything the kernel needs about a class: name, version, provides, requires, runnables, effects, computeds, subscriptions, lifecycle callbacks, supervision |
 | `RequirementDef` | One `@requires` entry: attr name, contract name, aggregate/optional/key flags |
-| `RunnableDef` | One `@runnable`: name, params model, description, auth requirements |
+| `RunnableDef` | One `@runnable`: name, params model, description, auth requirements, transports list |
 | `EffectDef` | One `@effect`: the function, async flag, cancel_on_supersede |
 | `ComputedDef` | One `@computed`: the function |
 | `SupervisionDef` | One `@lifecycle.supervision`: strategy, max_restarts, backoff config |
-| `APIDef` | One `@api`: transport type, prefix, auth, include/exclude |
 
 ### The lifecycle namespace
 
@@ -171,7 +170,7 @@ This function is called once per class, at discovery time. It:
 
 ### What to look for when reading
 
-- The 12 decorator functions (each is 5-15 lines).
+- The 11 decorator functions (each is 5-15 lines).
 - `ComponentMeta` --- the central data structure.
 - `_finalize_meta` --- the only complex function. Read it top-to-bottom.
 
@@ -242,17 +241,15 @@ that read is tracked. When the config service changes, your effect re-runs.
 |---|---|
 | `self.rt.config` | Reactive read of injected service |
 | `self.rt.peek("config")` | Non-reactive read (no tracking) |
-| `await self.rt.invoke(target, params, timeout=)` | Call another component's runnable via the bus. Policy-checked. Optional timeout. |
-| `self.rt.invoke_nowait(target, params)` | Fire-and-forget invocation. Returns immediately. |
 | `await self.rt.publish(event, data)` | Publish a bus event. Policy-checked. |
 | `self.rt.on(event, handler)` | Subscribe to bus events |
 | `await self.rt.spawn(factory, name, props)` | Create a child component |
 
 ### Policy enforcement
 
-The kernel sets `_invoke_allow`, `_invoke_deny`, `_publish_allow` on each
-Runtime. Every `invoke()` and `publish()` call checks these lists before
-proceeding. A component can only call what its policy allows.
+The kernel sets `_publish_allow` on each Runtime. Every `publish()` call
+checks these lists before proceeding. Cross-component calls use `@requires`
++ direct method calls -- the registry and contracts enforce access, not the bus.
 
 ### What to look for when reading
 
@@ -299,44 +296,24 @@ propagation: when a service changes, update all consumer Runtimes.
 
 ## File 6: `bus.py` --- Communication {#bus}
 
-**What it is:** The message bus. Two patterns:
+**What it is:** The event bus. One pattern:
 
-- **invoke(target, params)** --- call a specific handler, get a result back.
-  Like a function call across components.
 - **publish(event_type, data)** --- broadcast an event to all subscribers.
   Like a radio station.
 
-### invoke flow
-
-```
-caller → Bus.invoke("splunk.query", params)
-    1. Exact handler match?     → call it
-    2. L3 target routing?       → route by "target" param to instance
-    3. Name resolution?         → fix hallucinated names (fuzzy match)
-    4. Cross-process transport?  → try remote transports
-    5. None found?              → dead letter + KeyError
-```
+Cross-component calls no longer go through the bus. Use `@requires` to
+inject a dependency and call its methods directly. The bus is event-only
+(publish/subscribe).
 
 ### Reliability features
 
 | Feature | Method | What it does |
 |---|---|---|
-| Timeout | `invoke(t, p, timeout=5.0)` | `asyncio.TimeoutError` if handler takes too long |
-| Fire-and-forget | `invoke_nowait(t, p)` | Schedules on event loop, returns immediately |
-| Dead letter | `_dead_letter(t, p, reason)` | Publishes to `__dead_letter__` channel on failure |
-
-### Observability
-
-`handler_signal` is a `Signal[frozenset[str]]` containing all registered
-handler names. Any `@effect` that reads it gets notified when handlers
-are added or removed. This is how the agent's tool list auto-updates.
+| Dead letter | `_dead_letter(event, data, reason)` | Publishes to `__dead_letter__` channel on failure |
 
 ### What to look for when reading
 
-- `invoke()` --- the routing chain.
-- `_resolve_handler()` --- extracted for reuse by invoke and invoke_nowait.
-- `resolve_handler_name()` --- the hallucination hardening (junk suffix
-  stripping, hyphen/underscore flipping, Levenshtein distance).
+- `publish()` --- the event fan-out.
 - `_dead_letter()` --- failure recording.
 
 ---
@@ -487,8 +464,8 @@ await kernel.boot()
 3. **Resolve** --- topological sort to determine activation order.
 4. **Activate each** --- build Runtime, inject services, call
    `@lifecycle.activate`, register bus handlers, set up `@effect`/`@computed`.
-5. **Gateway rebuild** --- the API gateway reads all `@api` declarations
-   and builds transport surfaces. Transports are re-activated.
+5. **Gateway rebuild** --- transport adapters discover runnable schemas
+   via `kernel.runnables()` and build transport surfaces. Transports are re-activated.
 
 ### Key methods to read
 
@@ -496,8 +473,7 @@ await kernel.boot()
 |---|---|
 | `_build_runtime(ci)` | Constructs a reactive Runtime for a component. This is where services become Signals. |
 | `_setup_reactive_propagation()` | The global listener that propagates service changes to Runtimes. |
-| `_make_bus_handler(rd, instance, ci)` | Wraps a `@runnable` method into an async bus handler with auth + param validation. |
-| `_register_component_bus(ci)` | Registers all bus handlers, subscriptions, kinds, skills for a component. |
+| `_register_component_bus(ci)` | Registers subscriptions, kinds, skills for a component. |
 | `_setup_reactive(ci)` | Creates `ReactiveComputed` and `ReactiveEffect` wrappers for `@computed`/`@effect` methods. |
 | `_spawn_child(...)` | Creates and activates a child component with supervision support. |
 | `hot_add(cls)` / `hot_remove(name)` | Live component add/remove. |
@@ -542,7 +518,7 @@ flowchart TB
         Act --> RT["self.rt.config<br/>(reactive read)"]
         RT --> Sig["Signal.get()<br/>(tracks consumer)"]
         Sig --> Eff["@effect re-runs<br/>when Signal changes"]
-        Act --> Bus["rt.invoke() / rt.publish()<br/>(bus communication)"]
+        Act --> Bus["rt.publish()<br/>(event bus)"]
     end
 ```
 
@@ -563,11 +539,11 @@ After reading, try this:
 | File | Lines | Purpose |
 |---|---|---|
 | `reactive.py` | ~600 | Signal, Computed, Effect, batch |
-| `component.py` | ~750 | 12 decorators + metadata dataclasses |
+| `component.py` | ~750 | 11 decorators + metadata dataclasses |
 | `contracts.py` | ~80 | 8 Protocol interfaces |
 | `runtime.py` | ~170 | The self.rt object |
 | `registry.py` | ~200 | Service registry + ref counting |
-| `bus.py` | ~400 | invoke + publish + timeout + dead letter |
+| `bus.py` | ~400 | publish/subscribe + dead letter |
 | `lifecycle_manager.py` | ~560 | State machine + supervision |
 | `traits.py` | ~180 | L0-L3 trait inference |
 | `__init__.py` | ~900 | Kernel orchestrator |

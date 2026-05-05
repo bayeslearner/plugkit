@@ -28,7 +28,7 @@ Two components, zero kernel changes.
                 │  ExternalAPI │
                 │  _healthy: Signal(bool)
                 └──────┬───────┘
-                       │ bus: ext-api.call
+                       │ @requires + direct call
                 ┌──────┴───────┐
                 │PaymentService│
                 │  _state: Signal("closed"|"open"|"half-open")
@@ -106,7 +106,7 @@ async def pay(self, params):
     if state == "open":
         self._state.set("half-open")        # <2>
         try:
-            await self.rt.invoke("ext-api.call", {})
+            await self.rt.ext_api.call()
             self._consecutive_failures = 0  # <3>
             self._state.set("closed")
         except Exception:
@@ -114,7 +114,7 @@ async def pay(self, params):
             return {"error": "circuit open", "amount": params.amount}
 
     try:
-        await self.rt.invoke("ext-api.call", {})
+        await self.rt.ext_api.call()
         self._consecutive_failures = 0
         return {"paid": True, "amount": params.amount}
     except Exception:
@@ -138,23 +138,23 @@ The test in `TestCircuitBreaker` (from `test_examples.py`) sets the threshold to
 
 ```python
 # Normal operation
-r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+r = await svc.pay(PayParams(amount=10))
 assert r["paid"] is True
 assert svc.breaker_state() == "closed"
 
 # Take API down — 2 failures opens the breaker
-await kernel.bus.invoke("ext-api.set_health", {"healthy": False})
-await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
-r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+ext_api.set_health(False)
+await svc.pay(PayParams(amount=10))
+r = await svc.pay(PayParams(amount=10))
 assert svc.breaker_state() == "open"
 
 # Next call fails fast
-r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+r = await svc.pay(PayParams(amount=10))
 assert r["error"] == "circuit open"
 
 # Recover API — probe closes the breaker
-await kernel.bus.invoke("ext-api.set_health", {"healthy": True})
-r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+ext_api.set_health(True)
+r = await svc.pay(PayParams(amount=10))
 assert r["paid"] is True
 assert svc.breaker_state() == "closed"
 ```

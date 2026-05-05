@@ -1,5 +1,5 @@
 ---
-title: "4. Runnables & API"
+title: "4. Runnables & Transport"
 subtitle: "Expose capabilities through one declaration. The kernel generates REST, MCP, and CLI bindings."
 ---
 
@@ -7,12 +7,7 @@ subtitle: "Expose capabilities through one declaration. The kernel generates RES
 
 So far, other Python code calls `checker.check()` directly. But what if you want it callable via REST API? Or as an MCP tool? Or as a CLI command? Without the kernel, you'd write three implementations. With the kernel: declare it once.
 
-::: {.callout-note}
-## What "the bus" means
-The **bus** is the kernel's capability hub — a named dispatch table of callables (`"checker.check"`, `"config.get"`, …). Any component holding a reference to the kernel can `invoke(name, params)` by string name. `@runnable` is how you put a method on the bus; transport adapters (REST/MCP/CLI) read from the bus to expose it externally. Everything in this tutorial — and most of what follows — is about *the bus*.
-:::
-
-## @runnable
+## @runnable — Schema Declaration
 
 ```python
 from pydantic import BaseModel
@@ -23,6 +18,7 @@ class CheckParams(BaseModel):
     language: str = "EN"
 
 @component("checker")
+@requires(dictionaries=list[IDictionary])
 class SpellChecker:
     @runnable("check", params=CheckParams, description="Check spelling")
     async def check_text(self, params):
@@ -32,31 +28,37 @@ class SpellChecker:
 ```
 
 ::: {.callout-note}
-`@runnable` puts a callable on the bus. It has a name (`"check"`), a typed param schema (`CheckParams`), and a description. Both `def` and `async def` work.
+`@runnable` declares a callable schema — a name (`"check"`), a typed param schema (`CheckParams`), and a description. Both `def` and `async def` work. Transport adapters discover these schemas via `kernel.runnables()` and call the handler directly.
 :::
 
-## Bus Invocation
+## Calling Other Components
 
-Any component (or the main script) can call it:
+Use `@requires` and direct method calls — no string-based dispatch:
 
 ```python
-result = await kernel.bus.invoke("checker.check", {
-    "text": "hello wrld", "language": "EN",
-})
-# → {"misspelled": ["wrld"]}
+@component("search-app")
+@requires(checker=ISpellChecker)
+class SearchApp:
+    async def search(self, query: str):
+        errors = await self.rt.checker.check_text(CheckParams(text=query))
+        # ... use errors
 ```
 
-From inside a component, use `self.rt.invoke()` — same thing, but policy-checked.
+::: {.callout-tip}
+## Direct calls, not bus dispatch
+Components call each other through `@requires` injection and direct method calls. The kernel wires dependencies; you call methods on the injected service. No string-based `invoke()` needed.
+:::
 
-## @api — Transport Surfaces
+## Transport Config on @component
 
-To expose runnables via REST, MCP, or CLI:
+To expose runnables via REST, MCP, or CLI, declare transport config directly on `@component`:
 
 ```python
-@component("checker")
-@api("rest", prefix="/spell", version="v1")   # → POST /api/v1/spell/check
-@api("mcp", name="spell-tools")               # → MCP tool "checker.check"
-@api("cli", prefix="spell")                   # → spell check --text "hello"
+@component("checker",
+           rest={"prefix": "/spell", "version": "v1"},  # → POST /api/v1/spell/check
+           mcp={"name": "spell-tools"},                  # → MCP tool "checker.check"
+           cli={"prefix": "spell"})                      # → spell check --text "hello"
+@requires(dictionaries=list[IDictionary])
 class SpellChecker:
     @runnable("check", params=CheckParams, description="Check spelling")
     async def check_text(self, params): ...
@@ -64,19 +66,19 @@ class SpellChecker:
 
 ::: {.callout-tip}
 ## Write it once
-The component never knows how it's called. `@runnable` puts a capability on the bus. `@api` tells *transport adapters* — components that translate bus calls into REST/MCP/CLI traffic, covered in tutorial 5 — to expose it. REST endpoints, MCP tools, and CLI commands are generated from the same declaration.
+The component never knows how it's called. `@runnable` declares a schema. Transport config on `@component` tells *transport adapters* — components that render REST/MCP/CLI surfaces, covered in tutorial 5 — which runnables to expose. REST endpoints, MCP tools, and CLI commands are generated from the same declaration.
 :::
 
-## Internal Runnables
+## Native-Only Runnables
 
-Some operations should be on the bus but not exposed via API:
+Some operations should be callable within the kernel but not exposed via external transports:
 
 ```python
-@runnable("_warmup", params=BaseModel, internal=True, description="Warm cache")
+@runnable("_warmup", params=BaseModel, transports=["native"], description="Warm cache")
 async def warmup(self, params): ...
 ```
 
-`internal=True` keeps it off all API surfaces. Still callable via `kernel.bus.invoke("checker._warmup")`.
+`transports=["native"]` restricts the runnable to in-kernel callers only. Transport adapters skip it when building external surfaces.
 
 ## Typed Params
 

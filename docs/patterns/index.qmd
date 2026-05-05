@@ -15,7 +15,7 @@ Each pattern has a dedicated deep-dive page, a runnable example in `src/signalpy
 | 1 | [Secret Rotation](secret-rotation.qmd) | Config Signal propagates through credential chain to consumer @effect |
 | 2 | [A/B Testing](ab-testing.qmd) | Map injection + @computed = runtime-adjustable routing |
 | 3 | [Multi-Tenant Isolation](multi-tenant.qmd) | instantiate() + properties + structural scoping = L3 targeted |
-| 4 | [Extension Bundle](extension-bundle.qmd) | hot_add + @subscribe + bus calls = plugin system |
+| 4 | [Extension Bundle](extension-bundle.qmd) | hot_add + @subscribe + @requires = plugin system |
 | 5 | [Circuit Breaker](circuit-breaker.qmd) | Components create their own Signals for local reactive state |
 | 6 | [Audit Trail](audit-trail.qmd) | @subscribe wildcards + set_policy = cross-cutting concerns |
 | 7 | [Unit Testing](unit-testing.qmd) | Minimal kernel + fakes = isolated tests with real reactivity |

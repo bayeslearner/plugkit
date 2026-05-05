@@ -121,10 +121,13 @@ async def main():
     v2 = kernel.lifecycle.get_instance("search-v2").instance
     config = kernel.registry.require("IConfig")
 
+    # Find the runnable schema directly
+    search_schema = kernel.bus.get_schema("search-router.search")
+
     # Phase 1: 0% v2 — all traffic goes to v1
     print("  === Phase 1: 0% v2 ===")
     for uid in ["alice", "bob", "charlie", "dave", "eve"]:
-        r = await kernel.bus.invoke("search-router.search", {"query": "test", "user_id": uid})
+        r = await search_schema.handler({"query": "test", "user_id": uid})
         print(f"    {uid}: {r['variant']} ({r['engine']})")
 
     print(f"  v1 calls: {v1._call_count}, v2 calls: {v2._call_count}")
@@ -138,7 +141,7 @@ async def main():
     v1._call_count = 0
     v2._call_count = 0
     for uid in ["alice", "bob", "charlie", "dave", "eve"]:
-        r = await kernel.bus.invoke("search-router.search", {"query": "test", "user_id": uid})
+        r = await search_schema.handler({"query": "test", "user_id": uid})
         print(f"    {uid}: {r['variant']} ({r['engine']})")
 
     print(f"  v1 calls: {v1._call_count}, v2 calls: {v2._call_count}")
@@ -153,7 +156,7 @@ async def main():
     v1._call_count = 0
     v2._call_count = 0
     for uid in ["alice", "bob", "charlie", "dave", "eve"]:
-        r = await kernel.bus.invoke("search-router.search", {"query": "test", "user_id": uid})
+        r = await search_schema.handler({"query": "test", "user_id": uid})
         print(f"    {uid}: {r['variant']} ({r['engine']})")
 
     print(f"  v1 calls: {v1._call_count}, v2 calls: {v2._call_count}")

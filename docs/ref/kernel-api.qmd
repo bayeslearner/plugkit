@@ -21,6 +21,8 @@ The orchestrator. `from signalpy.kernel import Kernel`
 | `await drain(timeout_s=30)` | Stop accepting invocations, wait for in-flight |
 | `set_policy(name, policy)` | Set invoke/publish policy for a component |
 | `status() -> dict` | Components, services, bus handlers, reactive metadata |
+| `runnables() -> list[RunnableDef]` | All runnable schemas across all components |
+| `runnables_by_component(transport=) -> dict` | Runnables grouped by component, optionally filtered by transport |
 
 ### Properties
 
@@ -56,11 +58,11 @@ The orchestrator. `from signalpy.kernel import Kernel`
 
 `from signalpy.kernel import Bus`
 
+The bus handles pub/sub events. Invocation (`bus.invoke`) has been removed --
+use `@requires` + direct method calls instead.
+
 | Method | Description |
 |---|---|
-| `register_handler(target, handler)` | Register invocation handler |
-| `await invoke(target, params?, *, timeout?)` | Call a handler. Optional timeout (raises `asyncio.TimeoutError`). Exact → target routing → name resolution → transports |
-| `invoke_nowait(target, params?)` | Fire-and-forget. Schedules on event loop, returns immediately. Errors go to dead letter. |
 | `subscribe(event_type, handler)` | Register event handler |
 | `await publish(event_type, data?)` | Fan-out to subscribers + transports |
 | `add_transport(transport)` | Add cross-process transport |
@@ -71,10 +73,10 @@ Subscribe to `Bus.DEAD_LETTER_CHANNEL` (`"__dead_letter__"`) to receive failure 
 
 ```python
 bus.subscribe(Bus.DEAD_LETTER_CHANNEL, lambda et, data: print(data))
-# data = {"target": ..., "params": ..., "reason": ..., "error": ..., "timestamp": ...}
+# data = {"target": ..., "reason": ..., "error": ..., "timestamp": ...}
 ```
 
-Reasons: `no_handler`, `handler_error`, `timeout`.
+Reasons: `handler_error`, `timeout`.
 
 ## Runtime (self.rt)
 
@@ -84,8 +86,6 @@ Per-component reactive context.
 |---|---|
 | `self.rt.config` | Injected service — **reactive read** |
 | `self.rt.peek("config")` | Read **without** reactive tracking |
-| `await self.rt.invoke(target, params?, *, timeout?)` | Bus call (policy-checked). Optional timeout raises `asyncio.TimeoutError`. |
-| `self.rt.invoke_nowait(target, params?)` | Fire-and-forget invocation. Returns immediately. |
 | `await self.rt.publish(event_type, data?)` | Bus event (policy-checked) |
 | `self.rt.on(event_type, handler)` | Subscribe to events |
 | `await self.rt.spawn(factory, name?, props?)` | Create child component (supervised if parent has `@lifecycle.supervision`) |

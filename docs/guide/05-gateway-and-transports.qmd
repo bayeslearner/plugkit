@@ -1,19 +1,18 @@
 ---
 title: "5. Gateway & Transports"
-subtitle: "How @api, the Gateway, and Transport adapters turn runnables into REST endpoints, MCP tools, and CLI commands."
+subtitle: "How transport config on @component, the Gateway, and Transport adapters turn runnables into REST endpoints, MCP tools, and CLI commands."
 ---
 
 ## Trace a Request: From HTTP to @runnable
 
 Before explaining the architecture, let's trace what actually happens when
-an HTTP request hits a SignalPy-generated endpoint. Every file path and
-line number references the real source.
+an HTTP request hits a SignalPy-generated endpoint.
 
 Suppose you have this component:
 
 ```python
-@component("splunk", version="1.0")
-@api("rest", prefix="/splunk", version="v1")
+@component("splunk", version="1.0",
+           rest={"prefix": "/splunk", "version": "v1"})
 class SplunkApp:
     @runnable("query", params=QueryParams, description="Run a Splunk query")
     async def query(self, params):
@@ -22,12 +21,12 @@ class SplunkApp:
 
 And a client sends: `POST /api/v1/splunk/query  {"spl": "index=main"}`
 
-Here is every step that executes, with the actual code:
+Here is every step that executes:
 
 
 ### Step 1: `@runnable` stores metadata (decoration time)
 
-`component.py:329` — the `@runnable` decorator creates a `RunnableDef` and appends
+The `@runnable` decorator creates a `RunnableDef` and appends
 it to the class metadata. Nothing runs. No handler is registered yet.
 
 ```python
@@ -46,120 +45,78 @@ def runnable(name, *, params, description, ...):
 ```
 
 At this point, `SplunkApp` is just a class with metadata attached. No kernel,
-no bus, no routes.
+no routes.
 
 
-### Step 2: Boot registers a bus handler (`kernel/__init__.py:336-338`)
+### Step 2: Boot activates the component
 
-When `kernel.boot()` activates `SplunkApp`, `_register_component_bus()` reads
-the metadata and registers a handler on the bus:
-
-```python
-# kernel/__init__.py:336-338
-for rd in ci.meta.runnables:
-    handler_name = f"{ci.name}.{rd.name}"    # "splunk.query"
-    self.bus.register_handler(
-        handler_name,
-        self._make_bus_handler(rd, ci.instance, ci),
-    )
-```
-
-`_make_bus_handler` (`kernel/__init__.py:272-317`) creates a closure that:
-
-1. Validates params with the Pydantic model
-2. Checks auth if `requires_action` or `requires_role` is set
-3. Calls `rd.fn(instance, validated_params)` — the actual `query()` method
-
-Now `bus._handlers["splunk.query"]` is a callable. The bus doesn't know
-about REST or MCP. It's just a dict of `{name: async_function}`.
+When `kernel.boot()` activates `SplunkApp`, the kernel builds its
+`ReactiveRuntime` and runs lifecycle hooks. The runnable schemas are
+discoverable via `kernel.runnables()`.
 
 
-### Step 3: Gateway builds a surface (`gateway.py:82-135`)
+### Step 3: Transport discovers runnables
 
-The `APIGateway` component activates after `SplunkApp`. It scans `bus.handlers`
-and matches each handler to its component's `@api` declarations:
-
-```python
-# gateway.py:93-97 — for each bus handler:
-handler_name = "splunk.query"
-component_qn = "splunk"
-runnable_name = "query"
-
-# gateway.py:113 — for each @api declaration on that component:
-for api_def in meta.apis:          # APIDef(transport="rest", prefix="/splunk", version="v1")
-    surface = self._get_surface("rest")
-    surface.entries.append(APIEntry(
-        runnable_name="splunk.query",   # the bus handler name — this is the key
-        short_name="query",
-        group="splunk",                 # from prefix="/splunk"
-    ))
-```
-
-The gateway now holds: `surfaces["rest"]` contains an `APIEntry` with
-`runnable_name="splunk.query"`. This string is the bridge between the
-gateway and the bus.
+The `RESTTransport` uses `kernel.runnables_by_component(transport="rest")`
+to discover all runnables whose component declares `rest={...}` config.
+Each runnable schema includes a `handler` reference — the bound method
+on the component instance.
 
 
 ### Step 4: Transport generates a FastAPI route (`rest.py`)
 
-The `RESTTransport` (or `mount_rest()`) reads the surface and generates routes.
-The core is this closure in `rest.py:_add_route()`:
+The `RESTTransport` (or `mount_rest()`) generates routes that call the
+handler directly:
 
 ```python
 # rest.py — the actual route handler:
-def _make_handler(name="splunk.query", b=bus):
+def _make_handler(schema):
     async def _handler(request: Request):
-        body = await request.json()                  # {"spl": "index=main"}
-        result = await b.invoke(name, body)          # ← THE BRIDGE
+        body = await request.json()                       # {"spl": "index=main"}
+        validated = schema.params_model.model_validate(body)
+        result = await schema.handler(validated)           # direct call
         return JSONResponse({"ok": True, "data": result})
     return _handler
 
-router.add_api_route("/query", _make_handler(), methods=["POST"])
+router.add_api_route("/query", _make_handler(schema), methods=["POST"])
 ```
 
-FastAPI now has: `POST /api/v1/splunk/query` → `_handler`
+FastAPI now has: `POST /api/v1/splunk/query` -> `_handler`
 
-The bridge is one line: `await bus.invoke("splunk.query", body)`. The route
-handler doesn't know about `SplunkApp`. It only knows the bus handler name.
+The transport calls `schema.handler` directly. No bus dispatch, no string-based
+routing. The schema is the bridge.
 
 
 ### Step 5: HTTP request arrives
 
 ```
 Client: POST /api/v1/splunk/query  {"spl": "index=main"}
-         │
-         ▼
-FastAPI matches route → _handler(request)              # rest.py
-         │
-         ▼
+         |
+         v
+FastAPI matches route -> _handler(request)              # rest.py
+         |
+         v
 body = await request.json()                            # {"spl": "index=main"}
-         │
-         ▼
-result = await bus.invoke("splunk.query", body)        # rest.py → bus.py:74
-         │
-         ▼
-handler = bus._handlers["splunk.query"]                # bus.py:83-85
-result = await handler({"spl": "index=main"})          #   ↓
-         │                                             #   ↓
-         ▼                                             #   ↓
-_make_bus_handler closure:                             # kernel/__init__.py:296
-  validated = QueryParams.model_validate(body)         #   params validation
-  result = await SplunkApp.query(instance, validated)  #   actual method call
-         │
-         ▼
+         |
+         v
+validated = QueryParams.model_validate(body)           # params validation
+         |
+         v
+result = await schema.handler(validated)               # direct method call
+         |
+         v
 return JSONResponse({"ok": True, "data": {"results": ["event1", "event2"]}})
 ```
 
-That's the full path. Five hops: FastAPI route → bus.invoke → bus handler →
-param validation → your method. The component never imported FastAPI.
-FastAPI never imported SignalPy. The bus handler name (`"splunk.query"`)
-is the only connection between them.
+That's the full path. Four hops: FastAPI route -> param validation ->
+schema handler -> your method. The component never imported FastAPI.
+FastAPI never imported SignalPy.
 
 ::: {.callout-tip}
-## The bus is the bridge
+## Schema is the bridge
 Every adapter (REST, MCP, CLI) generates the same thing: a thin wrapper
-that calls `bus.invoke(runnable_name, params)`. The bus handler name is
-a string. That's the entire interface between "presentation" and "capability."
+that validates params and calls `schema.handler(validated)` directly.
+The runnable schema is the only connection between "presentation" and "capability."
 :::
 
 
@@ -171,202 +128,160 @@ Components don't build REST routes or CLI commands. They declare what they
 want to expose, and the kernel handles the rest through three layers:
 
 ```
-Layer 1: Component declares     @api("rest", prefix="/splunk")
+Layer 1: Component declares     @component("splunk", rest={"prefix": "/splunk"})
                                 @runnable("query", ...)
-                                        │
-                                        ▼
-Layer 2: Gateway composes       APIGateway scans all components,
-                                builds one APISurface per transport
-                                        │
-                                        ▼
-Layer 3: Transport renders      RESTTransport reads the "rest" surface,
+                                        |
+                                        v
+Layer 2: Kernel indexes         kernel.runnables() / kernel.runnables_by_component()
+                                collect all runnable schemas
+                                        |
+                                        v
+Layer 3: Transport renders      RESTTransport reads runnables for "rest",
                                 generates FastAPI routes
-                                MCPTransport reads the "mcp" surface,
+                                MCPTransport reads runnables for "mcp",
                                 generates MCP tool definitions
 ```
 
-The component never sees the transport. The transport never sees the component.
-The gateway is the meeting point.
+The component never sees the transport. The transport discovers runnables
+through the kernel's schema API.
 
 
-## Layer 1: `@api` — What the Component Declares
+## Layer 1: Transport Config on `@component`
 
-`@api` attaches metadata — it does nothing at runtime:
+Transport configuration is declared directly on `@component`:
 
 ```python
-@component("splunk", version="1.0", depends=["config"])  # <0>
-@requires(config="IConfig")
-@api("rest", prefix="/splunk", version="v1")       # <1>
-@api("mcp", name="splunk-tools")                   # <2>
+@component("splunk", version="1.0",
+           rest={"prefix": "/splunk", "version": "v1"},     # <1>
+           mcp={"name": "splunk-tools"})                    # <2>
+@requires(config=IConfig)
 class SplunkApp:
 
     @runnable("query", params=QueryParams, description="Run a Splunk query")
     async def query(self, params):
         return {"results": [...]}
 
-    @runnable("_reindex", params=BaseModel, internal=True, description="Reindex")
+    @runnable("_reindex", params=BaseModel, transports=["native"], description="Reindex")
     async def reindex(self, params):                # <3>
         return {"ok": True}
 ```
-0. `depends=["config"]` — explicit activation-order constraint. Use this when you need a component to be active before yours but you don't have a `@requires` on it (e.g., you read its env-var side effects). With `@requires(config=IConfig)` already declared, this `depends=` is technically redundant; we show it to demonstrate the parameter.
 1. "Expose my runnables as REST at `/api/v1/splunk/*`"
 2. "Also expose them as MCP tools under the group `splunk-tools`"
-3. `internal=True` — on the bus but excluded from all API surfaces
+3. `transports=["native"]` -- callable within the kernel only, excluded from external surfaces
 
-You can stack multiple `@api` decorators. Each one targets a different transport.
-The `APIDef` dataclass stores the declaration:
+Transport config keys on `@component`:
 
-| Field | Purpose | Example |
-|-------|---------|---------|
-| `transport` | Which adapter picks this up | `"rest"`, `"mcp"`, `"cli"` |
-| `prefix` | URL/command prefix | `"/splunk"` → `/api/v1/splunk/query` |
-| `name` | Group name (MCP/CLI) | `"splunk-tools"` |
-| `version` | API version | `"v1"` → `/api/v1/...` |
-| `auth` | Require auth for this surface | `True` / `False` |
-| `include` | Only expose these runnables | `["query", "status"]` |
-| `exclude` | Exclude these runnables | `["debug"]` |
+| Key | Purpose | Example |
+|-----|---------|---------|
+| `rest` | REST adapter config | `{"prefix": "/splunk", "version": "v1"}` |
+| `mcp` | MCP adapter config | `{"name": "splunk-tools"}` |
+| `cli` | CLI adapter config | `{"prefix": "splunk"}` |
 
-**No `@api`?** Fallback: all non-internal runnables are exposed on every transport.
-This is convenient for development but explicit `@api` is recommended for production.
+Each transport key is a dict with adapter-specific fields like `prefix`, `version`,
+`name`, `auth`, `include`, `exclude`.
+
+**No transport config?** Fallback: all runnables (except `transports=["native"]`) are
+exposed on every transport. Convenient for development; explicit config recommended
+for production.
 
 
-## Layer 2: The Gateway — Composition
+## Layer 2: The Kernel Schema API
 
-`APIGateway` is a component (`src/signalpy/providers/gateway.py`). At boot, it
-scans all active components and builds `APISurface` objects — one per transport type.
+The kernel indexes all runnable schemas at boot. Transport adapters query them:
 
 ```python
-# Simplified from gateway.py:
-def _rebuild(self):
-    for handler_name in self._bus.handlers:          # "splunk.query", "splunk._reindex"
-        component_name, runnable_name = handler_name.rsplit(".", 1)
-        meta = self._find_meta(component_name)
+# All runnables across all components
+all_schemas = kernel.runnables()
 
-        for api_def in meta.apis:                    # @api("rest", ...), @api("mcp", ...)
-            # Skip internal runnables
-            if runnable.internal:
-                continue
-            # Apply include/exclude filters
-            if api_def.include and runnable_name not in api_def.include:
-                continue
-
-            surface = self._get_surface(api_def.transport)   # "rest" → APISurface
-            surface.entries.append(APIEntry(
-                runnable_name=handler_name,          # "splunk.query"
-                short_name=runnable_name,            # "query"
-                group=api_def.prefix or meta.factory_name,   # "splunk"
-                ...
-            ))
+# Runnables for a specific transport (components that declared rest={...})
+rest_schemas = kernel.runnables_by_component(transport="rest")
 ```
 
-After scanning, the gateway holds:
-
-```
-surfaces = {
-    "rest": APISurface(
-        transport="rest",
-        version="v1",
-        entries=[
-            APIEntry(runnable_name="splunk.query", short_name="query", group="splunk"),
-            APIEntry(runnable_name="checker.check", short_name="check", group="spell"),
-        ]
-    ),
-    "mcp": APISurface(
-        transport="mcp",
-        entries=[
-            APIEntry(runnable_name="splunk.query", short_name="query", group="splunk-tools"),
-        ]
-    ),
-}
-```
-
-The gateway **rebuilds** when components are hot-added or hot-removed.
-This is called automatically by `kernel.hot_add()` and `kernel.hot_remove()`.
+Each schema includes the handler reference, params model, description,
+and transport restrictions. The kernel re-indexes when components are
+hot-added or hot-removed.
 
 
 ## Layer 3: Transport Adapters — Rendering
 
-Each transport adapter is a component that `@requires(gateway="IGateway")`.
-At activation, it reads its surface from the gateway and generates the
-actual endpoints.
+Each transport adapter is a component that queries `kernel.runnables_by_component()`
+at activation and generates the actual endpoints.
 
 ### REST (`src/signalpy/adapters/rest.py`)
 
 ```python
-@component("rest-transport", depends=["gateway"])
-@requires(config="IConfig", gateway="IGateway")
+@component("rest-transport")
 class RESTTransport:
 
     @lifecycle.activate
-    def activate(self, rt):
+    def activate(self):
         self.app = FastAPI(title="Microkernel API")
 
-        surface = rt.gateway.get_surface("rest")     # <1>
+        by_component = self.kernel.runnables_by_component(transport="rest")  # <1>
 
-        for group_name, entries in surface.groups().items():   # <2>
-            router = APIRouter(prefix=f"/api/{surface.version}/{group_name}")
+        for comp_name, schemas in by_component.items():
+            transport_cfg = schemas[0].component_meta.rest          # <2>
+            prefix = transport_cfg.get("prefix", f"/{comp_name}")
+            version = transport_cfg.get("version", "v1")
+            router = APIRouter(prefix=f"/api/{version}{prefix}")
 
-            for entry in entries:
-                router.add_api_route(                 # <3>
-                    f"/{entry.short_name}",
-                    make_handler(entry.runnable_name, rt.bus),
+            for schema in schemas:
+                router.add_api_route(                               # <3>
+                    f"/{schema.name}",
+                    make_handler(schema),
                     methods=["POST"],
                 )
 
             self.app.include_router(router)
 ```
-1. Ask the gateway for the "rest" surface
-2. Group entries by prefix — each group becomes a FastAPI router
-3. Each entry becomes a `POST` route that calls `bus.invoke(runnable_name, body)`
-
-::: {.callout-note}
-## `rt.gateway` and `rt.bus`
-`rt.gateway` is just a normal `@requires(gateway="IGateway")` injection (you'd reach it as `self.rt.gateway` with the modern `def activate(self):` style). `rt.bus`, on the other hand, is the kernel bus itself — always present on every runtime, no `@requires` needed. Use it when you need to invoke runnables by name from non-component code (transports, tests, scripts).
-:::
+1. Ask the kernel for all runnables on components that declared `rest={...}`
+2. Read the component's REST transport config
+3. Each schema becomes a `POST` route that calls `schema.handler` directly
 
 For the Splunk example, this generates:
 
 ```
-POST /api/v1/splunk/query     → bus.invoke("splunk.query", body)
-POST /api/v1/spell/check      → bus.invoke("checker.check", body)
-GET  /health                   → {"status": "healthy"}
-GET  /api/kernel/status        → surface summary
+POST /api/v1/splunk/query     -> schema.handler(validated)
+POST /api/v1/spell/check      -> schema.handler(validated)
+GET  /health                   -> {"status": "healthy"}
 ```
 
-The handler is simple — it deserializes the request body, calls `bus.invoke()`,
-and wraps the result in JSON:
+The handler is simple -- it deserializes the request body, validates params,
+and calls the schema handler directly:
 
 ```python
 async def handler(request: Request):
     body = await request.json()
-    result = await bus.invoke("splunk.query", body)
+    validated = schema.params_model.model_validate(body)
+    result = await schema.handler(validated)
     return JSONResponse({"ok": True, "data": result})
 ```
 
 ### MCP (`src/signalpy/adapters/mcp.py`)
 
-Same pattern — reads the "mcp" surface, generates tool definitions:
+Same pattern -- queries runnables for the "mcp" transport:
 
 ```python
-surface = rt.gateway.get_surface("mcp")
-for entry in surface.entries:
-    tools.append({
-        "name": f"{entry.group}.{entry.short_name}",
-        "description": entry.description,
-        "input_schema": entry.params_model.model_json_schema(),
-    })
+by_component = kernel.runnables_by_component(transport="mcp")
+for comp_name, schemas in by_component.items():
+    for schema in schemas:
+        tools.append({
+            "name": f"{comp_name}.{schema.name}",
+            "description": schema.description,
+            "input_schema": schema.params_model.model_json_schema(),
+        })
 ```
 
 ### CLI (`src/signalpy/adapters/cli.py`)
 
-Same pattern — reads the "cli" surface, generates Click commands:
+Same pattern -- queries runnables for the "cli" transport:
 
 ```python
-surface = rt.gateway.get_surface("cli")
-for group_name, entries in surface.groups().items():
-    group = click.Group(name=group_name)
-    for entry in entries:
-        group.add_command(make_click_command(entry))
+by_component = kernel.runnables_by_component(transport="cli")
+for comp_name, schemas in by_component.items():
+    group = click.Group(name=comp_name)
+    for schema in schemas:
+        group.add_command(make_click_command(schema))
 ```
 
 
@@ -377,21 +292,14 @@ for group_name, entries in surface.groups().items():
 2. kernel.boot()
    a. Activate ConfigProvider, LoggingProvider, ...
    b. Activate SplunkApp
-      → registers bus handler "splunk.query"
-   c. Activate APIGateway
-      → scans bus handlers, builds APISurfaces
-   d. Activate RESTTransport
-      → reads gateway.get_surface("rest")
-      → generates FastAPI routes
-   e. Gateway rebuild (phase 2)
-      → re-scans with full component metadata
-      → transports re-activate with complete surfaces
+      -> runnable schemas indexed in kernel
+   c. Activate RESTTransport
+      -> queries kernel.runnables_by_component(transport="rest")
+      -> generates FastAPI routes from schemas
 ```
 
-Phase 2 matters: the gateway first builds with just bus handler names (step c),
-then rebuilds with full metadata after all components are active (step e).
-This handles the ordering problem — transports need gateway, which needs
-all apps to be registered first.
+Transport adapters activate after application components, so all runnable
+schemas are available when the transport queries them.
 
 
 ## Two Modes: Container vs Library
@@ -413,10 +321,9 @@ from signalpy.adapters.rest import RESTTransport
 kernel = Kernel()
 kernel.discover([
     ConfigProvider, LoggingProvider,
-    APIGateway,
-    SplunkApp,        # @api("rest", prefix="/splunk", version="v1")
-    SpellChecker,     # @api("rest", prefix="/spell")
-    RESTTransport,    # ← creates and owns the FastAPI app
+    SplunkApp,        # rest={"prefix": "/splunk", "version": "v1"}
+    SpellChecker,     # rest={"prefix": "/spell"}
+    RESTTransport,    # creates and owns the FastAPI app
 ])
 await kernel.boot()
 
@@ -445,19 +352,19 @@ async def custom():
 
 # Boot the kernel (no RESTTransport needed)
 kernel = Kernel()
-kernel.discover([ConfigProvider, LoggingProvider, APIGateway, SplunkApp])
+kernel.discover([ConfigProvider, LoggingProvider, SplunkApp])
 await kernel.boot()
 
 # Mount kernel runnables as routes on YOUR app
 mount_rest(app, kernel)                                  # <2>
 
 # Now your app has both custom routes AND kernel routes:
-#   GET  /my-custom-endpoint       → your code
-#   POST /api/v1/splunk/query      → bus.invoke("splunk.query", body)
-#   GET  /health                   → kernel health
+#   GET  /my-custom-endpoint       -> your code
+#   POST /api/v1/splunk/query      -> schema.handler(validated)
+#   GET  /health                   -> kernel health
 ```
-1. `mount_rest` is a function, not a component. No Gateway or Transport component needed.
-2. Reads the gateway surface (if available) or falls back to all bus handlers.
+1. `mount_rest` is a function, not a component. No Transport component needed.
+2. Reads runnable schemas from the kernel directly.
 
 Same for MCP:
 
@@ -489,23 +396,24 @@ Both read from the same gateway surface. Both generate the same routes/tools.
 The difference is who owns the framework instance.
 
 
-## What Happens Without Gateway or Transports?
+## What Happens Without Transports?
 
-Nothing breaks. Bus calls still work:
+Nothing breaks. Components still work -- you call their methods directly
+through `@requires` injection:
 
 ```python
-result = await kernel.bus.invoke("splunk.query", {"spl": "index=main"})
+@component("my-app")
+@requires(splunk=ISplunkApp)
+class MyApp:
+    async def do_work(self):
+        result = await self.rt.splunk.query(QueryParams(spl="index=main"))
 ```
 
-The `@api` declarations are just metadata. If no gateway is discovered,
-they're ignored. If no REST transport is discovered, no routes are generated.
-The component works identically either way — it's still a bus handler.
+Transport config on `@component` is just metadata. If no REST transport is
+discovered, no routes are generated. The component works identically either way.
 
-The `mount_rest()` / `mount_mcp()` functions also work without a gateway — they
-fall back to exposing all bus handlers directly.
-
-This is the separation: **runnables are capabilities. @api is presentation.
-The bus works without presentation.**
+This is the separation: **runnables are capabilities. Transport config is
+presentation. Components work without presentation.**
 
 
 ## Writing a Custom Transport
@@ -513,26 +421,28 @@ The bus works without presentation.**
 As a component (container mode):
 
 ```python
-@component("grpc-transport", depends=["gateway"])
-@requires(gateway="IGateway")
+@component("grpc-transport")
 class GRPCTransport:
     @lifecycle.activate
     def activate(self):
-        surface = self.rt.gateway.get_surface("grpc")
-        if surface:
-            for entry in surface.entries:
-                self._register_grpc_method(entry)
+        by_component = self.kernel.runnables_by_component(transport="grpc")
+        for comp_name, schemas in by_component.items():
+            for schema in schemas:
+                self._register_grpc_method(schema)
 ```
 
 As a mount function (library mode):
 
 ```python
 def mount_grpc(server, kernel):
-    gateway = kernel.registry.require_optional("IGateway")
-    surface = gateway.get_surface("grpc") if gateway else None
-    for entry in (surface.entries if surface else []):
-        server.add_method(entry.runnable_name, lambda args: kernel.bus.invoke(...))
+    by_component = kernel.runnables_by_component(transport="grpc")
+    for comp_name, schemas in by_component.items():
+        for schema in schemas:
+            server.add_method(
+                f"{comp_name}.{schema.name}",
+                lambda args, s=schema: s.handler(s.params_model.model_validate(args)),
+            )
 ```
 
-Components declare `@api("grpc", ...)` and either approach picks them up.
-No kernel changes. No gateway changes.
+Components declare `grpc={...}` on `@component` and either approach picks them up.
+No kernel changes needed.

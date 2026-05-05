@@ -12,7 +12,7 @@ subtitle: "8 Protocol interfaces — methods, providers, usage."
 | IAuth | `authenticate(token)`, `authorize(identity, action)` | AuthProvider | `self.rt.auth` |
 | ITracer | `span(name, **attrs)` → context manager | TracingProvider | `self.rt.tracer` |
 | IWorkspace | `.root` (Path), `.settings` (dict) | WorkspaceProvider | `self.rt.workspace` |
-| IConfigAdmin | `get_configuration(pid)`, `update(pid, props)`, `delete(pid)` | ConfigAdminProvider | bus: `configadmin.update` |
+| IConfigAdmin | `get_configuration(pid)`, `update(pid, props)`, `delete(pid)` | ConfigAdminProvider | `self.rt.config_admin` |
 
 ## IConfig
 

@@ -2,7 +2,7 @@
 
 ## What this is
 
-A Signal-based reactive component kernel for backend services. 12 decorators,
+A Signal-based reactive component kernel for backend services. 11 decorators,
 ~3,100 lines across 9 files. Source-embeddable package. Two-axis architecture:
 
 - **Axis 1** (`src/signalpy/kernel/`) -- the irreplaceable mechanism: reactivity
@@ -24,27 +24,30 @@ graph handles propagation automatically.
 2. Components give and take. No globals, no singletons, no ambient state.
 3. The kernel has zero business logic.
 4. Transport is an adapter, never a core concern.
-5. Distribution can be transparent — the bus supports pluggable transports.
+5. Distribution can be transparent — contracts hide location.
 6. Apps are deployment units, components are composition units.
 7. Lifecycle is explicit and managed.
 8. Every API is transport-agnostic.
 9. The kernel is small. Readable in one sitting.
 
-## The 12 decorators
+## The 11 decorators
 
 ```
 @component  @provides  @requires           # core
 @computed   @effect                         # reactive
 @lifecycle.activate/deactivate/health       # lifecycle
-@runnable   @api                            # surface
+@runnable                                   # surface (schema-only)
 @prop   @kind   @skill                      # metadata
 @subscribe                                  # events
 ```
 
 Down from 21 in v1. Removed: `@requires_aggregate`, `@requires_map`,
 `@requires_best`, `@bind`, `@unbind`, `@on_change`, `@platform_app`,
-`@exportable`. Unified `@requires` handles all injection modes.
+`@exportable`, `@api`. Unified `@requires` handles all injection modes.
 `@computed` and `@effect` replace manual dependency callbacks.
+`@runnable` is schema-only (name, params, description); transport
+visibility is per-runnable via `transports=[]`. Transport config
+(REST prefix, MCP name) moves to `@component`.
 
 ## How to write a component
 
@@ -52,7 +55,7 @@ Down from 21 in v1. Removed: `@requires_aggregate`, `@requires_map`,
 from pydantic import BaseModel
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
-    computed, effect, api, subscribe, kind, skill,
+    computed, effect, subscribe, kind, skill,
 )
 from signalpy.kernel.contracts import IConfig, ILogger
 
@@ -60,11 +63,11 @@ class SearchParams(BaseModel):
     query: str
     limit: int = 10
 
-@component("my-app", version="1.0")
+@component("my-app", version="1.0",
+           rest={"prefix": "/my-app", "version": "v1"},
+           mcp={"name": "my-tools"})
 @provides("IMyService")
 @requires(config=IConfig, logger=ILogger)
-@api("rest", prefix="/my-app", version="v1")
-@api("mcp", name="my-tools")
 @kind("search-result", model=BaseModel, description="Search result schema")
 class MyApp:
 
@@ -87,7 +90,8 @@ class MyApp:
     async def search(self, params):
         return {"results": [], "url": self.base_url, "limit": params.limit}
 
-    @runnable("_reindex", params=BaseModel, internal=True, description="Reindex")
+    @runnable("_reindex", params=BaseModel, description="Reindex",
+              transports=["native"])
     async def reindex(self, params):
         return {"ok": True}
 
@@ -114,7 +118,9 @@ Both types and strings work everywhere. Types are recommended for new code.
 - `rt.config` in method args -- just `self.rt.config`
 - `@bind("config")` / `@unbind("config")` -- use `@effect` instead
 - `@on_change("config")` -- use `@effect`, it auto-tracks
-- `@platform_app(...)` -- be explicit with `@component` + `@api`
+- `@platform_app(...)` -- be explicit with `@component`
+- `@api("rest", ...)` -- transport config moves to `@component`
+- `bus.invoke("target", params)` -- use `@requires` + direct method calls
 
 ## Key patterns
 
@@ -148,7 +154,10 @@ config.set("scraper.url", "http://production.com")
 
 ConfigProvider also provides IConfigAdmin for managed service patterns:
 ```python
-await rt.invoke("config.update", {"pid": "printer", "properties": {"width": 80}})
+@requires(config_admin=IConfigAdmin)
+class MyApp:
+    async def update_printer(self):
+        await self.rt.config_admin.update("printer", {"width": 80})
 ```
 
 **`self.rt` is the component's window.** All kernel services are namespaced
@@ -158,13 +167,11 @@ reactive (tracks dependencies when inside `@effect` or `@computed`):
 - `self.rt.logger` -- ILogger (scoped ComponentLogger with component identity)
 - `self.rt.creds` -- ICredentials (scoped to component's credential namespace)
 - `self.rt.storage` -- IStorage (scoped to component's storage prefix)
-- `self.rt.invoke("other.runnable", params)` -- bus call (policy-checked)
-- `self.rt.invoke("x", params, timeout=5.0)` -- bus call with timeout (spec 010)
-- `self.rt.invoke_nowait("other.runnable", params)` -- fire-and-forget (spec 010)
 - `self.rt.publish("event.type", data)` -- bus event
 - `self.rt.spawn("factory", "name", props)` -- create child component
 - `self.rt.properties` -- instance properties (for L3 targeted)
 - `self.rt.peek("config")` -- read without reactive tracking
+- `self.rt.<name>` -- any `@requires` injection, direct method calls
 
 **Unified `@requires`.** One decorator, three injection modes:
 
@@ -187,7 +194,7 @@ class App: ...  # self.rt.cache -> None if no provider
 ```
 
 **Decorators declare, kernel executes.** `@component`, `@provides`, `@requires`,
-`@runnable`, `@api`, `@subscribe`, `@kind`, `@skill`, `@computed`, `@effect`
+`@runnable`, `@subscribe`, `@kind`, `@skill`, `@computed`, `@effect`
 attach metadata. The kernel reads it at discovery time. Dependencies are
 auto-inferred from `@requires`.
 
@@ -197,17 +204,18 @@ Configurable trait. `@runnable` gives it the Runnable trait. `@computed` or
 `@effect` gives it the Reactive trait. `kernel.status()` reports all traits
 per component, including reactive status (computed/effect counts).
 
-**Gateway pattern.** Components declare `@api("rest", ...)`, `@api("mcp", ...)`.
-The `APIGateway` component composes all declarations into unified surfaces per
-transport. Transport adapters (`RESTTransport`, `MCPTransport`, `CLITransport`)
-read from the gateway and render the surface. Components never know which
-transport serves them.
+**Transport adapters.** Components declare transport config on `@component`
+(e.g. `rest={"prefix": "/my-app"}`). Transport adapters (`RESTTransport`,
+`MCPTransport`, `CLITransport`) use `kernel.runnables_by_component(transport=)`
+to discover operations and their schemas, then build routes/tools/commands
+by calling `schema.handler` directly. Components never know which transport
+serves them.
 
 **L3 Targeted.** Same factory, multiple instances with different config:
 ```python
 kernel.instantiate("splunk", "splunk-prod", {"target": "prod"})
 kernel.instantiate("splunk", "splunk-dev",  {"target": "dev"})
-# Route by target: kernel.bus.invoke("splunk.query", {"target": "prod"})
+# Consumer @requires the service and calls directly
 ```
 
 **Structural scoping.** Credentials and storage are automatically scoped per
@@ -229,9 +237,9 @@ selection priority (lower = higher priority):
 class EnglishDict: ...
 ```
 
-**Auth enforcement at bus level.** Runnables can declare auth
-requirements. The bus checks IAuth before invoking -- same check
-regardless of transport (REST, MCP, CLI, or direct bus call):
+**Auth enforcement per consumer.** Runnables declare auth requirements
+in the schema. Each consumer (transport adapter, tool-gateway) enforces
+them appropriately for its transport:
 
 ```python
 @runnable("delete", params=DeleteParams, description="Delete",
@@ -276,8 +284,8 @@ Strategies: `one_for_one` (restart failed child), `one_for_all` (restart
 all siblings), `rest_for_one` (restart failed + everything after it).
 Exceeding max_restarts escalates to the supervisor's own supervisor.
 
-**Dead letter channel.** Failed bus dispatches (no handler, handler error,
-timeout) are published to `__dead_letter__` for monitoring:
+**Dead letter channel.** Failed event deliveries are published to
+`__dead_letter__` for monitoring:
 
 ```python
 self.rt.on("__dead_letter__", self._on_failure)
@@ -310,10 +318,10 @@ await kernel.boot()
 # 1. Set up reactive propagation (service changes update consumer Runtimes)
 # 2. Instantiate all factories
 # 3. Resolve dependency order
-# 4. Activate in order: build Runtime (Signal-backed), register bus handlers,
+# 4. Activate in order: build Runtime (Signal-backed), populate schema handlers,
 #    set up @computed and @effect wrappers
 # 5. If activation fails and component has a supervisor → supervised restart
-# 6. Gateway rebuilds surfaces, transports re-activate
+# 6. Transport adapters rebuild surfaces from kernel.runnables()
 await kernel.shutdown()
 # Deactivates in reverse order, disposes effects/computeds
 ```
@@ -339,7 +347,7 @@ await kernel.shutdown()
 |-------|------|--------|---------------|
 | L0 | Kernel | identifiable, lifecycle, dependable, registrable, factoryable, inspectable | every component / `@lifecycle.health` |
 | L1 | Platform | configurable, observable, secured, storable, communicable, supervisable | `@requires(config=IConfig)`, runnables, `@lifecycle.supervision` |
-| L2 | App | runnable, subscribable, kinded, skillful, routable, reactive | `@runnable`, `@subscribe`, `@kind`, `@skill`, `@api`, `@computed`/`@effect` |
+| L2 | App | runnable, subscribable, kinded, skillful, routable, reactive | `@runnable`, `@subscribe`, `@kind`, `@skill`, `@computed`/`@effect` |
 | L3 | Instance | targeted, scoped, versioned | `@prop`, `@requires(creds/storage)`, `version=` |
 
 ## Project layout
@@ -348,17 +356,17 @@ await kernel.shutdown()
 src/signalpy/
   kernel/                  Axis 1 -- reactive kernel v2 (~2,600 lines, 9 files)
     reactive.py              Signal, Computed, Effect, batch
-    component.py             12 decorators + metadata + SupervisionDef
+    component.py             11 decorators + metadata + SupervisionDef
     runtime.py               ReactiveRuntime with signal-backed injection
     registry.py              ServiceRegistry with ref counting
-    bus.py                   invoke/publish/subscribe + timeout + invoke_nowait + dead letter
+    bus.py                   event bus: publish/subscribe + dead letter
     lifecycle_manager.py     state machine + supervision strategies
     traits.py                L0-L3 trait system
     contracts.py             Protocol interfaces
     __init__.py              Kernel orchestrator
   providers/               Axis 2 -- platform components
   adapters/                Axis 2 -- transport adapters (REST, MCP, CLI)
-  tests/                   Test suite (335 tests)
+  tests/                   Test suite (363 tests)
   examples/                Progressive examples (01-07)
 ```
 

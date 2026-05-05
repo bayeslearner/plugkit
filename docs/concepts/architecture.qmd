@@ -14,8 +14,8 @@ Non-negotiable design rules. Every decision traces back to one of these.
 2. **Components give and take.** No globals, no singletons, no ambient state.
 3. **Reactivity is the foundation, not a feature.** Every injected service is a `Signal`. Reading it inside `@effect` or `@computed` subscribes you. Writes propagate through the graph automatically — no callbacks, no `@bind`/`@unbind`, no listener registries. This is not optional plumbing layered on top; it *is* how the kernel routes change. ([Reactivity by Example](reactivity-by-example.qmd))
 4. **The kernel has zero business logic.** It manages reactivity, lifecycle, registry, bus, and traits — nothing domain-specific.
-5. **Transport is an adapter, never a core concern.** Components declare `@api`, never import FastAPI.
-6. **Distribution is transparent.** Same `self.rt.invoke()` whether local or remote.
+5. **Transport is an adapter, never a core concern.** Components declare transport config on `@component`, never import FastAPI.
+6. **Distribution is transparent.** Contracts hide location -- `@requires` + direct method calls work the same whether the provider is local or remote.
 7. **Apps are deployment units, components are composition units.**
 8. **Lifecycle is explicit and managed.** Dependency-ordered activation, reverse shutdown.
 9. **Every API has a client counterpart.** One declaration, every surface.
@@ -29,10 +29,10 @@ Non-negotiable design rules. Every decision traces back to one of these.
 graph LR
     subgraph "Axis 1: The Mechanism (irreplaceable)"
         R[reactive.py<br/>Signal/Computed/Effect]
-        C[component.py<br/>12 decorators]
+        C[component.py<br/>11 decorators]
         L[lifecycle_manager.py<br/>State machine + toposort]
         REG[registry.py<br/>Service provide/require]
-        B[bus.py<br/>invoke + publish]
+        B[bus.py<br/>publish/subscribe]
         RT[runtime.py<br/>Reactive self.rt]
     end
 
@@ -60,10 +60,10 @@ graph LR
 | Primitive | File | Lines | Purpose |
 |---|---|---|---|
 | **Reactivity Engine** | `reactive.py` | ~600 | Signal, Computed, Effect, batch. The foundation. |
-| **Component Model** | `component.py` | ~750 | 12 decorators. ComponentMeta. _finalize_meta. |
+| **Component Model** | `component.py` | ~750 | 11 decorators. ComponentMeta. _finalize_meta. |
 | **Lifecycle Manager** | `lifecycle_manager.py` | ~560 | State machine. Supervision. Dependency-ordered activation. |
 | **Service Registry** | `registry.py` | ~200 | Provide/require. Ranking. Reference counting. |
-| **Bus** | `bus.py` | ~400 | invoke + publish + timeout + dead letter. Pluggable transport. |
+| **Bus** | `bus.py` | ~400 | publish/subscribe + dead letter. Event-only. |
 | **Runtime** | `runtime.py` | ~170 | Reactive self.rt. Signal-backed __getattr__. |
 | **Traits** | `traits.py` | ~180 | L0–L3 trait computation from metadata. |
 | **Contracts** | `contracts.py` | ~80 | Protocol interfaces (IConfig, ILogger, etc.) |
@@ -71,7 +71,7 @@ graph LR
 
 ## Decoration → Activation
 
-The 12 decorators don't *do* much at decoration time. They attach a small
+The 11 decorators don't *do* much at decoration time. They attach a small
 marker dataclass to the function and return the function unchanged. The
 real wiring happens later, in three stages.
 
@@ -198,7 +198,7 @@ The same three-stage pattern applies to every decorator:
 - `@computed fn` → `fn.__computed__ = ComputedDef(...)` → `meta.computed_defs`
   → `ReactiveComputed(wrapper)` at activation (lazy: only runs on first read).
 - `@runnable("name") fn` → `fn.__runnable_defs__` → `meta.runnables` →
-  bus handler registration at activation.
+  schema registration at activation (transport adapters discover via `kernel.runnables()`).
 - `@subscribe("topic") fn` (a not-yet-introduced decorator that registers
   the method as an event handler — see [Decorators reference](../ref/decorators.qmd))
   → `fn.__subscribe_defs__` → `meta.subscriptions` → bus subscription at activation.
@@ -320,4 +320,4 @@ wired up — first run, dependency tracking, mutation, re-run — see
 - **[Reading the Kernel](kernel-reading-guide.qmd)** — every file, every data structure, in dependency order. Start here for a thorough code walk-through.
 - **[Reactivity by Example](reactivity-by-example.qmd)** — one full cycle traced from boot to re-run.
 - **[Traits (L0--L3)](../ref/traits.qmd)** — the full trait table and inference rules.
-- **[Supervision and Reliability](supervision.qmd)** — bus timeout, fire-and-forget, dead letter, Erlang-style supervision trees.
+- **[Supervision and Reliability](supervision.qmd)** — dead letter, Erlang-style supervision trees.

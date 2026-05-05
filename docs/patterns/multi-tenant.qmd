@@ -20,11 +20,11 @@ for multi-tenancy specifically:
 | Feature | Role |
 |---------|------|
 | `kernel.instantiate(factory, name, {"target": t})` | Creates a named instance with properties |
-| Bus target routing | `factory.runnable` + `target` param routes to `instance.runnable` |
+| Target routing | `kernel.instantiate()` with `target` creates per-tenant instances accessible via `@requires` |
 | Structural scoping | Credentials and storage are auto-scoped per component name |
 
 One factory, three `kernel.instantiate()` calls, three isolated instances with
-their own reactive config, credential namespace, and bus handlers.
+their own reactive config, credential namespace, and service registrations.
 
 ```
 kernel.instantiate("tenant-db", "tenant-db-acme",    {"target": "acme"})
@@ -32,9 +32,8 @@ kernel.instantiate("tenant-db", "tenant-db-globex",   {"target": "globex"})
 kernel.instantiate("tenant-db", "tenant-db-initech",  {"target": "initech"})
 ```
 
-The bus treats these as three distinct components. `tenant-db.query` with
-`{"target": "acme"}` routes to `tenant-db-acme.query`. Direct instance calls
-also work.
+The kernel treats these as three distinct components, each with their own
+reactive config, credential namespace, and service registrations.
 
 ## How It Works
 
@@ -114,28 +113,13 @@ Each instance gets its own `Runtime` with `component_name` set to the instance
 name (e.g. `"tenant-db-acme"`), its own reactive Signals, and its own
 `properties` dict.
 
-### Target routing in the bus
+### Target routing via the registry
 
 When the kernel activates an instance whose name differs from its factory and
-the instance has a `target` property, it registers a target route (from
-`kernel/__init__.py`):
-
-```python
-target_value = ci.properties.get("target")
-if target_value and ci.name != ci.meta.factory_name:
-    factory_handler = f"{ci.meta.factory_name}.{rd.name}"
-    self.bus.register_target_route(factory_handler, target_value, handler_name)
-```
-
-This means `tenant-db.query` with `{"target": "acme"}` resolves to
-`tenant-db-acme.query`. The routing order in `Bus.invoke()` is:
-
-1. **Exact match** -- `tenant-db-acme.query` hits the handler directly.
-2. **Target route** -- `tenant-db.query` + `target` param looks up the route map.
-3. **Remote transports** -- falls through to cross-process transports if no local match.
-
-Use direct instance calls when you know the name; factory + target calls for
-dynamic routing.
+the instance has a `target` property, each instance is registered in the
+registry under its own name. Consumers that need a specific tenant instance
+use `@requires` with the instance name, or use map injection keyed by the
+`target` property to access all instances dynamically.
 
 ### Reactive config changes
 
@@ -145,8 +129,9 @@ Because `db_url` is `@computed`, a runtime config change propagates immediately:
 config = kernel.registry.require("IConfig")
 config.set("tenants.globex.db_url", "postgres://db-new.prod/globex-migrated")
 
-r = await kernel.bus.invoke("tenant-db.query", {"table": "users", "target": "globex"})
-assert r["db_url"] == "postgres://db-new.prod/globex-migrated"
+# The globex instance's @computed recomputes automatically
+globex = kernel.lifecycle.get_instance("tenant-db-globex").instance
+assert globex.db_url() == "postgres://db-new.prod/globex-migrated"
 ```
 
 The chain: `config.set()` updates the Signal, the globex `@computed` recomputes,
@@ -174,7 +159,7 @@ activate the new instance. Seed the tenant's config section before activation so
 the `@computed` picks up the right values on first run.
 
 **Tenant offboarding.** `kernel.hot_remove("tenant-db-acme")` deactivates the
-instance, unregisters its bus handlers, removes target routes, and releases
+instance, unregisters its subscriptions, unprovides services, and releases
 ref counts. The factory stays registered -- other tenants are unaffected.
 
 **Resource limits.** The kernel does not enforce per-tenant quotas. Add a
@@ -195,14 +180,14 @@ kernel.instantiate("postgres-db", "tenant-db-acme",  {"target": "acme"})
 kernel.instantiate("mysql-db",    "tenant-db-globex", {"target": "globex"})
 ```
 
-The bus routes by target regardless of which factory created the instance.
+The registry resolves by target regardless of which factory created the instance.
 
 ## Key Takeaway
 
 L3 targeted is not a special multi-tenancy feature. It falls out of three
 general mechanisms: `kernel.instantiate()` creates named instances from
-factories, `properties` carry per-instance data like `target`, and the bus
-routes `factory.runnable` + `target` param to `instance.runnable`. Structural
+factories, `properties` carry per-instance data like `target`, and `@requires`
+with map injection provides access to instances keyed by property. Structural
 scoping for credentials and storage is enforced by the kernel per component
 name -- not per tenant, not per role, just per component. Multi-tenancy is a
 consequence of the component model, not an addition to it.

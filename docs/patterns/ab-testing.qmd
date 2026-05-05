@@ -172,7 +172,7 @@ The test suite (`TestABTesting` in `src/signalpy/tests/test_examples.py`) valida
 
 **Experiment tracking.** The `route_log` in the example is a placeholder. Production systems should emit structured events per routing decision (user, variant, timestamp) to an analytics pipeline for significance testing.
 
-**Metrics per variant.** Instrument each backend with latency, error rate, and business metrics. Compare v1 vs v2 outcomes before ramping up. The kernel's bus makes it straightforward to add a metrics `@subscribe` handler without modifying the backends.
+**Metrics per variant.** Instrument each backend with latency, error rate, and business metrics. Compare v1 vs v2 outcomes before ramping up. The kernel's event bus makes it straightforward to add a metrics `@subscribe` handler without modifying the backends.
 
 **Gradual ramp.** The pattern supports any ramp schedule: 1% -> 5% -> 25% -> 50% -> 100%. Each step is a single `config.set()` call. If v2 degrades, set the percentage back to 0 -- the `@computed` recomputes and all subsequent requests route to v1 immediately.
 

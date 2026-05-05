@@ -25,7 +25,7 @@ Traits are computed from what a component declares. You don't label them — the
 | subscribable | L2 | `@subscribe` | Reacts to events |
 | kinded | L2 | `@kind` | Defines data schemas |
 | skillful | L2 | `@skill` | Provides AI knowledge |
-| routable | L2 | `@api` | Has API surface declarations |
+| routable | L2 | `@component(..., rest={}, mcp={})` | Has API surface declarations |
 | reactive | L2 | `@computed` or `@effect` | Has reactive properties/effects |
 | adaptable | L2 | (aspirational) | Wraps external tools |
 | targeted | L3 | has `@prop` declarations | Parameterized with properties |
@@ -38,9 +38,9 @@ The kernel reads `ComponentMeta` at discovery time and auto-infers traits:
 
 ```python
 # This component...
-@component("search", version="1.0")
+@component("search", version="1.0",
+           rest={"prefix": "/search"})
 @requires(config=IConfig, logger=ILogger)
-@api("rest", prefix="/search")
 class SearchApp:
     @computed
     def url(self): return self.rt.config.get("url")

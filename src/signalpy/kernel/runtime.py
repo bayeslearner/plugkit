@@ -4,8 +4,9 @@ Built per-component by the kernel. Every injected service is wrapped in
 a Signal, so reading self.rt.config tracks the caller as a dependency.
 When the underlying service changes, consumers are notified automatically.
 
-The bus is integrated directly — rt.invoke(), rt.publish(), rt.on()
-instead of rt.bus.invoke(). Components never see the raw Bus.
+The bus is integrated for events — rt.publish(), rt.on().
+For component-to-component calls, use @requires + direct method calls.
+rt.invoke() is deprecated (spec 011).
 """
 from __future__ import annotations
 
@@ -28,8 +29,8 @@ class Runtime:
     Every injected service is a Signal — reading tracks dependencies.
 
     self.rt.config      → Signal.get() → tracks caller if in Effect/Computed
-    self.rt.invoke()    → bus call (policy-checked)
     self.rt.publish()   → bus event
+    self.rt.<name>      → @requires injection, direct method calls
     """
     component_name: str
     factory_name: str
@@ -89,16 +90,21 @@ class Runtime:
         """Snapshot of all injected services (non-reactive read)."""
         return {k: s.peek() for k, s in self._signals.items()}
 
-    # ── BUS: invoke / publish / subscribe (integrated) ──────────
+    # ── BUS: publish / subscribe (integrated) ─────────────────────
 
     async def invoke(self, target: str, params: dict | None = None,
                      *, timeout: float | None = None) -> Any:
-        """Invoke another component's runnable via the bus. Policy-checked.
+        """DEPRECATED: Use @requires + direct method calls instead.
 
-        Args:
-            timeout: Optional timeout in seconds. Raises asyncio.TimeoutError
-                     if the handler doesn't complete within the deadline.
+        Invoke another component's runnable via the bus. Policy-checked.
+        This method will be removed in a future version (spec 011).
         """
+        import warnings
+        warnings.warn(
+            f"rt.invoke('{target}') is deprecated. "
+            "Use @requires + direct method calls instead (spec 011).",
+            DeprecationWarning, stacklevel=2,
+        )
         if not self._check_permission(target, self._invoke_allow, self._invoke_deny):
             raise PermissionError(
                 f"Component {self.component_name!r} cannot invoke {target!r}"
@@ -109,11 +115,17 @@ class Runtime:
         return await self._bus.invoke(target, params, timeout=timeout)
 
     def invoke_nowait(self, target: str, params: dict | None = None) -> None:
-        """Fire-and-forget invocation via the bus. Policy-checked.
+        """DEPRECATED: Use @requires + direct method calls instead.
 
-        Schedules the handler on the event loop. Caller doesn't wait for result.
-        Errors are logged and sent to the dead letter channel.
+        Fire-and-forget invocation via the bus. Policy-checked.
+        This method will be removed in a future version (spec 011).
         """
+        import warnings
+        warnings.warn(
+            f"rt.invoke_nowait('{target}') is deprecated. "
+            "Use @requires + direct method calls instead (spec 011).",
+            DeprecationWarning, stacklevel=2,
+        )
         if not self._check_permission(target, self._invoke_allow, self._invoke_deny):
             raise PermissionError(
                 f"Component {self.component_name!r} cannot invoke {target!r}"

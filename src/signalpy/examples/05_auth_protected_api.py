@@ -9,7 +9,7 @@ Run: PYTHONPATH=. python examples/05_auth_protected_api.py
 """
 import asyncio
 from pydantic import BaseModel
-from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle, api
+from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle
 from signalpy.providers.config import ConfigProvider
 from signalpy.providers.auth import AuthProvider
 
@@ -25,10 +25,9 @@ class DeleteParams(BaseModel):
     id: str
 
 
-@component("doc-service")
+@component("doc-service", rest={"prefix": "/docs", "version": "v1"})
 @provides("IDocService")
 @requires(config="IConfig")
-@api("rest", prefix="/docs", version="v1")
 class DocumentService:
     @lifecycle.activate
     def activate(self):
@@ -81,12 +80,17 @@ async def main():
 
     print("=== Document Service ===\n")
 
+    # Find runnable schemas directly
+    list_schema = kernel.bus.get_schema("doc-service.list")
+    create_schema = kernel.bus.get_schema("doc-service.create")
+    delete_schema = kernel.bus.get_schema("doc-service.delete")
+
     # Public: list (no auth needed)
-    r = await kernel.bus.invoke("doc-service.list", {})
+    r = await list_schema.handler({})
     print(f"  List (public): {len(r['docs'])} docs")
 
     # Protected: create with writer token
-    r = await kernel.bus.invoke("doc-service.create", {
+    r = await create_schema.handler({
         "title": "New Doc",
         "__auth_token__": "writer-token",
     })
@@ -94,26 +98,26 @@ async def main():
 
     # Protected: create without token → PermissionError
     try:
-        await kernel.bus.invoke("doc-service.create", {"title": "Fail"})
+        await create_schema.handler({"title": "Fail"})
     except PermissionError as e:
         print(f"  Create (no auth): PermissionError — {e}")
 
     # Protected: create with reader token → PermissionError
     try:
-        await kernel.bus.invoke("doc-service.create", {
+        await create_schema.handler({
             "title": "Fail", "__auth_token__": "reader-token",
         })
     except PermissionError as e:
         print(f"  Create (reader): PermissionError — {e}")
 
     # Protected: delete requires admin role
-    r = await kernel.bus.invoke("doc-service.delete", {
+    r = await delete_schema.handler({
         "id": "doc-1", "__auth_token__": "admin-token",
     })
     print(f"  Delete (admin): {r}")
 
     try:
-        await kernel.bus.invoke("doc-service.delete", {
+        await delete_schema.handler({
             "id": "doc-2", "__auth_token__": "writer-token",
         })
     except PermissionError as e:

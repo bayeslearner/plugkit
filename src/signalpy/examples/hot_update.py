@@ -159,16 +159,21 @@ async def main():
     await kernel.boot()
 
     print("  === V1 running ===")
-    status = await kernel.bus.invoke("search.status", {})
+    # Find and call runnable schemas directly
+    status_schema = kernel.bus.get_schema("search.status")
+    index_schema = kernel.bus.get_schema("search.index_doc")
+    search_schema = kernel.bus.get_schema("search.search")
+
+    status = await status_schema.handler({})
     print(f"    Status: {status}")
 
     # Index some documents
-    await kernel.bus.invoke("search.index_doc", {"id": "1", "text": "Python programming language"})
-    await kernel.bus.invoke("search.index_doc", {"id": "2", "text": "Python snake species"})
-    await kernel.bus.invoke("search.index_doc", {"id": "3", "text": "JavaScript framework"})
+    await index_schema.handler({"id": "1", "text": "Python programming language"})
+    await index_schema.handler({"id": "2", "text": "Python snake species"})
+    await index_schema.handler({"id": "3", "text": "JavaScript framework"})
 
     # Search with v1
-    r = await kernel.bus.invoke("search.search", {"query": "python"})
+    r = await search_schema.handler({"query": "python"})
     print(f"    V1 search 'python': {len(r['results'])} results, engine={r['engine']}")
     print(f"    Queries so far: {r['total_queries']}")
 
@@ -178,15 +183,19 @@ async def main():
     new_instances = await kernel.hot_update(SearchV2)
     print(f"    Updated {len(new_instances)} instance(s)")
 
+    # Re-fetch schemas after hot update (handlers changed)
+    status_schema = kernel.bus.get_schema("search.status")
+    search_schema = kernel.bus.get_schema("search.search")
+
     # State should be preserved
-    status = await kernel.bus.invoke("search.status", {})
+    status = await status_schema.handler({})
     print(f"    Status after update: {status}")
     assert status["version"] == "2.0"
     assert status["docs"] == 3        # index preserved
     assert status["queries"] == 1     # query count preserved
 
     # Search with v2 — now has relevance scoring
-    r = await kernel.bus.invoke("search.search", {"query": "python"})
+    r = await search_schema.handler({"query": "python"})
     print(f"    V2 search 'python': {len(r['results'])} results, engine={r['engine']}")
     for hit in r["results"]:
         print(f"      {hit['id']}: {hit['text']} (score={hit.get('score', 'n/a')})")

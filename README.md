@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle, computed, effect,
 )
+from signalpy.kernel.contracts import IConfig
 from signalpy.providers.config import ConfigProvider
 from signalpy.providers.logging_provider import LoggingProvider
 
@@ -42,7 +43,7 @@ class GreetParams(BaseModel):
 
 @component("greeter", version="1.0")
 @provides("IGreeter")
-@requires(config="IConfig")
+@requires(config=IConfig)
 class Greeter:
 
     @lifecycle.activate
@@ -64,13 +65,19 @@ class Greeter:
         return {"message": f"{self.prefix()}, {params.name}!"}
 
 
+# Consumer uses @requires — direct method call, no bus.invoke
+@component("app", version="1.0")
+@requires(greeter="IGreeter")
+class App:
+    async def run(self):
+        result = await self.rt.greeter.greet(GreetParams(name="Alice"))
+        print(result)  # {"message": "Hello, Alice!"}
+
+
 async def main():
     kernel = Kernel()
-    kernel.discover([ConfigProvider, LoggingProvider, Greeter])
+    kernel.discover([ConfigProvider, LoggingProvider, Greeter, App])
     await kernel.boot()
-
-    result = await kernel.bus.invoke("greeter.greet", {"name": "Alice"})
-    print(result)  # {"message": "Hello, Alice!"}
 
     # Change config — the @effect re-runs automatically.
     kernel.registry.require("IConfig").set("greeter.prefix", "Howdy")
@@ -81,9 +88,9 @@ async def main():
 asyncio.run(main())
 ```
 
-The same `@runnable` is automatically exposed as a REST endpoint, MCP tool, or
-CLI command depending on which transport adapter you discover. Components never
-know which transport serves them.
+`@runnable` declares the operation schema. Transport adapters (REST, MCP, CLI)
+discover schemas via `kernel.runnables()` and call `schema.handler` directly.
+Components never know which transport serves them.
 
 ## What makes it different
 
@@ -92,8 +99,8 @@ know which transport serves them.
   is a tracked read — when config changes, the effect re-runs automatically.
   No manual callbacks, no `@on_change`, no re-injection hacks.
 
-- **12 decorators total.** `@component`, `@provides`, `@requires`, `@computed`,
-  `@effect`, `@lifecycle.*`, `@runnable`, `@api`, `@subscribe`, `@kind`, `@skill`,
+- **11 decorators total.** `@component`, `@provides`, `@requires`, `@computed`,
+  `@effect`, `@lifecycle.*`, `@runnable`, `@subscribe`, `@kind`, `@skill`,
   `@prop`. That's the whole API surface.
 
 - **Two-axis architecture.** Axis 1 (the kernel) is irreplaceable mechanism: ~2,600
@@ -101,9 +108,10 @@ know which transport serves them.
   config, logging, credentials, storage, REST/MCP/CLI transports — all just
   components. The kernel is small enough to read in one sitting.
 
-- **Same `@runnable` → multiple transports.** `@api("rest", ...)` exposes an HTTP
-  endpoint, `@api("mcp")` exposes an MCP tool. Auth is enforced at the bus level,
-  identical regardless of transport.
+- **Same `@runnable` → multiple transports.** Transport adapters discover
+  `@runnable` schemas and expose them as REST endpoints, MCP tools, or CLI
+  commands. Per-runnable `transports=[]` controls visibility. Auth requirements
+  are declared on the schema and enforced by each consumer.
 
 ## Documentation
 
@@ -112,7 +120,7 @@ The full guided tour is at **<https://bayeslearner.github.io/signalpy-kernel/>**
 - **Tutorials** — first component → give-and-take → dynamic services → runnables → gateway → auth → building a provider
 - **Concepts** — architecture, reactivity by example, line-by-line annotated reactive engine, threading model, deployment scales
 - **Patterns** — reactive-intent recipes (`batch`, `is_stale`, `cancel_on_supersede`, cross-thread writes, mutate-in-place, first-run, cleanup), secret rotation, A/B testing, multi-tenant, hot code update, more
-- **Reference** — traits (L0–L3), all 13 decorators, contracts, kernel API
+- **Reference** — traits (L0–L3), all 11 decorators, contracts, kernel API
 
 ## Project layout
 
@@ -120,10 +128,10 @@ The full guided tour is at **<https://bayeslearner.github.io/signalpy-kernel/>**
 src/signalpy/
 ├── kernel/                  Axis 1 — the irreplaceable core (~2,600 LOC, 9 files)
 │   ├── reactive.py            Signal, Computed, Effect, batch
-│   ├── component.py           13 decorators + metadata
+│   ├── component.py           11 decorators + metadata
 │   ├── runtime.py             ReactiveRuntime: Signal-backed injection
 │   ├── registry.py            ServiceRegistry: provide/require + ref counting
-│   ├── bus.py                 Bus: invoke / publish / subscribe
+│   ├── bus.py                 Event bus: publish / subscribe
 │   ├── lifecycle_manager.py   Dependency-ordered activation, effect lifecycle
 │   ├── traits.py              L0–L3 trait system
 │   └── contracts.py           Protocol interfaces (IConfig, ILogger, IStorage, …)
@@ -132,7 +140,7 @@ src/signalpy/
 │                            credentials, storage, auth, tracing, gateway, …)
 ├── adapters/                Axis 2 — transport adapters (REST/FastAPI, MCP, CLI/Click)
 ├── examples/                Progressive examples 01–07
-└── tests/                   ~290 tests
+└── tests/                   363 tests
 ```
 
 ## Constitution (the non-negotiable rules)
@@ -141,7 +149,7 @@ src/signalpy/
 2. Components give and take. No globals, singletons, or ambient state.
 3. The kernel has zero business logic.
 4. Transport is an adapter, never a core concern.
-5. Distribution can be transparent — the bus is designed for pluggable transports.
+5. Distribution can be transparent — contracts hide location.
 6. Apps are deployment units, components are composition units.
 7. Lifecycle is explicit and managed.
 8. Every API is transport-agnostic.

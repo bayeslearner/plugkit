@@ -188,14 +188,14 @@ await kernel.boot()
 
 # 2. Deploy V1: copy search_v1.py into plugins/
 shutil.copy2(SEARCH_V1, plugin_dir / "search.py")
-await kernel.bus.invoke("plugin-loader.scan", {})
+await plugin_loader.scan()
 # → scan finds search.py, imports it, hot_adds SearchV1
 
 # 3. Index data, run queries (state accumulates in V1)
 
 # 4. Deploy V2: overwrite search.py with the new version
 shutil.copy2(SEARCH_V2, plugin_dir / "search.py")
-await kernel.bus.invoke("plugin-loader.scan", {})
+await plugin_loader.scan()
 # → scan re-imports search.py, sees factory "search" already loaded
 # → calls kernel.hot_update() → snapshot → teardown → replace → restore
 ```

@@ -26,19 +26,36 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class HandlerSchema:
-    """Schema metadata for a bus handler — enables tool discovery."""
+    """Schema metadata for a runnable — enables tool discovery.
+
+    The handler field carries a direct reference to the bound method,
+    populated at component activation time. Consumers (tool-gateway,
+    transport adapters) call schema.handler(params) directly instead
+    of going through bus.invoke.
+    """
     name: str
     description: str = ""
     params_model: type | None = None
     return_type: type | None = None
     internal: bool = False
     destructive: bool = False
+    transports: list[str] | None = None  # None = all; ["native"] = direct only
     requires_action: str = ""
     requires_role: str = ""
     provider: str = ""  # component that registered this handler
+    handler: Callable | None = None  # bound method ref, set at activation
+
+    def visible_on(self, transport: str) -> bool:
+        """Check if this schema should be exposed on a given transport."""
+        if self.internal and self.transports is None:
+            return transport == "native"
+        if self.transports is None:
+            return True
+        return transport in self.transports
 
     @classmethod
-    def from_runnable_def(cls, rd: Any, provider_name: str = "") -> HandlerSchema:
+    def from_runnable_def(cls, rd: Any, provider_name: str = "",
+                          handler: Callable | None = None) -> HandlerSchema:
         """Build from a RunnableDef (kernel activation path)."""
         return cls(
             name=rd.name,
@@ -47,9 +64,11 @@ class HandlerSchema:
             return_type=rd.return_type,
             internal=rd.internal,
             destructive=rd.destructive,
+            transports=rd.transports,
             requires_action=rd.requires_action,
             requires_role=rd.requires_role,
             provider=provider_name,
+            handler=handler,
         )
 
 

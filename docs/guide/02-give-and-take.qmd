@@ -91,7 +91,6 @@ Every injected service lives under `self.rt`. This is the component's window int
 self.rt.dictionary   # injected service (from @requires) — reactive!
 self.rt.config       # IConfig (if required)
 self.rt.logger       # ILogger (scoped to this component)
-self.rt.invoke(...)  # call another component's runnable
 self.rt.publish(...) # emit an event (covered later, when we introduce events)
 self.rt.spawn(...)   # create a child component (covered later)
 self.rt.peek("config")  # read without reactive tracking (covered in tutorial 3)

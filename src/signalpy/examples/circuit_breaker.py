@@ -60,7 +60,7 @@ class PayParams(BaseModel):
 
 
 @component("payment-svc", version="1.0", depends=["config", "ext-api"])
-@requires(config="IConfig", api="IExternalAPI")
+@requires(config="IConfig", ext_api="IExternalAPI")
 class PaymentService:
     """Payment service with a circuit breaker around the external API.
 
@@ -100,7 +100,7 @@ class PaymentService:
             # Try a probe call (half-open)
             self._state.set("half-open")
             try:
-                await self.rt.invoke("ext-api.call", {})
+                await self.rt.ext_api.call({})
                 # Success — close the breaker
                 self._consecutive_failures = 0
                 self._state.set("closed")
@@ -109,7 +109,7 @@ class PaymentService:
                 return {"error": "circuit open", "amount": params.amount}
 
         try:
-            await self.rt.invoke("ext-api.call", {})
+            await self.rt.ext_api.call({})
             self._consecutive_failures = 0
             return {"paid": True, "amount": params.amount}
         except Exception:
@@ -138,31 +138,36 @@ async def main():
     await kernel.boot()
 
     print()
+    # Find runnable schemas directly
+    pay_schema = kernel.bus.get_schema("payment-svc.pay")
+    pay_status = kernel.bus.get_schema("payment-svc.status")
+    set_health = kernel.bus.get_schema("ext-api.set_health")
+
     print("  === Normal operation (API healthy) ===")
-    r = await kernel.bus.invoke("payment-svc.pay", {"amount": 100.0})
+    r = await pay_schema.handler({"amount": 100.0})
     print(f"    Pay $100: {r}")
-    r = await kernel.bus.invoke("payment-svc.pay", {"amount": 200.0})
+    r = await pay_schema.handler({"amount": 200.0})
     print(f"    Pay $200: {r}")
 
     # Take the API down
     print()
     print("  === API goes down ===")
-    await kernel.bus.invoke("ext-api.set_health", {"healthy": False})
+    await set_health.handler({"healthy": False})
 
     for i in range(4):
-        r = await kernel.bus.invoke("payment-svc.pay", {"amount": 50.0})
-        status = await kernel.bus.invoke("payment-svc.status", {})
+        r = await pay_schema.handler({"amount": 50.0})
+        status = await pay_status.handler({})
         print(f"    Attempt {i+1}: {r}  (breaker: {status['state']})")
 
     # Bring API back
     print()
     print("  === API recovers ===")
-    await kernel.bus.invoke("ext-api.set_health", {"healthy": True})
+    await set_health.handler({"healthy": True})
 
-    r = await kernel.bus.invoke("payment-svc.pay", {"amount": 300.0})
+    r = await pay_schema.handler({"amount": 300.0})
     print(f"    Pay $300 (probe): {r}")
 
-    status = await kernel.bus.invoke("payment-svc.status", {})
+    status = await pay_status.handler({})
     print(f"    Final status: {status}")
 
     svc = kernel.lifecycle.get_instance("payment-svc").instance

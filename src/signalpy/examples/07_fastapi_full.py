@@ -22,10 +22,10 @@ class TaskIdParams(BaseModel):
     id: int = 0
 
 
-@component("task-service", version="1.0")
+@component("task-service", version="1.0", rest={"prefix": "/tasks", "version": "v1"})
 @provides("ITaskService")
 @requires(config="IConfig", logger="ILogger")
-@api("rest", prefix="/tasks", version="v1")
+@api("rest", prefix="/tasks", version="v1")  # gateway reads @api until migrated
 class TaskService:
     @lifecycle.activate
     def activate(self):
@@ -77,12 +77,15 @@ async def main():
     ])
     await kernel.boot()
 
-    # Test via bus
-    print("\n=== Bus invocations ===")
-    r = await kernel.bus.invoke("task-service.list", {})
+    # Test via runnable schemas
+    print("\n=== Runnable schema invocations ===")
+    list_schema = kernel.bus.get_schema("task-service.list")
+    complete_schema = kernel.bus.get_schema("task-service.complete")
+
+    r = await list_schema.handler({})
     print(f"  Tasks: {r['count']} total")
 
-    r = await kernel.bus.invoke("task-service.complete", {"id": 2})
+    r = await complete_schema.handler({"id": 2})
     print(f"  Completed: {r}")
 
     # Test via HTTP

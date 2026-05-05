@@ -1,18 +1,18 @@
 ---
 title: "5. Auth & Policy"
-subtitle: "Protect operations declaratively. The bus enforces it — same check for REST, MCP, CLI, and direct calls."
+subtitle: "Protect operations declaratively. Transport adapters enforce auth at the edge."
 ---
 
-## Two Layers of Protection
+## Auth Enforcement
 
-| Layer | What it does | Declared on |
-|---|---|---|
-| **Auth enforcement** | Checks identity before a runnable executes | `@runnable` (per operation) |
-| **Invoke policy** | Controls which bus targets a component can call | `kernel.set_policy()` (per component) |
-
-Auth asks "is this *caller* allowed?" Policy asks "is this *component* allowed to *call that target*?"
+Auth is enforced per consumer -- the transport adapter (REST, MCP, CLI) or
+tool gateway that receives external requests. This keeps auth concerns out
+of the kernel core and lets each transport apply its own auth model.
 
 ## requires_action
+
+`@runnable` can declare auth requirements as metadata. Transport adapters
+read this metadata and enforce it before calling the handler:
 
 ```python
 @runnable("create", params=CreateParams, description="Create document",
@@ -21,22 +21,22 @@ async def create_doc(self, params):
     return {"id": "new-doc"}
 ```
 
-Before this runnable executes, the bus extracts `__auth_token__` from params, authenticates via `IAuth`, and checks authorization for `"docs.write"`. Denied → `PermissionError`.
+The transport adapter checks the caller's identity against `"docs.write"`
+before invoking the handler. Denied -> `PermissionError`.
 
 ::: {.callout-note}
 ## What is `IAuth`?
-`IAuth` is a kernel contract (defined in `signalpy.kernel.contracts`) — it's how the bus asks "who is this caller, and may they perform action X?" You provide the answer by writing an `AuthProvider` component that `@provides(IAuth)`. The kernel ships an example JWT-based one; in dev, you can omit it entirely (see "Without IAuth" at the end).
+`IAuth` is a kernel contract (defined in `signalpy.kernel.contracts`) -- it's how a transport adapter asks "who is this caller, and may they perform action X?" You provide the answer by writing an `AuthProvider` component that `@provides(IAuth)`. The kernel ships an example JWT-based one; in dev, you can omit it entirely (see "Without IAuth" at the end).
 :::
 
 ```python
-# Without token → PermissionError
-await kernel.bus.invoke("doc-svc.create", {"title": "New"})
-
-# With token → works if authorized
-await kernel.bus.invoke("doc-svc.create", {
-    "title": "New",
-    "__auth_token__": "my-token",
-})
+# Transport adapter enforces auth before calling schema.handler:
+async def rest_handler(request: Request):
+    token = request.headers.get("Authorization")
+    identity = await auth.authenticate(token)
+    if schema.requires_action:
+        await auth.authorize(identity, schema.requires_action)
+    # ... then call schema.handler(validated_params)
 ```
 
 ## requires_role
@@ -48,36 +48,13 @@ async def delete_doc(self, params):
     return {"deleted": True}
 ```
 
-Checks that the caller's identity has the `"admin"` role.
+The transport checks that the caller's identity has the `"admin"` role.
 
 ::: {.callout-note}
-## Bus-level enforcement
-Auth is enforced at the bus level, not the transport level. Same check whether invoked via REST, MCP, CLI, or another component's `self.rt.invoke()`.
-:::
-
-## Invoke Policy
-
-Restrict what bus targets a component can call:
-
-```python
-kernel.set_policy("untrusted-app", {
-    "invoke_allow": ["public.*"],
-    "invoke_deny": ["admin.*"],
-    "audit": True,
-})
-```
-
-Enforced on `self.rt.invoke()`. Direct `kernel.bus.invoke()` bypasses policy.
-
-::: {.callout-note}
-## Two paths to the same dispatch table — different guarantees
-`self.rt.invoke(target, params)` is the **policy-enforced** path that components use to call each other. The kernel knows the *caller* (the component owning `self.rt`), so it can check the policy table.
-
-`kernel.bus.invoke(target, params)` is the **lower-level** path: same dispatch, but no caller identity. Use it from tests, scripts, or transport adapters where the policy doesn't apply (the transport itself is what enforces auth at the edge).
-
-Auth (`requires_action` / `requires_role`) runs on **both** paths because it depends on the `__auth_token__` in params, not the caller. Policy runs on `self.rt.invoke()` only.
+## Per-consumer enforcement
+Auth is enforced by the consumer (transport adapter, tool gateway), not the kernel. Each transport reads `requires_action` / `requires_role` from the runnable schema and checks `IAuth` before calling the handler. Internal component-to-component calls via `@requires` bypass auth -- they are trusted kernel-internal calls.
 :::
 
 ## Without IAuth
 
-If no `AuthProvider` is in the kernel, `requires_action` and `requires_role` are silently skipped. Develop without auth, add it later without changing component code.
+If no `AuthProvider` is in the kernel, `requires_action` and `requires_role` metadata is still present on schemas but has no enforcer. Develop without auth, add it later without changing component code.

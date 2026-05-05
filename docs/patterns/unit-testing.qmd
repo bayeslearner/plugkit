@@ -67,9 +67,8 @@ kernel.instantiate("config", properties={
 })
 await kernel.boot()
 
-result = await kernel.bus.invoke("order-service.place", {
-    "item": "Widget", "quantity": 3, "price": 10.0,
-})
+svc = kernel.lifecycle.get_instance("order-service").instance
+result = await svc.place(PlaceParams(item="Widget", quantity=3, price=10.0))
 assert result["tax"] == 2.4  # 30 * 0.08 <2>
 
 logger = kernel.lifecycle.get_instance("fake-logger").instance
@@ -136,7 +135,8 @@ Then assert on captured events:
 kernel.discover([ConfigProvider, FakeLogger, OrderService, EventCollector])
 await kernel.boot()
 
-await kernel.bus.invoke("order-service.place", {"item": "Test", ...})
+svc = kernel.lifecycle.get_instance("order-service").instance
+await svc.place(PlaceParams(item="Test", quantity=1, price=5.0))
 
 collector = kernel.lifecycle.get_instance("event-collector").instance
 assert len(collector.events) == 1
@@ -156,9 +156,9 @@ that the component under test publishes via `self.rt.publish()`.
 | `CredentialProvider` — reads from config (test config) | `IStorage` — avoid filesystem I/O |
 | Bus routing — it's the kernel, not a side effect | External API clients — avoid network |
 
-The kernel itself is not a mock. `Kernel()`, `discover()`, `boot()`, `bus.invoke()` are
-all real. You're testing the actual component lifecycle, actual reactive graph,
-actual bus dispatch. The only fakes are for I/O.
+The kernel itself is not a mock. `Kernel()`, `discover()`, `boot()` are all
+real. You're testing the actual component lifecycle, actual reactive graph,
+actual service injection. The only fakes are for I/O.
 
 
 ## Running

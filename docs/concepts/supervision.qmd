@@ -15,43 +15,11 @@ reliability patterns that make actor systems robust.
 
 ## Bus reliability
 
-### invoke with timeout
-
-By default, `rt.invoke()` waits forever. If a handler hangs, the caller
-hangs. The `timeout` parameter fixes this:
-
-```python
-try:
-    result = await self.rt.invoke("upstream.fetch", params, timeout=5.0)
-except asyncio.TimeoutError:
-    self.rt.logger.warning("upstream.fetch timed out after 5s")
-```
-
-When the timeout fires:
-
-1. The handler's asyncio task is cancelled (standard `asyncio` cancellation).
-2. `asyncio.TimeoutError` propagates to the caller.
-3. A dead letter envelope is published (see below).
-
-### Fire-and-forget: invoke_nowait
-
-Sometimes you want to trigger a runnable without waiting for its result.
-`publish()` is wrong because it's a fan-out event, not a targeted call.
-`invoke_nowait` fills this gap:
-
-```python
-self.rt.invoke_nowait("indexer.reindex", {"force": True})
-# Returns immediately. Handler runs in the background.
-```
-
-- Errors in the handler are logged and sent to the dead letter channel.
-- Policy checks still apply.
-- Name resolution (hallucination hardening) still works.
-
 ### Dead letter channel
 
-When a bus dispatch fails, the failure is recorded on a reserved event
-channel called `__dead_letter__`. Any component can subscribe to it:
+When a bus event dispatch fails (subscriber error, no handler), the failure
+is recorded on a reserved event channel called `__dead_letter__`. Any
+component can subscribe to it:
 
 ```python
 @lifecycle.activate
@@ -65,8 +33,8 @@ def _on_failure(self, event_type, data):
     )
 ```
 
-Each envelope contains `target`, `params`, `reason`, `error`, and
-`timestamp`. Reasons: `no_handler`, `handler_error`, `timeout`. See
+Each envelope contains `event_type`, `data`, `reason`, `error`, and
+`timestamp`. Reasons: `no_handler`, `handler_error`. See
 [Kernel API: Dead Letter Channel](../ref/kernel-api.qmd#dead-letter-channel)
 for the full shape.
 

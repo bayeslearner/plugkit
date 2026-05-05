@@ -79,7 +79,18 @@ class PropertyDef:
 
 @dataclass
 class RunnableDef:
-    """A callable with a typed schema — the atomic unit of capability."""
+    """A callable with a typed schema — the atomic unit of capability.
+
+    Schema-only: declares name, params, description for tool discovery.
+    Transport adapters read schemas via kernel.runnables() and call
+    schema.handler directly. No bus handler registration.
+
+    transports controls per-operation visibility:
+        None          → all transports the component declared + native
+        ["native"]    → direct calls only (replaces internal=True)
+        ["mcp"]       → MCP only
+        ["rest","mcp"] → REST + MCP
+    """
     name: str
     params_model: type
     return_type: type | None
@@ -87,10 +98,20 @@ class RunnableDef:
     description: str = ""
     timeout_s: float | None = None
     destructive: bool = False
-    internal: bool = False   # if True, not exposed via any API
+    internal: bool = False   # DEPRECATED: use transports=["native"] instead
+    transports: list[str] | None = None  # None = all; ["native"] = direct only
     requires_action: str = ""  # auth action required (e.g. "docs.write")
     requires_role: str = ""    # auth role required (e.g. "admin")
     is_async: bool = True    # detected at decoration time (default True for backward compat)
+
+    def visible_on(self, transport: str) -> bool:
+        """Check if this runnable should be exposed on a given transport."""
+        # Legacy: internal=True means native-only
+        if self.internal and self.transports is None:
+            return transport == "native"
+        if self.transports is None:
+            return True  # all transports
+        return transport in self.transports
 
 
 @dataclass
@@ -178,7 +199,9 @@ class ComponentMeta:
     effect_defs: list[EffectDef] = field(default_factory=list)       # reactive effects
     kinds: list[KindDef] = field(default_factory=list)
     skills: list[SkillDef] = field(default_factory=list)
-    apis: list[APIDef] = field(default_factory=list)         # API surface declarations
+    apis: list[APIDef] = field(default_factory=list)         # DEPRECATED: use transport_config
+    # Transport config — replaces @api decorator (spec 011)
+    transport_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     activate_fn: Callable | None = None
     activate_is_async: bool = False
     deactivate_fn: Callable | None = None
@@ -205,10 +228,14 @@ class ComponentMeta:
     def api_runnables(self, transport: str) -> list[RunnableDef]:
         """Return runnables that should be exposed for a given transport.
 
-        If the component has an @api declaration for this transport,
-        apply its include/exclude filters.  If no @api for this transport,
-        return empty (component doesn't want this transport).
+        Checks both new transport_config and legacy @api declarations.
+        Uses per-runnable transports visibility (spec 011).
         """
+        # New path: transport_config on @component
+        if transport in self.transport_config:
+            return [r for r in self.runnables if r.visible_on(transport)]
+
+        # Legacy path: @api declarations
         api_def = next((a for a in self.apis if a.transport == transport), None)
         if api_def is None:
             return []
@@ -225,8 +252,9 @@ class ComponentMeta:
     def has_api(self, transport: str | None = None) -> bool:
         """Check if this component declares any API (or a specific transport)."""
         if transport:
-            return any(a.transport == transport for a in self.apis)
-        return bool(self.apis)
+            return (transport in self.transport_config or
+                    any(a.transport == transport for a in self.apis))
+        return bool(self.transport_config) or bool(self.apis)
 
 
 def _get_meta(cls: type) -> ComponentMeta:
@@ -260,14 +288,23 @@ def component(
     namespace: str = "",
     version: str = "0.0.0",
     depends: list[str] | None = None,
+    rest: dict[str, Any] | None = None,
+    mcp: dict[str, Any] | None = None,
+    cli: dict[str, Any] | None = None,
+    **extra_transports: dict[str, Any],
 ):
     """Mark a class as a component factory.
 
     This is the equivalent of iPOPO's @ComponentFactory — it says
     "this POPO is now factoryable by the kernel."
 
-    Namespace scopes bus targets, service registry, storage prefix,
-    and credential paths.  Defaults to "" (root namespace).
+    Namespace scopes service registry, storage prefix, and credential
+    paths.  Defaults to "" (root namespace).
+
+    Transport config (replaces @api):
+        @component("my-app", version="1.0",
+                   rest={"prefix": "/my-app", "version": "v1"},
+                   mcp={"name": "my-tools"})
 
     Examples:
         @component("greeter")                          → greeter.greet
@@ -280,6 +317,16 @@ def component(
         meta.namespace = namespace
         meta.version = version
         meta.dependencies = depends or []
+        # Transport config
+        if rest is not None:
+            meta.transport_config["rest"] = rest
+        if mcp is not None:
+            meta.transport_config["mcp"] = mcp
+        if cli is not None:
+            meta.transport_config["cli"] = cli
+        for transport_name, config in extra_transports.items():
+            if isinstance(config, dict):
+                meta.transport_config[transport_name] = config
         return cls
     return decorator
 
@@ -355,20 +402,23 @@ def runnable(
     timeout_s: float | None = None,
     destructive: bool = False,
     internal: bool = False,
+    transports: list[str] | None = None,
     requires_action: str = "",
     requires_role: str = "",
 ):
-    """Declare a method as a runnable — a callable with a typed schema.
+    """Declare a method as a runnable — a schema-only capability declaration.
 
-    Runnables are the atomic unit of capability.  Transport adapters
-    (MCP, REST, CLI) read runnables from the registry and auto-generate
-    bindings.  The component never knows which transport serves it.
+    Runnables are the atomic unit of capability. The schema (name, params,
+    description) is used by transport adapters and tool-gateway for discovery.
+    Consumers call schema.handler directly — no bus dispatch.
 
-    Set internal=True to keep the runnable on the bus but hide it
-    from all API surfaces.  Internal runnables are for cross-component
-    calls only.
+    Transport visibility (per-operation):
+        transports=None           → all transports + native (default)
+        transports=["native"]     → direct calls only (replaces internal=True)
+        transports=["mcp"]        → MCP tools only
+        transports=["rest","mcp"] → REST + MCP, not CLI
 
-    Auth enforcement (bus-level, all transports):
+    Auth requirements (enforced per consumer):
         requires_action="docs.write"  → caller must be authorized for this action
         requires_role="admin"         → caller must have this role
     """
@@ -384,6 +434,7 @@ def runnable(
             timeout_s=timeout_s,
             destructive=destructive,
             internal=internal,
+            transports=transports,
             requires_action=requires_action,
             requires_role=requires_role,
             is_async=inspect.iscoroutinefunction(fn),
@@ -404,21 +455,20 @@ def api(
     exclude: list[str] | None = None,
     **properties: Any,
 ):
-    """Declare an API surface for a specific transport.
+    """DEPRECATED: Use transport config on @component instead (spec 011).
 
-    An App can stack multiple @api decorators — one per transport it
-    wants to be exposed through.  Transport adapters pick up only
-    the declarations matching their type.
+    Before:  @api("rest", prefix="/my-app", version="v1")
+    After:   @component("my-app", rest={"prefix": "/my-app", "version": "v1"})
 
-    Examples:
-        @api("rest", prefix="/splunk", auth=True, version="v1")
-        @api("mcp", name="splunk-tools")
-        @api("cli", prefix="splunk")
-        class SplunkApp: ...
-
-    If a component has NO @api declarations, transport adapters
-    fall back to exposing all non-internal runnables (backward compat).
+    This decorator will be removed in a future version.
     """
+    import warnings
+    warnings.warn(
+        "@api() is deprecated. Use transport config on @component instead: "
+        f'@component(..., {transport}={{...}}). See spec 011.',
+        DeprecationWarning, stacklevel=2,
+    )
+
     def decorator(cls: type) -> type:
         meta = _get_meta(cls)
         meta.apis.append(APIDef(

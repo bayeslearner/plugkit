@@ -10,7 +10,7 @@ Compliance regulations (SOX, PCI-DSS, SOC 2) require that every financial transa
 - **Non-invasive.** Business components should not contain audit logic. A transfer service transfers money; it should not know or care that an audit system is watching.
 - **Complete.** Every bus invocation and every domain event must be capturable -- not just the ones a developer remembered to instrument.
 
-Traditional approaches either scatter logging calls throughout business code (invasive, fragile, incomplete) or require an AOP framework with bytecode weaving (heavy, opaque). In SignalPy, two kernel primitives solve both constraints: `@subscribe` with wildcard patterns captures domain events, and `kernel.set_policy(audit=True)` enables invoke-level logging orthogonally.
+Traditional approaches either scatter logging calls throughout business code (invasive, fragile, incomplete) or require an AOP framework with bytecode weaving (heavy, opaque). In SignalPy, two kernel primitives solve both constraints: `@subscribe` with wildcard patterns captures domain events, and `kernel.set_policy(audit=True)` enables publish-level logging orthogonally.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ Traditional approaches either scatter logging calls throughout business code (in
                      |  rt.publish()   |---> "account.transfer"
                      +-----------------+           |
                             ^                      |
-    kernel.bus.invoke()     |                      |  fnmatch("account.*")
+    @requires + direct call  |                      |  fnmatch("account.*")
                             |                      v
                      +-----------------+    +-----------------+
                      | Notification    |    |   AuditTrail    |
@@ -31,7 +31,7 @@ Traditional approaches either scatter logging calls throughout business code (in
                      |   transfer")    |    +-----------------+
                      +-----------------+
                             |
-                   rt.invoke("notifications.send")
+                   self.rt.notifier.send()
 ```
 
 Four moving parts, zero kernel changes:
@@ -39,9 +39,9 @@ Four moving parts, zero kernel changes:
 | Component | Role | Key mechanism |
 |-----------|------|---------------|
 | `AccountService` | Transfers money, publishes domain events | `rt.publish("account.transfer", ...)` |
-| `NotificationService` | Sends user-facing notifications | `@subscribe("account.transfer")` + `rt.invoke()` |
+| `NotificationService` | Sends user-facing notifications | `@subscribe("account.transfer")` + `@requires` direct call |
 | `AuditTrail` | Captures all account events into a queryable log | `@subscribe("account.*")` wildcard |
-| Policy layer | Logs every `rt.invoke()` and `rt.publish()` call | `kernel.set_policy("accounts", {"audit": True})` |
+| Policy layer | Logs every `rt.publish()` call | `kernel.set_policy("accounts", {"audit": True})` |
 
 The AuditTrail and NotificationService are just components. Add them, remove them, replace them -- the AccountService never changes.
 
@@ -104,42 +104,42 @@ The bus resolves wildcards at publish time. When `AccountService` publishes `"ac
 
 ### Step 3: Cross-component notification chain
 
-The NotificationService subscribes to the same event and uses `rt.invoke()` to call its own runnable, demonstrating that domain events can trigger cross-component bus calls:
+The NotificationService subscribes to the same event and calls its own method directly, demonstrating that domain events can trigger cross-component calls via `@requires`:
 
 ```python
 @subscribe("account.transfer", description="Notify on transfer")
 async def on_transfer(self, event_type, data):
-    await self.rt.invoke("notifications.send", {
-        "user": data["to"],
-        "message": f"You received ${data['amount']:.2f} from {data['from']}",
-    })
+    await self.rt.notifier.send(
+        user=data["to"],
+        message=f"You received ${data['amount']:.2f} from {data['from']}",
+    )
 ```
 
 A single `rt.publish()` in AccountService fans out to both the audit trail and the notification system, each acting independently.
 
-### Step 4: Policy-driven invoke audit
+### Step 4: Policy-driven publish audit
 
-Wildcard subscriptions capture domain events. But what about bus invocations -- the `accounts.transfer` and `notifications.send` calls themselves? That is where `set_policy` comes in:
+Wildcard subscriptions capture domain events. For invocation-level logging, `set_policy` provides an additional layer:
 
 ```python
 kernel.set_policy("accounts", {"audit": True})
 kernel.set_policy("notifications", {"audit": True})
 ```
 
-This sets `_audit = True` on the Runtime for each named component. When `_audit` is true, every `rt.invoke()` and `rt.publish()` call emits a structured JSON log line via Python's `logging` module before executing:
+This sets `_audit = True` on the Runtime for each named component. When `_audit` is true, every `rt.publish()` call emits a structured JSON log line via Python's `logging` module before executing:
 
 ```python
 # From runtime.py — the actual implementation
 if self._audit:
-    log.info('{"action":"invoke","caller":"%s","target":"%s"}',
-             self.component_name, target)
+    log.info('{"action":"publish","caller":"%s","event":"%s"}',
+             self.component_name, event_type)
 ```
 
-This is not a subscription -- it is a Runtime-level interceptor. It captures the caller identity, the target, and the action type (`invoke` or `publish`). The policy is set on the kernel, not on the component. The component code is unchanged.
+This is not a subscription -- it is a Runtime-level interceptor. It captures the caller identity, the event type, and the action. The policy is set on the kernel, not on the component. The component code is unchanged.
 
 ::: {.callout-note}
 ## Two audit layers
-`@subscribe("account.*")` captures domain events (what happened). `set_policy(audit=True)` captures bus operations (who called what). Together they provide complete audit coverage -- event-level and invocation-level.
+`@subscribe("account.*")` captures domain events (what happened). `set_policy(audit=True)` captures bus publish operations (who published what). Together they provide audit coverage at the event level.
 :::
 
 ## Running It
@@ -171,7 +171,7 @@ Expected output:
   Audit trail demo complete.
 ```
 
-The `[audit]` lines come from the AuditTrail's `@subscribe` handler. The policy-level audit logs (invoke/publish JSON lines) go to Python's `logging` module at INFO level -- enable `logging.basicConfig(level=logging.INFO)` to see them on stderr.
+The `[audit]` lines come from the AuditTrail's `@subscribe` handler. The policy-level audit logs (publish JSON lines) go to Python's `logging` module at INFO level -- enable `logging.basicConfig(level=logging.INFO)` to see them on stderr.
 
 The test suite validates the same scenario programmatically:
 
@@ -187,10 +187,10 @@ PYTHONPATH=src python -m pytest src/signalpy/tests/test_examples.py::TestAuditTr
 
 **GDPR and PII filtering.** Audit logs often contain personal data (account names, email addresses, IP addresses). Apply PII filtering in the AuditTrail's handler before persisting -- redact, hash, or tokenize sensitive fields. The handler runs before storage, so filtering is centralized in one component rather than scattered across publishers.
 
-**Audit query patterns.** The example exposes a `query` runnable on the AuditTrail component. In production, index entries by event type, timestamp, and actor. Common queries: "all transfers by alice in the last 24 hours", "all events for account X", "all failed operations". The bus makes this queryable via the same `kernel.bus.invoke("audit-trail.query", ...)` interface.
+**Audit query patterns.** The example exposes a `query` runnable on the AuditTrail component. In production, index entries by event type, timestamp, and actor. Common queries: "all transfers by alice in the last 24 hours", "all events for account X", "all failed operations". Components that need audit data use `@requires` to inject the audit trail and call its query method directly.
 
-**Policy granularity.** `set_policy` accepts `invoke_allow`, `invoke_deny`, and `publish_allow` lists in addition to `audit`. You can selectively audit high-risk components while leaving low-risk ones unaudited to reduce log volume. Policies are set at boot time or changed at runtime -- no component restarts needed.
+**Policy granularity.** `set_policy` accepts `publish_allow` lists in addition to `audit`. You can selectively audit high-risk components while leaving low-risk ones unaudited to reduce log volume. Policies are set at boot time or changed at runtime -- no component restarts needed.
 
 ## Key Takeaway
 
-`@subscribe` with wildcard patterns captures domain events across an entire namespace. `kernel.set_policy(audit=True)` captures bus invocations at the Runtime level. Together, they provide complete audit coverage -- event-level and invocation-level -- without a single line of audit code in any business component. The audit trail is just another component: add it, remove it, replace it.
+`@subscribe` with wildcard patterns captures domain events across an entire namespace. `kernel.set_policy(audit=True)` captures bus publish operations at the Runtime level. Together, they provide audit coverage without a single line of audit code in any business component. The audit trail is just another component: add it, remove it, replace it.

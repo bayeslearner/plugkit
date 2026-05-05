@@ -99,15 +99,18 @@ async def main():
 
     await kernel.boot()
 
-    # Direct instance calls
+    # Direct instance calls — use runnable schemas
     print("  === Direct instance calls ===")
-    r = await kernel.bus.invoke("tenant-db-acme.query", {"table": "orders"})
+    acme_query = kernel.bus.get_schema("tenant-db-acme.query")
+    globex_query = kernel.bus.get_schema("tenant-db-globex.query")
+
+    r = await acme_query.handler({"table": "orders"})
     print(f"    Acme: {r['tenant']} → {r['db_url']}")
 
-    r = await kernel.bus.invoke("tenant-db-globex.query", {"table": "users"})
+    r = await globex_query.handler({"table": "users"})
     print(f"    Globex: {r['tenant']} → {r['db_url']}")
 
-    # Target-routed calls (factory name + target param)
+    # Target-routed calls (factory name + target param) — bus handles routing
     print()
     print("  === Target-routed calls (factory + target param) ===")
     r = await kernel.bus.invoke("tenant-db.query", {"table": "invoices", "target": "acme"})
@@ -125,7 +128,7 @@ async def main():
     r = await kernel.bus.invoke("tenant-db.query", {"table": "users", "target": "globex"})
     print(f"    Globex after migration: {r['db_url']}")
 
-    # Status of all tenants
+    # Status of all tenants — target-routed
     print()
     print("  === Tenant status ===")
     for tenant in ["acme", "globex", "initech"]:

@@ -130,6 +130,10 @@ class Kernel:
         self._state = KernelState.CREATED
         self._inflight = 0
         self._drain_event: asyncio.Event | None = None
+        # Runnable schema registry: "component.runnable" → HandlerSchema
+        self._runnable_schemas: dict[str, HandlerSchema] = {}
+        # Signal tracking available runnable names (for reactive transport adapters)
+        self.runnable_signal: Signal[frozenset[str]] = Signal(frozenset())
         self._register_builtin_traits()
 
     @property
@@ -360,17 +364,27 @@ class Kernel:
             self._register_bus_handlers(ci)
 
     def _register_bus_handlers(self, ci: ComponentInstance) -> None:
-        """Register bus handlers — split out so batch() wraps all at once."""
+        """Register bus handlers and runnable schemas.
+
+        Populates both the legacy bus handler registry and the new
+        kernel-level runnable schema registry (spec 011).
+        """
         for rd in ci.meta.runnables:
             handler_name = f"{ci.name}.{rd.name}"
-            schema = HandlerSchema.from_runnable_def(rd, provider_name=ci.name)
-            self.bus.register_handler(
-                handler_name, self._make_bus_handler(rd, ci.instance, ci), schema=schema,
+            bus_handler = self._make_bus_handler(rd, ci.instance, ci)
+            schema = HandlerSchema.from_runnable_def(
+                rd, provider_name=ci.name, handler=bus_handler,
             )
+            # Legacy bus registration (will be removed in future)
+            self.bus.register_handler(handler_name, bus_handler, schema=schema)
+            # New: kernel-level schema registry
+            self._runnable_schemas[handler_name] = schema
             target_value = ci.properties.get("target")
             if target_value and ci.name != ci.meta.factory_name:
                 factory_handler = f"{ci.meta.factory_name}.{rd.name}"
                 self.bus.register_target_route(factory_handler, target_value, handler_name)
+        # Update the runnable signal
+        self.runnable_signal.set(frozenset(self._runnable_schemas.keys()))
 
         # Register subscriptions
         for sd in ci.meta.subscriptions:
@@ -572,7 +586,10 @@ class Kernel:
         from signalpy.kernel.reactive import batch as _batch
         with _batch():
             for rd in ci.meta.runnables:
-                self.bus.unregister_handler(f"{ci.name}.{rd.name}")
+                handler_name = f"{ci.name}.{rd.name}"
+                self.bus.unregister_handler(handler_name)
+                self._runnable_schemas.pop(handler_name, None)
+            self.runnable_signal.set(frozenset(self._runnable_schemas.keys()))
 
         for entry in self.registry.query():
             if entry.provider_name == ci.name:
@@ -717,6 +734,60 @@ class Kernel:
         await self.lifecycle.shutdown(self._build_runtime)
         self._state = KernelState.STOPPED
         log.info("Kernel shut down")
+
+    # ── Runnable discovery (spec 011) ─────────────────────────────
+
+    def runnables(
+        self,
+        transport: str | None = None,
+        include_internal: bool = False,
+    ) -> list[HandlerSchema]:
+        """Return all runnable schemas, optionally filtered by transport.
+
+        Args:
+            transport: Filter to runnables visible on this transport
+                       (e.g. "rest", "mcp", "cli", "native"). None = all.
+            include_internal: Include internal/native-only runnables.
+
+        This is the primary discovery API for tool-gateway and transport
+        adapters. Each schema carries a handler reference for direct calls.
+        """
+        schemas = list(self._runnable_schemas.values())
+        if transport is not None:
+            schemas = [s for s in schemas if s.visible_on(transport)]
+        if not include_internal:
+            schemas = [s for s in schemas
+                       if not (s.internal and s.transports is None)]
+        return schemas
+
+    def runnables_by_component(
+        self,
+        transport: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Return runnables grouped by component, with transport config.
+
+        Returns:
+            {component_name: {
+                "transport_config": {...},  # e.g. {"prefix": "/my-app"}
+                "schemas": [HandlerSchema, ...]
+            }}
+
+        Transport adapters use this to get per-component config (REST prefix,
+        MCP name) alongside the operation schemas.
+        """
+        result: dict[str, dict[str, Any]] = {}
+        for key, schema in self._runnable_schemas.items():
+            if transport is not None and not schema.visible_on(transport):
+                continue
+            provider = schema.provider
+            if provider not in result:
+                # Find transport config from component meta
+                ci = self.lifecycle.get_instance(provider)
+                tc = ci.meta.transport_config.get(transport, {}) if (
+                    ci and transport) else {}
+                result[provider] = {"transport_config": tc, "schemas": []}
+            result[provider]["schemas"].append(schema)
+        return result
 
     # ── Status ──────────────────────────────────────────────────
 

@@ -14,6 +14,7 @@ No kernel changes required.
 Run: PYTHONPATH=src python -m signalpy.examples.extension_bundle
 """
 import asyncio
+from typing import Protocol, runtime_checkable
 from pydantic import BaseModel
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
@@ -21,6 +22,13 @@ from signalpy.kernel import (
 )
 from signalpy.providers.config import ConfigProvider
 from signalpy.providers.logging_provider import LoggingProvider
+
+
+# ── Contracts ──────────────────────────────────────────────────
+
+@runtime_checkable
+class ISlackNotifier(Protocol):
+    async def notify(self, params) -> dict: ...
 
 
 # ── Core app that the extension integrates with ─────────────────
@@ -50,6 +58,7 @@ class CoreApp:
 # ── Slack extension bundle (3 components) ───────────────────────
 
 @component("slack-notifier", version="1.0", depends=["config"])
+@provides(ISlackNotifier)
 @requires(config="IConfig")
 class SlackNotifier:
     """Sends notifications to Slack channels."""
@@ -84,7 +93,7 @@ class SlackWebhookReceiver:
 
 
 @component("slack-commands", version="1.0", depends=["config", "slack-notifier"])
-@requires(config="IConfig")
+@requires(config="IConfig", notifier=ISlackNotifier)
 class SlackCommandHandler:
     """Handles /slash commands from Slack. Also listens for core events."""
 
@@ -95,11 +104,11 @@ class SlackCommandHandler:
     @subscribe("core.work_completed", description="Auto-notify Slack when core work completes")
     async def on_work_completed(self, event_type, data):
         self.handled.append(("work_completed", data))
-        # Cross-component call: notify Slack about the work
-        await self.rt.invoke("slack-notifier.notify", {
-            "channel": "ops",
-            "message": f"Work completed: {data.get('result', '?')}",
-        })
+        # Direct call via @requires injection (no bus round-trip)
+        await self.rt.notifier.notify(AlertParams(
+            channel="ops",
+            message=f"Work completed: {data.get('result', '?')}",
+        ))
 
     @runnable("handle", params=BaseModel, description="Handle a /slash command")
     async def handle(self, params):
@@ -121,7 +130,8 @@ async def main():
     await kernel.boot()
 
     print("  === Core app running (no extensions) ===")
-    await kernel.bus.invoke("core-app.do_work", {})
+    do_work_schema = kernel.bus.get_schema("core-app.do_work")
+    await do_work_schema.handler({})
     assert not kernel.bus.has_handler("slack-notifier.notify")
     print("    No Slack handler registered yet.")
 
@@ -135,7 +145,8 @@ async def main():
     # Core work now triggers Slack notification automatically
     print()
     print("  === Core app does work → auto-notifies Slack ===")
-    await kernel.bus.invoke("core-app.do_work", {})
+    do_work_schema = kernel.bus.get_schema("core-app.do_work")
+    await do_work_schema.handler({})
     await asyncio.sleep(0.01)  # let async subscribe handler run
 
     notifier = kernel.lifecycle.get_instance("slack-notifier").instance
@@ -146,7 +157,8 @@ async def main():
     # Direct Slack calls also work
     print()
     print("  === Direct Slack calls ===")
-    await kernel.bus.invoke("slack-notifier.notify", {
+    notify_schema = kernel.bus.get_schema("slack-notifier.notify")
+    await notify_schema.handler({
         "channel": "dev", "message": "Deploy successful"
     })
 

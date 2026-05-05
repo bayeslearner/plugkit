@@ -83,10 +83,11 @@ class NotificationService:
 
     @subscribe("account.transfer", description="Notify on transfer")
     async def on_transfer(self, event_type, data):
-        await self.rt.invoke("notifications.send", {
-            "user": data["to"],
-            "message": f"You received ${data['amount']:.2f} from {data['from']}",
-        })
+        # Direct call to own method (no bus round-trip needed)
+        await self.send(NotifyParams(
+            user=data["to"],
+            message=f"You received ${data['amount']:.2f} from {data['from']}",
+        ))
 
 
 # ── Audit trail component ──────────────────────────────────────
@@ -135,12 +136,14 @@ async def main():
 
     print()
     print("  === Transfers with audit trail ===")
-    await kernel.bus.invoke("accounts.transfer", {
+    transfer_schema = kernel.bus.get_schema("accounts.transfer")
+
+    await transfer_schema.handler({
         "from_account": "alice", "to_account": "bob", "amount": 150.0,
     })
     await asyncio.sleep(0.01)
 
-    await kernel.bus.invoke("accounts.transfer", {
+    await transfer_schema.handler({
         "from_account": "bob", "to_account": "charlie", "amount": 75.0,
     })
     await asyncio.sleep(0.01)
@@ -155,7 +158,8 @@ async def main():
     # Check balances
     print()
     print("  === Final balances ===")
-    balances = await kernel.bus.invoke("accounts.balance", {})
+    balance_schema = kernel.bus.get_schema("accounts.balance")
+    balances = await balance_schema.handler({})
     for name, bal in sorted(balances.items()):
         print(f"    {name}: ${bal:.2f}")
 

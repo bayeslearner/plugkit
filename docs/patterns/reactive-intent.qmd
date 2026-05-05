@@ -245,7 +245,7 @@ corrupt subscriber sets. But two things still go wrong if you do it naively.
 **Sync effects fire on the writing thread.** A worker-pool thread calls
 `signal.set(v)`; any `@effect` subscribed to that signal runs *on the
 worker thread*, not the kernel's event loop thread. If the effect calls
-`self.rt.invoke(...)`, touches a connection pool that's loop-affine, or
+`self.rt.publish(...)`, touches a connection pool that's loop-affine, or
 logs through a handler that expects loop context, things break in
 hard-to-diagnose ways.
 
