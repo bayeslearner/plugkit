@@ -4,7 +4,7 @@ import pytest
 from pydantic import BaseModel
 
 from signalpy.kernel import (
-    Kernel, component, provides, requires, runnable, lifecycle, api,
+    Kernel, component, provides, requires, runnable, lifecycle,
     subscribe, kind, skill, computed, effect,
 )
 from signalpy.kernel.traits import TraitRegistry, Level
@@ -23,10 +23,10 @@ class ItemModel(BaseModel):
     value: int = 0
 
 
-@component("trait-demo", version="2.0", depends=["config", "logging"])
+@component("trait-demo", version="2.0", depends=["config", "logging"],
+           rest={"prefix": "/demo"})
 @provides("ITraitDemo")
 @requires(config="IConfig", logger="ILogger", storage="IStorage")
-@api("rest", prefix="/demo")
 @kind("item", model=ItemModel, description="Demo item")
 @skill("demo-guide", content="# How to use the demo", triggers=["demo", "help"])
 class TraitDemoComponent:
@@ -44,11 +44,11 @@ class TraitDemoComponent:
         self._events.append(data)
 
 
-@component("bundled-app", version="1.0", depends=["config", "logging"])
+@component("bundled-app", version="1.0", depends=["config", "logging"],
+           rest={"prefix": "/bundled"},
+           mcp={"name": "bundled-tools"})
 @provides("IBundled")
 @requires(config="IConfig", logger="ILogger")
-@api("rest", prefix="/bundled")
-@api("mcp", name="bundled-tools")
 class BundledApp:
     @lifecycle.activate
     def activate(self):

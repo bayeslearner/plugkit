@@ -166,24 +166,6 @@ class SkillDef:
 
 
 @dataclass
-class APIDef:
-    """An API surface declaration — how a component wants to be exposed.
-
-    An App can declare multiple APIs (REST + MCP + CLI).
-    Each transport adapter picks up declarations matching its type.
-    """
-    transport: str                        # "rest", "mcp", "cli", "grpc", or custom
-    prefix: str = ""                      # REST: /splunk;  CLI: splunk
-    name: str = ""                        # MCP: tool group name
-    auth: bool = False                    # require auth for this surface
-    version: str = ""                     # API version (e.g. "v1")
-    rate_limit: str = ""                  # e.g. "100/min"
-    include: list[str] | None = None      # explicit runnable list (None = all non-internal)
-    exclude: list[str] | None = None      # exclude specific runnables
-    properties: dict[str, Any] = field(default_factory=dict)  # transport-specific config
-
-
-@dataclass
 class ComponentMeta:
     """Everything the kernel needs to know about a component class."""
     factory_name: str
@@ -199,8 +181,7 @@ class ComponentMeta:
     effect_defs: list[EffectDef] = field(default_factory=list)       # reactive effects
     kinds: list[KindDef] = field(default_factory=list)
     skills: list[SkillDef] = field(default_factory=list)
-    apis: list[APIDef] = field(default_factory=list)         # DEPRECATED: use transport_config
-    # Transport config — replaces @api decorator (spec 011)
+    # Transport config — per-transport settings on @component (spec 011)
     transport_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     activate_fn: Callable | None = None
     activate_is_async: bool = False
@@ -228,33 +209,17 @@ class ComponentMeta:
     def api_runnables(self, transport: str) -> list[RunnableDef]:
         """Return runnables that should be exposed for a given transport.
 
-        Checks both new transport_config and legacy @api declarations.
         Uses per-runnable transports visibility (spec 011).
         """
-        # New path: transport_config on @component
-        if transport in self.transport_config:
-            return [r for r in self.runnables if r.visible_on(transport)]
-
-        # Legacy path: @api declarations
-        api_def = next((a for a in self.apis if a.transport == transport), None)
-        if api_def is None:
+        if transport not in self.transport_config:
             return []
-
-        candidates = [r for r in self.runnables if not r.internal]
-
-        if api_def.include is not None:
-            candidates = [r for r in candidates if r.name in api_def.include]
-        if api_def.exclude:
-            candidates = [r for r in candidates if r.name not in api_def.exclude]
-
-        return candidates
+        return [r for r in self.runnables if r.visible_on(transport)]
 
     def has_api(self, transport: str | None = None) -> bool:
-        """Check if this component declares any API (or a specific transport)."""
+        """Check if this component declares any transport config."""
         if transport:
-            return (transport in self.transport_config or
-                    any(a.transport == transport for a in self.apis))
-        return bool(self.transport_config) or bool(self.apis)
+            return transport in self.transport_config
+        return bool(self.transport_config)
 
 
 def _get_meta(cls: type) -> ComponentMeta:
@@ -440,49 +405,6 @@ def runnable(
             is_async=inspect.iscoroutinefunction(fn),
         ))
         return fn
-    return decorator
-
-
-def api(
-    transport: str,
-    *,
-    prefix: str = "",
-    name: str = "",
-    auth: bool = False,
-    version: str = "",
-    rate_limit: str = "",
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-    **properties: Any,
-):
-    """DEPRECATED: Use transport config on @component instead (spec 011).
-
-    Before:  @api("rest", prefix="/my-app", version="v1")
-    After:   @component("my-app", rest={"prefix": "/my-app", "version": "v1"})
-
-    This decorator will be removed in a future version.
-    """
-    import warnings
-    warnings.warn(
-        "@api() is deprecated. Use transport config on @component instead: "
-        f'@component(..., {transport}={{...}}). See spec 011.',
-        DeprecationWarning, stacklevel=2,
-    )
-
-    def decorator(cls: type) -> type:
-        meta = _get_meta(cls)
-        meta.apis.append(APIDef(
-            transport=transport,
-            prefix=prefix,
-            name=name,
-            auth=auth,
-            version=version,
-            rate_limit=rate_limit,
-            include=include,
-            exclude=exclude,
-            properties=properties,
-        ))
-        return cls
     return decorator
 
 

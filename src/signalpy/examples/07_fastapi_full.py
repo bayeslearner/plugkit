@@ -11,7 +11,7 @@ Run: PYTHONPATH=. python examples/07_fastapi_full.py
 """
 import asyncio
 from pydantic import BaseModel
-from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle, api, computed
+from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle, computed
 
 
 class TaskParams(BaseModel):
@@ -25,7 +25,6 @@ class TaskIdParams(BaseModel):
 @component("task-service", version="1.0", rest={"prefix": "/tasks", "version": "v1"})
 @provides("ITaskService")
 @requires(config="IConfig", logger="ILogger")
-@api("rest", prefix="/tasks", version="v1")  # gateway reads @api until migrated
 class TaskService:
     @lifecycle.activate
     def activate(self):

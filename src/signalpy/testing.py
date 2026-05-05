@@ -6,7 +6,8 @@ Usage:
 
     # Integration test — full kernel with async context manager
     async with KernelFixture(MyApp, config={"db.url": "sqlite://"}) as kernel:
-        result = await kernel.bus.invoke("my-app.search", {"q": "hello"})
+        schema = next(s for s in kernel.runnables() if s.name == "search")
+        result = await schema.handler({"q": "hello"})
         assert result["count"] >= 0
 
     # Unit test — isolated Runtime, no kernel
@@ -14,11 +15,6 @@ Usage:
     app = GreeterApp()
     app.rt = rt
     assert app.greeting() == "Hey"
-
-    # Bus-only test — test handler wiring without full lifecycle
-    async with BusFixture() as bus:
-        bus.register_handler("echo", lambda p: p)
-        assert await bus.invoke("echo", {"x": 1}) == {"x": 1}
 """
 from __future__ import annotations
 
@@ -36,12 +32,13 @@ class KernelFixture:
     defaults.
 
         async with KernelFixture(UserService, SearchApp, config={"key": "val"}) as kernel:
-            result = await kernel.bus.invoke("user-service.create", {"name": "x"})
+            schema = next(s for s in kernel.runnables() if s.name == "create")
+            result = await schema.handler({"name": "x"})
 
     Options:
         config:     dict merged into a writable DictSource layer
         with_auth:  include AuthProvider (default False — no auth enforcement)
-        policies:   kernel-level invoke/publish policies
+        policies:   kernel-level publish policies
     """
 
     def __init__(
@@ -83,24 +80,6 @@ class KernelFixture:
 
     async def __aexit__(self, *exc) -> None:
         await self.kernel.shutdown()
-
-
-class BusFixture:
-    """Async context manager for isolated bus tests.
-
-    No kernel, no lifecycle — just a bus with handler registration.
-
-        async with BusFixture() as bus:
-            bus.register_handler("echo", lambda p: p)
-            result = await bus.invoke("echo", {"msg": "hi"})
-    """
-
-    async def __aenter__(self) -> Bus:
-        self.bus = Bus()
-        return self.bus
-
-    async def __aexit__(self, *exc) -> None:
-        pass
 
 
 def mock_runtime(

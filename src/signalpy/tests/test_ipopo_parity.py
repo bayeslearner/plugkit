@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from signalpy.kernel import (
     Kernel, component, provides, requires,
-    runnable, lifecycle, api, prop, computed, effect,
+    runnable, lifecycle, prop, computed, effect,
 )
 from signalpy.kernel.component import get_meta, _finalize_meta
 from signalpy.kernel.lifecycle_manager import State

@@ -118,7 +118,7 @@ class TraitRegistry:
             traits.append(KINDED)
         if meta.skills:
             traits.append(SKILLFUL)
-        if meta.apis:
+        if meta.transport_config:
             traits.append(ROUTABLE)
 
         if hasattr(meta, "computed_defs") and (meta.computed_defs or getattr(meta, "effect_defs", [])):

@@ -6,7 +6,6 @@ When the underlying service changes, consumers are notified automatically.
 
 The bus is integrated for events — rt.publish(), rt.on().
 For component-to-component calls, use @requires + direct method calls.
-rt.invoke() is deprecated (spec 011).
 """
 from __future__ import annotations
 
@@ -38,8 +37,6 @@ class Runtime:
     _bus: Bus = field(repr=False)
 
     # Policy (set by kernel, not by component)
-    _invoke_allow: list[str] = field(default_factory=lambda: ["*"])
-    _invoke_deny: list[str] = field(default_factory=list)
     _publish_allow: list[str] = field(default_factory=lambda: ["*"])
     _audit: bool = False
 
@@ -91,49 +88,6 @@ class Runtime:
         return {k: s.peek() for k, s in self._signals.items()}
 
     # ── BUS: publish / subscribe (integrated) ─────────────────────
-
-    async def invoke(self, target: str, params: dict | None = None,
-                     *, timeout: float | None = None) -> Any:
-        """DEPRECATED: Use @requires + direct method calls instead.
-
-        Invoke another component's runnable via the bus. Policy-checked.
-        This method will be removed in a future version (spec 011).
-        """
-        import warnings
-        warnings.warn(
-            f"rt.invoke('{target}') is deprecated. "
-            "Use @requires + direct method calls instead (spec 011).",
-            DeprecationWarning, stacklevel=2,
-        )
-        if not self._check_permission(target, self._invoke_allow, self._invoke_deny):
-            raise PermissionError(
-                f"Component {self.component_name!r} cannot invoke {target!r}"
-            )
-        if self._audit:
-            log.info('{"action":"invoke","caller":"%s","target":"%s"}',
-                     self.component_name, target)
-        return await self._bus.invoke(target, params, timeout=timeout)
-
-    def invoke_nowait(self, target: str, params: dict | None = None) -> None:
-        """DEPRECATED: Use @requires + direct method calls instead.
-
-        Fire-and-forget invocation via the bus. Policy-checked.
-        This method will be removed in a future version (spec 011).
-        """
-        import warnings
-        warnings.warn(
-            f"rt.invoke_nowait('{target}') is deprecated. "
-            "Use @requires + direct method calls instead (spec 011).",
-            DeprecationWarning, stacklevel=2,
-        )
-        if not self._check_permission(target, self._invoke_allow, self._invoke_deny):
-            raise PermissionError(
-                f"Component {self.component_name!r} cannot invoke {target!r}"
-            )
-        if self._audit:
-            log.info('{"action":"invoke_nowait","caller":"%s","target":"%s"}',
-                     self.component_name, target)
-        self._bus.invoke_nowait(target, params)
 
     async def publish(self, event_type: str, data: Any = None) -> None:
         """Publish an event to the bus. Policy-checked."""

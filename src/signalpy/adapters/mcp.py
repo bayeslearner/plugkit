@@ -12,6 +12,8 @@ Two modes:
     server = FastMCP("my-server")
     kernel = Kernel(); kernel.discover([...]); await kernel.boot()
     mount_mcp(server, kernel)
+
+Spec 011: Tools call schema.handler directly — no bus.invoke.
 """
 from __future__ import annotations
 
@@ -35,8 +37,8 @@ except ImportError:
 def mount_mcp(server, kernel) -> int:
     """Mount kernel runnables as MCP tools on an existing FastMCP server.
 
-    Reads the gateway's "mcp" surface if available, otherwise falls back
-    to exposing all bus handlers directly.
+    Uses kernel.runnables(transport="mcp") to discover operations
+    and calls schema.handler directly.
 
     Args:
         server: A FastMCP server instance.
@@ -45,91 +47,43 @@ def mount_mcp(server, kernel) -> int:
     Returns:
         Number of tools registered.
     """
-    bus = kernel.bus
-    gateway = kernel.registry.require_optional("IGateway")
     count = 0
+    schemas = kernel.runnables(transport="mcp")
 
-    entries = []
-    if gateway:
-        surface = gateway.get_surface("mcp")
-        if surface:
-            entries = surface.entries
+    for schema in schemas:
+        tool_name = f"{schema.provider}.{schema.name}"
+        _register_tool(server, tool_name, schema)
+        count += 1
 
-    if entries:
-        for entry in entries:
-            _register_tool(server, entry.runnable_name, entry.description,
-                          entry.params_model, bus)
-            count += 1
-        log.info("mount_mcp: %d tools from gateway surface", count)
-    else:
-        # No gateway — register all bus handlers as tools
-        for handler_name in bus.handlers:
-            _register_tool(server, handler_name, f"Invoke {handler_name}", None, bus)
-            count += 1
-        log.info("mount_mcp: %d tools from bus handlers (no gateway)", count)
-
+    log.info("mount_mcp: %d tools", count)
     return count
 
 
-def _register_tool(server, runnable_name: str, description: str,
-                   params_model, bus) -> None:
-    """Register a single kernel runnable as an MCP tool on a FastMCP server."""
+def _register_tool(server, tool_name: str, schema) -> None:
+    """Register a single kernel runnable as an MCP tool."""
     if _HAS_FASTMCP and hasattr(server, 'tool'):
-        # FastMCP — use the @server.tool() pattern
-        @server.tool(name=runnable_name, description=description or f"Invoke {runnable_name}")
-        async def _handler(**kwargs) -> Any:
-            return await bus.invoke(runnable_name, kwargs)
+        @server.tool(name=tool_name,
+                     description=schema.description or f"Invoke {tool_name}")
+        async def _handler(s=schema, **kwargs) -> Any:
+            return await s.handler(kwargs)
     else:
-        # Generic MCP server — store tool definition for manual wiring
         if not hasattr(server, '_kernel_tools'):
             server._kernel_tools = []
-        schema = {}
-        if params_model and hasattr(params_model, 'model_json_schema'):
-            schema = params_model.model_json_schema()
+        input_schema = {}
+        if schema.params_model and hasattr(schema.params_model, 'model_json_schema'):
+            input_schema = schema.params_model.model_json_schema()
         server._kernel_tools.append({
-            "name": runnable_name,
-            "description": description or f"Invoke {runnable_name}",
-            "input_schema": schema,
+            "name": tool_name,
+            "description": schema.description or f"Invoke {tool_name}",
+            "input_schema": input_schema,
         })
-
-
-def _build_tool_list(kernel) -> list[dict]:
-    """Build a list of tool definitions from the kernel's gateway or bus."""
-    bus = kernel.bus
-    gateway = kernel.registry.require_optional("IGateway")
-    tools = []
-
-    if gateway:
-        surface = gateway.get_surface("mcp")
-        if surface:
-            for entry in surface.entries:
-                schema = {}
-                if entry.params_model and hasattr(entry.params_model, 'model_json_schema'):
-                    schema = entry.params_model.model_json_schema()
-                tools.append({
-                    "name": entry.runnable_name,
-                    "description": entry.description or f"Invoke {entry.short_name}",
-                    "group": entry.group,
-                    "input_schema": schema,
-                })
-            return tools
-
-    # Fallback: all bus handlers
-    for handler_name in bus.handlers:
-        tools.append({
-            "name": handler_name,
-            "description": f"Invoke {handler_name}",
-            "group": "",
-            "input_schema": {"type": "object", "properties": {}},
-        })
-    return tools
 
 
 # ── Container mode: SignalPy manages the MCP server ───────────────
 
-@component("mcp-transport", version="0.3", depends=["gateway"])
+@component("mcp-transport", version="0.3")
 @provides("IMCPServer")
-@requires(config="IConfig", gateway="IGateway")
+@requires(config="IConfig")
 class MCPTransport:
     """Container mode — SignalPy creates and owns the MCP tool registry.
 
@@ -142,29 +96,38 @@ class MCPTransport:
 
     @lifecycle.activate
     def activate(self, rt):
-        self._bus = rt.bus
-        self._tools = _build_tool_list_from_gateway(rt.gateway, rt.bus)
+        self._rt = rt
+        self._schemas = {}  # tool_name → schema
 
         if _HAS_FASTMCP:
             self._server = _FastMCP(
                 rt.config.get("mcp.name", "signalpy-kernel")
             )
-            for tool in self._tools:
-                _register_tool(self._server, tool["name"], tool["description"],
-                              None, rt.bus)
-            log.info("MCP transport: %d tools on FastMCP server", len(self._tools))
         else:
             self._server = None
-            log.info("MCP transport: %d tools (no FastMCP — use list_tools())",
-                     len(self._tools))
+
+        log.info("MCP transport activated (FastMCP: %s)", _HAS_FASTMCP)
 
     async def handle_tool_call(self, tool_name: str, arguments: dict) -> Any:
-        """Invoke a kernel runnable by tool name."""
-        return await self._bus.invoke(tool_name, arguments)
+        """Invoke a kernel runnable by tool name via schema.handler."""
+        schema = self._schemas.get(tool_name)
+        if schema is None:
+            raise KeyError(f"No MCP tool {tool_name!r}")
+        return await schema.handler(arguments)
 
     def list_tools(self) -> list[dict]:
         """Return the tool definitions."""
-        return list(self._tools)
+        tools = []
+        for name, schema in self._schemas.items():
+            input_schema = {}
+            if schema.params_model and hasattr(schema.params_model, 'model_json_schema'):
+                input_schema = schema.params_model.model_json_schema()
+            tools.append({
+                "name": name,
+                "description": schema.description or f"Invoke {name}",
+                "input_schema": input_schema,
+            })
+        return tools
 
     def get_server(self):
         """Return the FastMCP server instance (if FastMCP is installed)."""
@@ -173,29 +136,3 @@ class MCPTransport:
     @lifecycle.deactivate
     def deactivate(self, rt):
         pass
-
-
-def _build_tool_list_from_gateway(gateway, bus) -> list[dict]:
-    """Build tool list from gateway surface."""
-    tools = []
-    surface = gateway.get_surface("mcp") if gateway else None
-    if surface:
-        for entry in surface.entries:
-            schema = {}
-            if entry.params_model and hasattr(entry.params_model, 'model_json_schema'):
-                schema = entry.params_model.model_json_schema()
-            tools.append({
-                "name": entry.runnable_name,
-                "description": entry.description or f"Invoke {entry.short_name}",
-                "group": entry.group,
-                "input_schema": schema,
-            })
-    else:
-        for handler_name in bus.handlers:
-            tools.append({
-                "name": handler_name,
-                "description": f"Invoke {handler_name}",
-                "group": "",
-                "input_schema": {"type": "object", "properties": {}},
-            })
-    return tools

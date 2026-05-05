@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from signalpy.kernel import (
     Kernel, component, provides, requires, runnable, lifecycle,
-    api, computed, effect, prop, subscribe, kind, skill,
+    computed, effect, prop, subscribe, kind, skill,
     Signal, batch,
 )
 from signalpy.kernel.reactive import Computed, Effect
@@ -493,10 +493,10 @@ class TestFastAPIIntegration:
 
         class GP(BaseModel): name: str = "world"
 
-        @component("http-g", version="1.0")
+        @component("http-g", version="1.0",
+                   rest={"prefix": "/greetings", "version": "v1"})
         @provides("IGreeter")
         @requires(config="IConfig", logger="ILogger")
-        @api("rest", prefix="/greetings", version="v1")
         class G:
             @lifecycle.activate
             def activate(self): pass
@@ -504,14 +504,18 @@ class TestFastAPIIntegration:
             async def hello(self, params):
                 return {"msg": f"Hello, {params.name}!"}
 
+        from fastapi import FastAPI
+        from signalpy.adapters.rest import mount_rest
+
         kernel = Kernel()
         kernel.discover([ConfigProvider, LoggingProvider, CredentialProvider,
-                         StorageProvider, APIGateway, RESTTransport, G])
+                         StorageProvider, APIGateway, G])
         await kernel.boot()
 
-        rest = kernel.registry.require("IRestAPI")
+        app = FastAPI()
+        mount_rest(app, kernel)
         from httpx import AsyncClient, ASGITransport
-        async with AsyncClient(transport=ASGITransport(app=rest.app), base_url="http://t") as c:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             r = await c.post("/api/v1/greetings/hello", json={"name": "Alice"})
             assert r.status_code == 200
             assert r.json()["data"]["msg"] == "Hello, Alice!"

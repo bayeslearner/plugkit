@@ -1,15 +1,10 @@
-"""Bus — invoke (request/response) + publish (events).
+"""Event Bus — publish/subscribe for loose-coupled events.
 
-Locality-transparent: in-process by default, pluggable transport
-for cross-process (JSON-RPC, Dapr, etc.).
+The bus handles fan-out event delivery with wildcard matching.
+Observable via a Signal tracking registered handler names.
 
-The bus carries schemas alongside handlers (Phase 0a) and is observable
-via a Signal tracking registered handler names (Phase 0b).
-
-Reliability features (spec 010):
-  - invoke() supports optional timeout (asyncio.TimeoutError on expiry)
-  - invoke_nowait() for fire-and-forget invocation
-  - Dead letter channel (__dead_letter__) for failed dispatches
+Spec 011: invoke() removed. Component-to-component calls use
+@requires + direct method calls. The bus is event-only.
 """
 from __future__ import annotations
 

@@ -41,7 +41,6 @@ from typing import Any, Callable
 
 from signalpy.kernel.bus import Bus, HandlerSchema
 from signalpy.kernel.component import (
-    APIDef,
     ComponentMeta,
     ComputedDef,
     EffectDef,
@@ -55,7 +54,6 @@ from signalpy.kernel.component import (
     _contract_name,
     _finalize_meta,
     _is_contract_type,
-    api,
     component,
     computed,
     effect,
@@ -225,8 +223,6 @@ class Kernel:
             properties=ci.properties,
             _bus=self.bus,
             _spawn=self._spawn_child,
-            _invoke_allow=policy.get("invoke_allow", ["*"]),
-            _invoke_deny=policy.get("invoke_deny", []),
             _publish_allow=policy.get("publish_allow", ["*"]),
             _audit=policy.get("audit", False),
         )
@@ -528,8 +524,8 @@ class Kernel:
 
         # Phase 2: gateway rebuild + transport re-activation
         gw = self.registry.require_optional("IGateway")
-        if gw and hasattr(gw, "set_lifecycle"):
-            gw.set_lifecycle(self.lifecycle)
+        if gw and hasattr(gw, "set_kernel"):
+            gw.set_kernel(self)
             log.info("Gateway rebuilt with %d bus handlers", len(self.bus.handlers))
             for tname in transport_names:
                 ci = self.lifecycle.get_instance(tname)
@@ -753,9 +749,23 @@ class Kernel:
         adapters. Each schema carries a handler reference for direct calls.
         """
         schemas = list(self._runnable_schemas.values())
-        if transport is not None:
-            schemas = [s for s in schemas if s.visible_on(transport)]
-        if not include_internal:
+        if transport is not None and transport != "native":
+            # Filter: component must declare this transport, OR runnable
+            # must explicitly list it in transports=[]
+            filtered = []
+            for s in schemas:
+                if s.transports is not None and transport in s.transports:
+                    filtered.append(s)  # explicitly listed
+                elif s.transports is None:
+                    # Default (all) — only if component declared this transport
+                    ci = self.lifecycle.get_instance(s.provider)
+                    if ci and transport in ci.meta.transport_config:
+                        if not s.internal:
+                            filtered.append(s)
+            schemas = filtered
+        elif transport == "native":
+            schemas = [s for s in schemas if s.visible_on("native")]
+        if not include_internal and transport is None:
             schemas = [s for s in schemas
                        if not (s.internal and s.transports is None)]
         return schemas
@@ -783,8 +793,20 @@ class Kernel:
             if provider not in result:
                 # Find transport config from component meta
                 ci = self.lifecycle.get_instance(provider)
-                tc = ci.meta.transport_config.get(transport, {}) if (
-                    ci and transport) else {}
+                tc = {}
+                if ci and transport:
+                    tc = ci.meta.transport_config.get(transport, {})
+                    # Only include components that declared this transport
+                    # (either via transport_config or per-runnable transports)
+                    if not tc and transport != "native":
+                        # Check if any runnable explicitly lists this transport
+                        has_explicit = any(
+                            s.transports is not None and transport in s.transports
+                            for s in self._runnable_schemas.values()
+                            if s.provider == provider
+                        )
+                        if not has_explicit:
+                            continue
                 result[provider] = {"transport_config": tc, "schemas": []}
             result[provider]["schemas"].append(schema)
         return result

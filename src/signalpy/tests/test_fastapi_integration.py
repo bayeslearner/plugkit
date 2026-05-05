@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from signalpy.kernel import (
     Kernel, component, provides, requires,
-    runnable, lifecycle, api, effect, prop,
+    runnable, lifecycle, effect, prop,
 )
 from signalpy.providers.config import ConfigProvider
 from signalpy.providers.logging_provider import LoggingProvider
@@ -38,10 +38,10 @@ class MathParams(BaseModel):
     a: float = 0
     b: float = 0
 
-@component("greeter", version="1.0")
+@component("greeter", version="1.0",
+           rest={"prefix": "/greetings", "version": "v1"})
 @provides("IGreeter")
 @requires(config="IConfig", logger="ILogger")
-@api("rest", prefix="/greetings", version="v1")
 class GreeterApp:
     @lifecycle.activate
     def activate(self):
@@ -56,10 +56,10 @@ class GreeterApp:
         return {"warmed": True}
 
 
-@component("math", version="1.0")
+@component("math", version="1.0",
+           rest={"prefix": "/math", "version": "v1"})
 @provides("IMath")
 @requires(config="IConfig")
-@api("rest", prefix="/math", version="v1")
 class MathApp:
     @lifecycle.activate
     def activate(self):
@@ -92,10 +92,10 @@ class HttpEnglishDict:
     def check_word(self, word):
         return word.lower() in self.words
 
-@component("spell-http", version="1.0", depends=["dict-en-http"])
+@component("spell-http", version="1.0", depends=["dict-en-http"],
+           rest={"prefix": "/spell", "version": "v1"})
 @provides("ISpellChecker")
 @requires(dicts=IDictionary, key="language")
-@api("rest", prefix="/spell", version="v1")
 class HttpSpellChecker:
     @lifecycle.activate
     def activate(self):
@@ -120,13 +120,14 @@ class HttpSpellChecker:
 # ══════════════════════════════════════════════════════════════════════
 
 async def boot_kernel_with_fastapi(extra_components=None):
-    """Boot kernel, get the FastAPI app from RESTTransport, return (kernel, app)."""
+    """Boot kernel, mount REST routes on FastAPI app, return (kernel, app)."""
     from fastapi import FastAPI
+    from signalpy.adapters.rest import mount_rest
 
     kernel = Kernel()
     components = [
         ConfigProvider, LoggingProvider, CredentialProvider,
-        StorageProvider, APIGateway, RESTTransport,
+        StorageProvider, APIGateway,
         GreeterApp, MathApp,
     ]
     if extra_components:
@@ -135,9 +136,10 @@ async def boot_kernel_with_fastapi(extra_components=None):
     kernel.discover(components)
     await kernel.boot()
 
-    # The RESTTransport creates its own FastAPI app with all kernel routes
-    rest = kernel.registry.require("IRestAPI")
-    return kernel, rest.app
+    # Library mode: mount kernel runnables as REST routes
+    app = FastAPI(title="Test API")
+    mount_rest(app, kernel)
+    return kernel, app
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -229,8 +231,7 @@ class TestFastAPIKernelStatus:
             r = await c.get("/api/kernel/status")
             assert r.status_code == 200
             data = r.json()
-            assert "surfaces" in data
-            assert "rest" in data["surfaces"]
+            assert "components" in data
         await kernel.shutdown()
 
 

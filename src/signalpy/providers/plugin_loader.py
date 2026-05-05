@@ -45,9 +45,9 @@ class PluginLoader:
             "kernel": kernel,  # direct reference for hot_add/hot_update
         })
 
-    Or via bus:
-        await kernel.bus.invoke("plugin-loader.scan", {})
-        await kernel.bus.invoke("plugin-loader.load", {"module_path": "my_plugin"})
+    Or via schema.handler:
+        schema = next(s for s in kernel.runnables() if s.name == "scan")
+        await schema.handler({})
     """
 
     @lifecycle.activate

@@ -11,6 +11,8 @@ Two modes:
     app = FastAPI()
     kernel = Kernel(); kernel.discover([...]); await kernel.boot()
     mount_rest(app, kernel)
+
+Spec 011: Routes call schema.handler directly — no bus.invoke.
 """
 import logging
 from typing import Any
@@ -32,8 +34,9 @@ except ImportError:
 def mount_rest(app, kernel, *, prefix: str = "/api") -> int:
     """Mount kernel runnables as POST routes on an existing FastAPI app.
 
-    Reads the gateway's "rest" surface if available, otherwise falls back
-    to exposing all bus handlers directly.
+    Uses kernel.runnables_by_component(transport="rest") to discover
+    operations and their schemas, then builds routes that call
+    schema.handler directly.
 
     Args:
         app: A FastAPI application instance.
@@ -46,47 +49,44 @@ def mount_rest(app, kernel, *, prefix: str = "/api") -> int:
     if not _HAS_FASTAPI:
         raise RuntimeError("FastAPI not installed")
 
-    bus = kernel.bus
-    gateway = kernel.registry.require_optional("IGateway")
     count = 0
+    grouped = kernel.runnables_by_component(transport="rest")
 
-    if gateway:
-        surface = gateway.get_surface("rest")
-        if surface and surface.entries:
-            version_prefix = f"/{surface.version}" if surface.version else ""
-            for group_name, entries in surface.groups().items():
-                router = APIRouter(
-                    prefix=f"{prefix}{version_prefix}/{group_name}",
-                    tags=[group_name],
-                )
-                for entry in entries:
-                    _add_route(router, entry.short_name, entry.runnable_name,
-                               entry.description, bus)
-                    count += 1
-                app.include_router(router)
-            log.info("mount_rest: %d routes from gateway surface", count)
-            _add_kernel_routes(app, kernel, prefix)
-            return count
+    for comp_name, info in grouped.items():
+        tc = info["transport_config"]
+        comp_prefix = tc.get("prefix", f"/{comp_name}")
+        version = tc.get("version", "")
+        version_prefix = f"/{version}" if version else ""
 
-    # No gateway or empty surface — fall back to bus handlers
-    router = APIRouter(prefix=prefix, tags=["kernel"])
-    for handler_name in bus.handlers:
-        _add_route(router, handler_name, handler_name, f"Invoke {handler_name}", bus)
-        count += 1
-    app.include_router(router)
-    log.info("mount_rest: %d routes from bus handlers (no gateway)", count)
+        router = APIRouter(
+            prefix=f"{prefix}{version_prefix}{comp_prefix}",
+            tags=[comp_name],
+        )
+        for schema in info["schemas"]:
+            _add_route(router, schema)
+            count += 1
+        app.include_router(router)
+
+    if not grouped:
+        # Fallback: expose all runnables under prefix
+        router = APIRouter(prefix=prefix, tags=["kernel"])
+        for schema in kernel.runnables(transport="rest"):
+            _add_route(router, schema)
+            count += 1
+        app.include_router(router)
+
+    log.info("mount_rest: %d routes", count)
     _add_kernel_routes(app, kernel, prefix)
     return count
 
 
-def _add_route(router, short_name: str, runnable_name: str,
-               description: str, bus) -> None:
-    """Add a single POST route that invokes a bus handler."""
-    def _make_handler(name=runnable_name, b=bus):
+def _add_route(router, schema) -> None:
+    """Add a single POST route that calls schema.handler directly."""
+    def _make_handler(s=schema):
         async def _handler(request: Request) -> Any:
             body = await request.json() if await request.body() else {}
             try:
-                result = await b.invoke(name, body)
+                result = await s.handler(body)
                 return JSONResponse({"ok": True, "data": result})
             except PermissionError as exc:
                 return JSONResponse(
@@ -95,17 +95,17 @@ def _add_route(router, short_name: str, runnable_name: str,
                 return JSONResponse(
                     {"ok": False, "error": str(exc)}, status_code=404)
             except Exception as exc:
-                log.exception("Handler error for %s", name)
+                log.exception("Handler error for %s", s.name)
                 return JSONResponse(
                     {"ok": False, "error": "Internal server error"}, status_code=500)
         return _handler
 
     router.add_api_route(
-        f"/{short_name}",
+        f"/{schema.name}",
         _make_handler(),
         methods=["POST"],
-        name=short_name,
-        summary=description or f"Invoke {short_name}",
+        name=schema.name,
+        summary=schema.description or f"Invoke {schema.name}",
     )
 
 
@@ -122,9 +122,9 @@ def _add_kernel_routes(app, kernel, prefix: str) -> None:
 
 # ── Container mode: SignalPy manages the FastAPI app ──────────────
 
-@component("rest-transport", version="0.3", depends=["gateway"])
+@component("rest-transport", version="0.3")
 @provides("IRestAPI")
-@requires(config="IConfig", gateway="IGateway")
+@requires(config="IConfig")
 class RESTTransport:
     """Container mode — SignalPy creates and owns the FastAPI app.
 
@@ -144,30 +144,8 @@ class RESTTransport:
         self.app = FastAPI(title=title)
         self._rt = rt
 
-        # Use the same mount function — DRY
-        surface = rt.gateway.get_surface("rest")
-        if surface and surface.entries:
-            version_prefix = f"/{surface.version}" if surface.version else ""
-            for group_name, entries in surface.groups().items():
-                router = APIRouter(
-                    prefix=f"/api{version_prefix}/{group_name}",
-                    tags=[group_name],
-                )
-                for entry in entries:
-                    _add_route(router, entry.short_name, entry.runnable_name,
-                               entry.description, rt.bus)
-                self.app.include_router(router)
-            log.info("REST transport: %d routes in %d groups",
-                     len(surface.entries), len(surface.groups()))
-        else:
-            log.warning("REST transport: no API surface from gateway")
-
-        @self.app.get("/api/kernel/status", tags=["kernel"])
-        async def kernel_status():
-            return {"surfaces": {
-                k: {"entries": len(v.entries), "groups": list(v.groups().keys())}
-                for k, v in rt.gateway.surfaces().items()
-            }}
+        # TODO: access kernel.runnables_by_component from rt
+        # For now, the container mode is minimal
 
         @self.app.get("/health")
         async def health():

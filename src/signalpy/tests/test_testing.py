@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from signalpy.kernel import component, provides, requires, runnable, lifecycle
 from signalpy.kernel.contracts import IConfig, ILogger
 from signalpy.kernel.lifecycle_manager import State
-from signalpy.testing import KernelFixture, BusFixture, mock_runtime, FakeConfig, FakeLogger
+from signalpy.testing import KernelFixture, mock_runtime, FakeConfig, FakeLogger
 
 
 # ── Test components ──────────────────────────────────────────────────
@@ -46,7 +46,8 @@ class CounterApp:
 async def test_kernel_boots_and_shuts_down():
     async with KernelFixture(CounterApp) as kernel:
         assert kernel.healthy
-        result = await kernel.bus.invoke("counter.increment", {})
+        schema = next(s for s in kernel.runnables() if s.name == "increment")
+        result = await schema.handler({})
         assert result["count"] == 1
     # After exit, kernel is stopped
     assert not kernel.healthy
@@ -55,58 +56,28 @@ async def test_kernel_boots_and_shuts_down():
 @pytest.mark.asyncio
 async def test_kernel_with_config():
     async with KernelFixture(GreeterApp, config={"greeting": "Hey"}) as kernel:
-        result = await kernel.bus.invoke("greeter.greet", {"name": "Alice"})
+        schema = next(s for s in kernel.runnables() if s.name == "greet")
+        result = await schema.handler({"name": "Alice"})
         assert result["message"] == "Hey, Alice!"
 
 
 @pytest.mark.asyncio
 async def test_kernel_default_config():
     async with KernelFixture(GreeterApp) as kernel:
-        result = await kernel.bus.invoke("greeter.greet", {"name": "Bob"})
+        schema = next(s for s in kernel.runnables() if s.name == "greet")
+        result = await schema.handler({"name": "Bob"})
         assert result["message"] == "Hello, Bob!"
-
-
-@pytest.mark.asyncio
-async def test_kernel_with_policies():
-    async with KernelFixture(
-        CounterApp,
-        policies={"counter": {"invoke_deny": ["counter.increment"]}},
-    ) as kernel:
-        # Component should boot, but self-invoke denied doesn't affect bus directly
-        assert kernel.healthy
 
 
 @pytest.mark.asyncio
 async def test_kernel_multiple_components():
     async with KernelFixture(GreeterApp, CounterApp, config={"greeting": "Hi"}) as kernel:
-        g = await kernel.bus.invoke("greeter.greet", {"name": "X"})
-        c = await kernel.bus.invoke("counter.increment", {})
+        greet = next(s for s in kernel.runnables() if s.name == "greet")
+        incr = next(s for s in kernel.runnables() if s.name == "increment")
+        g = await greet.handler({"name": "X"})
+        c = await incr.handler({})
         assert g["message"] == "Hi, X!"
         assert c["count"] == 1
-
-
-# ── BusFixture ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_bus_register_and_invoke():
-    async with BusFixture() as bus:
-        async def echo(params):
-            return {"echo": params.get("msg")}
-
-        bus.register_handler("echo", echo)
-        result = await bus.invoke("echo", {"msg": "hi"})
-        assert result == {"echo": "hi"}
-
-
-@pytest.mark.asyncio
-async def test_bus_dead_letter():
-    async with BusFixture() as bus:
-        dead = []
-        bus.subscribe("__dead_letter__", lambda et, data: dead.append(data))
-        with pytest.raises(KeyError):
-            await bus.invoke("missing", {})
-        assert len(dead) == 1
 
 
 # ── mock_runtime ─────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from pydantic import BaseModel
 
-from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle, api
+from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle
 from signalpy.kernel.bus import Bus
 from signalpy.kernel.registry import ServiceRegistry
 from signalpy.kernel.lifecycle_manager import LifecycleManager, State
@@ -64,10 +64,10 @@ class InternalRunnableComponent:
         return {"internal": True}
 
 
-@component("multi-api", version="1.0")
+@component("multi-api", version="1.0",
+           rest={"prefix": "/multi", "version": "v1"},
+           mcp={"name": "multi-tools"})
 @provides("IMultiApi")
-@api("rest", prefix="/multi", version="v1")
-@api("mcp", name="multi-tools")
 class MultiApiComponent:
     @runnable("action", params=BaseModel, description="Do something")
     async def action(self, rt, params):
@@ -467,37 +467,8 @@ class TestRuntime:
         with pytest.raises(AttributeError, match="has no service"):
             _ = rt.nonexistent
 
-    @pytest.mark.asyncio
-    async def test_invoke_policy_deny(self):
-        bus = Bus()
-        async def h(p): return "ok"
-        bus.register_handler("admin.delete", h)
-        rt = Runtime(
-            component_name="test",
-            factory_name="test",
-            properties={},
-            _bus=bus,
-            _invoke_allow=["*"],
-            _invoke_deny=["admin.*"],
-        )
-        with pytest.raises(PermissionError):
-            await rt.invoke("admin.delete")
-
-    @pytest.mark.asyncio
-    async def test_invoke_policy_allow(self):
-        bus = Bus()
-        async def h(p): return "ok"
-        bus.register_handler("public.read", h)
-        rt = Runtime(
-            component_name="test",
-            factory_name="test",
-            properties={},
-            _bus=bus,
-            _invoke_allow=["public.*"],
-            _invoke_deny=[],
-        )
-        result = await rt.invoke("public.read")
-        assert result == "ok"
+    # rt.invoke policy tests removed — rt.invoke removed in spec 011.
+    # Component-to-component calls use @requires + direct method calls.
 
 
 # ── Full Kernel Integration ───────────────────────────────────────
@@ -569,21 +540,8 @@ class TestKernelIntegration:
         assert len(rest_runnables) == 1
         assert rest_runnables[0].name == "action"
 
-    @pytest.mark.asyncio
-    async def test_policy_enforcement(self):
-        kernel = Kernel()
-        kernel.discover([LeafComponent, MidComponent])
-        kernel.set_policy("mid", {"invoke_deny": ["leaf.*"]})
-        await kernel.boot()
-
-        # Direct bus call works (no policy on raw bus)
-        # Policy is on the Runtime, not the bus itself
-        mid_ci = kernel.lifecycle.get_instance("mid")
-        rt = kernel._build_runtime(mid_ci)
-        with pytest.raises(PermissionError):
-            await rt.invoke("leaf.something")
-
-        await kernel.shutdown()
+    # test_policy_enforcement removed — rt.invoke removed in spec 011.
+    # Policy enforcement is now per-consumer (transport adapter).
 
     @pytest.mark.asyncio
     async def test_params_validation(self):

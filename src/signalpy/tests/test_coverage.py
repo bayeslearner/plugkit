@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from signalpy.kernel import (
     Kernel, component, provides, requires,
-    runnable, lifecycle, api, subscribe, prop, kind, skill,
+    runnable, lifecycle, subscribe, prop, kind, skill,
     computed, effect,
 )
 from signalpy.kernel.bus import Bus, BusTransport
@@ -255,18 +255,7 @@ class TestRuntimeCoverage:
         with pytest.raises(RuntimeError, match="spawn not available"):
             await rt.spawn("factory")
 
-    @pytest.mark.asyncio
-    async def test_invoke_with_audit(self):
-        bus = Bus()
-        async def h(p): return "ok"
-        bus.register_handler("x", h)
-        rt = Runtime(
-            component_name="audited", factory_name="audited",
-            properties={}, _bus=bus,
-            _audit=True,
-        )
-        result = await rt.invoke("x")
-        assert result == "ok"
+    # test_invoke_with_audit removed — rt.invoke removed in spec 011.
 
 
 # ══════════════════════════════════════════════════════════════════════

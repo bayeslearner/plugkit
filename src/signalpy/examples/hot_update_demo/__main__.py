@@ -47,7 +47,7 @@ async def main():
         print("  === Deploy V1: copy search_v1.py into plugins/ ===")
         shutil.copy2(SEARCH_V1, plugin_dir / "search.py")
 
-        result = await kernel.bus.invoke("plugin-loader.scan", {})
+        result = await kernel.bus.get_schema("plugin-loader.scan").handler({})
         print(f"    Scan result: {result}")
 
         # Index some documents
@@ -58,20 +58,20 @@ async def main():
             ("2", "Python snake species"),
             ("3", "JavaScript framework"),
         ]:
-            r = await kernel.bus.invoke("search.index_doc", {"id": doc_id, "text": text})
+            r = await kernel.bus.get_schema("search.index_doc").handler({"id": doc_id, "text": text})
             print(f"    Indexed: {r}")
 
         # Search with V1
         print()
         print("  === Search with V1 ===")
-        r = await kernel.bus.invoke("search.search", {"query": "python"})
+        r = await kernel.bus.get_schema("search.search").handler({"query": "python"})
         print(f"    Engine: {r['engine']}")
         print(f"    Results: {len(r['results'])} hits")
         for hit in r["results"]:
             print(f"      {hit['id']}: {hit['text']}")
         print(f"    Total queries: {r['total_queries']}")
 
-        status = await kernel.bus.invoke("search.status", {})
+        status = await kernel.bus.get_schema("search.status").handler({})
         print(f"    Status: {status}")
 
         # ── Deploy V2: overwrite search.py with V2 ───────────
@@ -79,19 +79,19 @@ async def main():
         print("  === Deploy V2: overwrite search.py with v2 ===")
         shutil.copy2(SEARCH_V2, plugin_dir / "search.py")
 
-        result = await kernel.bus.invoke("plugin-loader.scan", {})
+        result = await kernel.bus.get_schema("plugin-loader.scan").handler({})
         print(f"    Scan result: {result}")
 
         # Search with V2 — state should be preserved
         print()
         print("  === Search with V2 (state preserved) ===")
-        status = await kernel.bus.invoke("search.status", {})
+        status = await kernel.bus.get_schema("search.status").handler({})
         print(f"    Status: {status}")
         assert status["version"] == "2.0", f"Expected v2.0, got {status['version']}"
         assert status["docs"] == 3, f"Expected 3 docs, got {status['docs']}"
         assert status["queries"] == 1, f"Expected 1 query, got {status['queries']}"
 
-        r = await kernel.bus.invoke("search.search", {"query": "python"})
+        r = await kernel.bus.get_schema("search.search").handler({"query": "python"})
         print(f"    Engine: {r['engine']}")
         print(f"    Results: {len(r['results'])} hits (now with scores)")
         for hit in r["results"]:
@@ -101,7 +101,7 @@ async def main():
 
         # Plugin loader status
         print()
-        loader_status = await kernel.bus.invoke("plugin-loader.status", {})
+        loader_status = await kernel.bus.get_schema("plugin-loader.status").handler({})
         print(f"  === Plugin loader status ===")
         print(f"    Loaded factories: {loader_status['loaded_factories']}")
         print(f"    Load log: {loader_status['load_log']}")

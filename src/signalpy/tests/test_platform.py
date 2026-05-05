@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle, api
+from signalpy.kernel import Kernel, component, provides, requires, runnable, lifecycle
 from signalpy.providers.config import ConfigProvider
 from signalpy.providers.logging_provider import LoggingProvider
 from signalpy.providers.credentials import CredentialProvider
@@ -27,11 +27,11 @@ class GreetParams(BaseModel):
     value: str = "default"
 
 
-@component("test-app", version="1.0", depends=["config", "logging"])
+@component("test-app", version="1.0", depends=["config", "logging"],
+           rest={"prefix": "/test", "version": "v1"},
+           mcp={"name": "test-tools"})
 @provides("ITestApp")
 @requires(config="IConfig", logger="ILogger")
-@api("rest", prefix="/test", version="v1")
-@api("mcp", name="test-tools")
 class TestApp:
     @lifecycle.activate
     def activate(self, rt):
@@ -273,7 +273,7 @@ class TestGatewayIntegration:
         mcp_names = [e.short_name for e in mcp_surface.entries]
         assert "greet" in mcp_names
 
-        # CLI surface should NOT have them (no @api("cli"))
+        # CLI surface should NOT have them (no cli= on @component)
         cli_surface = gw.get_surface("cli")
         cli_names = [e.short_name for e in cli_surface.entries] if cli_surface else []
         assert "greet" not in cli_names
@@ -294,9 +294,9 @@ class TestGatewayIntegration:
 
     @pytest.mark.asyncio
     async def test_internal_runnable_excluded_from_surface(self):
-        @component("surface-test", version="1.0", depends=["config", "logging"])
+        @component("surface-test", version="1.0", depends=["config", "logging"],
+                   rest={"prefix": "/stest"})
         @requires(config="IConfig", logger="ILogger")
-        @api("rest", prefix="/stest")
         class SurfaceTestApp:
             @runnable("public", params=BaseModel, description="Public")
             async def public(self, rt, params):
