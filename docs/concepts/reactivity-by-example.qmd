@@ -3,11 +3,11 @@ title: "Reactivity by Example"
 subtitle: "Consumer, Provider, and Kernel — side by side, one cycle from first run to re-run."
 ---
 
-> **Reading order:** [Architecture](architecture.qmd) ->
-> [Reading the Kernel](kernel-reading-guide.qmd) -> **You are here** ->
-> [ContextVar and Tracking](contextvar-and-tracking.qmd) (deeper dive into the tracking mechanism).
+> **Reading order:** [Architecture](architecture.qmd) →
+> **You are here** →
+> [Reactive Engine Internals](reactive-internals.qmd) (how the data structures and tracking work).
 
-The reactive engine is small (~450 lines) but the value of reading any one
+The reactive engine is small (~600 lines) but the value of reading any one
 file in isolation is limited. The interesting question is: **when a consumer
 calls a provider, what does the kernel do underneath, and how does that
 produce automatic re-runs on change?**
@@ -16,11 +16,10 @@ This page walks one full cycle, with the three layers shown side by side and
 moments numbered so you can trace the same instant across all three columns.
 
 > Read this page first. It's the shortest path to the mental model.
-> When you want to dig deeper, follow the links at the end:
+> When you want to dig deeper:
 >
-> - **[Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd)** — why a single `_active_consumer` is enough
-> - **[Reactive Engine: Line by Line](reactive-line-by-line.qmd)** — every line of `reactive.py`
-> - **[Threading Model](threading-model.qmd)** — what changes (and doesn't) under threads
+> - **[Reactive Engine Internals](reactive-internals.qmd)** — the 5 data structures, tracking mechanism, worked scenarios
+> - **[Threading Model](threading-model.qmd)** — concurrency, async supersede, propagation algorithm
 
 
 ## The cast
@@ -227,7 +226,7 @@ right effect's dep set.
 
 > The provider doesn't know which consumer called it. It just calls
 > `sig.get()`. The kernel reads `_active_consumer` to find out. That's the
-> entire trick — see [Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd) for why one ContextVar is enough.
+> entire trick — see [Context, ContextVar, and the Active Consumer](reactive-internals.qmd) for why one ContextVar is enough.
 
 
 ## ③ Effect body returns — ContextVar resets, graph remains
@@ -400,7 +399,7 @@ exists.
 | **Where does the dependency live?** | `effect._deps` and `signal._subscribers` — symmetric sets on the two ends. |
 | **Why doesn't the consumer write callbacks?** | Reading the signal is the subscription. There's nothing to register. |
 | **Why doesn't the provider know its consumers?** | The provider calls `sig.get()` and `sig.set()`. The kernel handles routing through `_active_consumer`. The provider has zero coupling to the consumer. |
-| **Why one ContextVar for many effects?** | Effects don't overlap on a single flow. The slot is reused like a return-address register. See [contextvar-and-tracking](contextvar-and-tracking.qmd). |
+| **Why one ContextVar for many effects?** | Effects don't overlap on a single flow. The slot is reused like a return-address register. See [Reactive Engine Internals](reactive-internals.qmd). |
 | **What about threads?** | `ContextVar` is per-flow; subscriber sets are guarded by `RLock`. See [threading-model](threading-model.qmd). |
 
 
@@ -547,7 +546,7 @@ many writes have happened.
 
 ## See also
 
-- [Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd)
-- [Reactive Engine: Line by Line](reactive-line-by-line.qmd)
+- [Context, ContextVar, and the Active Consumer](reactive-internals.qmd)
+- [Reactive Engine Internals](reactive-internals.qmd)
 - [Threading Model](threading-model.qmd)
 - [Architecture](architecture.qmd) — where these pieces live in the codebase

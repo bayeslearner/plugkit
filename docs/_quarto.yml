@@ -17,9 +17,9 @@ website:
             href: guide/01-first-component.qmd
           - text: "2. Give and Take"
             href: guide/02-give-and-take.qmd
-          - text: "3. Dynamic Services"
+          - text: "3. Dynamic Services & Reactivity"
             href: guide/03-dynamic-services.qmd
-          - text: "4. Runnables & API"
+          - text: "4. Runnables & the Bus"
             href: guide/04-runnables-and-api.qmd
           - text: "5. Gateway & Transports"
             href: guide/05-gateway-and-transports.qmd
@@ -28,28 +28,27 @@ website:
           - text: "7. Building a Provider"
             href: guide/07-building-a-provider.qmd
           - text: "---"
-          - text: "Advanced Patterns"
+          - text: "Production Patterns"
             href: patterns/index.qmd
       - text: "Concepts"
         menu:
-          - text: "Architecture"
+          - text: "Architecture & Constitution"
             href: concepts/architecture.qmd
-          - text: "Reading the Kernel"
-            href: concepts/kernel-reading-guide.qmd
           - text: "Reactivity by Example"
             href: concepts/reactivity-by-example.qmd
-          - text: "Context, ContextVar, Active Consumer"
-            href: concepts/contextvar-and-tracking.qmd
-          - text: "Reactive Engine: Line by Line"
-            href: concepts/reactive-line-by-line.qmd
-          - text: "Threading Model"
+          - text: "Reactive Engine Internals"
+            href: concepts/reactive-internals.qmd
+          - text: "Threading & Async Model"
             href: concepts/threading-model.qmd
-          - text: "Supervision and Reliability"
+          - text: "Supervision & Reliability"
             href: concepts/supervision.qmd
           - text: "Bridging External Systems"
             href: concepts/bridging.qmd
           - text: "Deployment Scales"
             href: concepts/deployment.qmd
+          - text: "---"
+          - text: "Source Walkthrough (all 9 files)"
+            href: concepts/kernel-reading-guide.qmd
       - text: "Patterns"
         menu:
           - text: "Overview"
@@ -97,14 +96,13 @@ website:
     - title: "Concepts"
       contents:
         - concepts/architecture.qmd
-        - concepts/kernel-reading-guide.qmd
         - concepts/reactivity-by-example.qmd
-        - concepts/contextvar-and-tracking.qmd
-        - concepts/reactive-line-by-line.qmd
+        - concepts/reactive-internals.qmd
         - concepts/threading-model.qmd
         - concepts/supervision.qmd
         - concepts/bridging.qmd
         - concepts/deployment.qmd
+        - concepts/kernel-reading-guide.qmd
     - title: "Patterns"
       contents:
         - patterns/index.qmd

@@ -1,18 +1,16 @@
 ---
-title: "Reading the Kernel: A Complete Guide"
-subtitle: "Every file in src/signalpy/kernel/, explained from scratch."
+title: "Source Walkthrough"
+subtitle: "Every file in src/signalpy/kernel/, explained in dependency order. A reference for reading the source."
 ---
 
-> **Reading order:** [Architecture](architecture.qmd) (the "why") **->
-> You are here** (the "how") ->
-> [Reactivity by Example](reactivity-by-example.qmd) (one full cycle traced).
-
-This page walks you through the entire kernel source code. It assumes you
-know Python but nothing about this project. By the end you will understand
-every file, every data structure, and how they connect.
+> **When to read this:** You want to read the actual source code and need
+> a map. This is NOT a tutorial — it's a companion to have open alongside
+> the code. For the mental model without source-diving, see
+> [Architecture](architecture.qmd) or [Reactivity by Example](reactivity-by-example.qmd).
 
 The kernel is 9 files, ~3,100 lines. You can read the whole thing in one
-sitting. Here is the order that will make the most sense.
+sitting. Here is the order that will make the most sense — each file only
+depends on the ones before it.
 
 ## Reading order
 

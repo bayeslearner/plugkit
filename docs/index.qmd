@@ -9,7 +9,7 @@ Frontend frameworks like Vue and React changed how UIs work: you declare what de
 
 **SignalPy brings this model to backend services.**
 
-Your components declare dependencies. The kernel wraps every injected service in a reactive **Signal**. When you read `self.rt.config` inside an `@effect`, the kernel tracks that read. When the config service changes — new provider hot-added, config pushed, service ranking changed — your effect re-runs automatically.
+Your components declare dependencies. The kernel wraps every injected service in a reactive **Signal**. When you read `self.rt.config` inside an `@effect`, the kernel tracks that read. When config changes, your effect re-runs automatically.
 
 ```python
 from signalpy.kernel import component, requires, computed, effect, runnable
@@ -32,15 +32,72 @@ class Greeter:
         return {"message": f"{self.greeting()}, {params.name}!"}
 ```
 
-No `@bind`. No `@unbind`. No manual event wiring. The reactive graph handles propagation.
+## Where to Start
 
-## How Reactivity Works
+Pick based on what you need right now:
 
-Three primitives power the whole kernel: **Signal** (holds a value, tracks readers), **Computed** (cached derived value), **Effect** (re-runs when dependencies change). Every `self.rt.config` access is a Signal read. Inside `@effect`, that read is tracked. When config changes, your effect re-runs automatically.
+| Your goal | Start here |
+|---|---|
+| **"What APIs do I use? Where do I put my code?"** | [Layer Rules & Decision Guide](guide/00-layer-rules.qmd) — the most important page |
+| **"I want to build something with this"** | Tutorials 1–7, in order |
+| **"I want to understand how it works"** | [Reactivity by Example](concepts/reactivity-by-example.qmd) → [Reactive Internals](concepts/reactive-internals.qmd) |
+| **"I want to read the source code"** | [Source Walkthrough](concepts/kernel-reading-guide.qmd) — all 9 files, dependency order |
+| **"I need to look up a specific API"** | [Reference](#reference) section below |
 
-No `@bind`. No `@unbind`. No manual event wiring. The reactive graph handles propagation.
+## Tutorials
 
-For the full explanation with code, see [Reading the Kernel: reactive.py](concepts/kernel-reading-guide.qmd#reactive).
+Each builds on the last. Read in order.
+
+| # | Tutorial | What you'll learn |
+|---|----------|----------|
+| 0 | [Layer Rules & Decision Guide](guide/00-layer-rules.qmd) | Which APIs to use where. @requires vs bus.invoke. The communication triangle. |
+| 1 | [First Component](guide/01-first-component.qmd) | `@component`, `@lifecycle`, boot, shutdown |
+| 2 | [Give and Take](guide/02-give-and-take.qmd) | `@provides`, `@requires`, typed contracts, `self.rt` |
+| 3 | [Dynamic Services & Reactivity](guide/03-dynamic-services.qmd) | `list[C]` aggregate, `@effect`, `@computed`, `batch()`, hot-add/remove |
+| 4 | [Runnables & the Bus](guide/04-runnables-and-api.qmd) | `@runnable`, `@api`, bus invocation |
+| 5 | [Gateway & Transports](guide/05-gateway-and-transports.qmd) | How HTTP/MCP/CLI bindings are generated from @api |
+| 6 | [Auth & Policy](guide/06-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
+| 7 | [Building a Provider](guide/07-building-a-provider.qmd) | Write your own ICache, swap implementations |
+
+## Concepts
+
+Deep dives. Read any of these independently.
+
+| Page | What it explains |
+|------|-----------------|
+| [Architecture](concepts/architecture.qmd) | Constitution (12 rules), two-axis model, decoration → activation lifecycle |
+| [Reactivity by Example](concepts/reactivity-by-example.qmd) | One full reactive cycle: boot → first run → mutation → re-run (side-by-side) |
+| [Reactive Engine Internals](concepts/reactive-internals.qmd) | The 5 data structures, tracking mechanism, 3 worked scenarios |
+| [Threading & Async Model](concepts/threading-model.qmd) | Concurrency, async supersede, `is_stale()`, `cancel_on_supersede`, propagation algorithm |
+| [Supervision & Reliability](concepts/supervision.qmd) | Bus timeout, dead letter, Erlang-style supervision trees |
+| [Bridging External Systems](concepts/bridging.qmd) | Bridge pattern: lifecycle, 90% surface, escape hatch |
+| [Deployment Scales](concepts/deployment.qmd) | Monolith → containers → Dapr → agent system |
+| [Source Walkthrough](concepts/kernel-reading-guide.qmd) | All 9 kernel files explained in dependency order (reference companion) |
+
+## Production Patterns
+
+Each pattern is a standalone recipe using only standard kernel APIs.
+
+| Pattern | What it demonstrates |
+|---------|---------------------|
+| [Reactive Intent vs Default](patterns/reactive-intent.qmd) | 7 escape hatches for when default reactive semantics don't fit |
+| [Secret Rotation](patterns/secret-rotation.qmd) | Config → provider → @effect → vault auto-rotates |
+| [A/B Testing](patterns/ab-testing.qmd) | Deterministic hashing, map injection, runtime split adjustment |
+| [Multi-Tenant Isolation](patterns/multi-tenant.qmd) | kernel.instantiate(), target routing, structural scoping |
+| [Extension Bundle](patterns/extension-bundle.qmd) | hot_add/remove as a plugin system |
+| [Circuit Breaker](patterns/circuit-breaker.qmd) | Signal for breaker state, @effect for transitions |
+| [Audit Trail](patterns/audit-trail.qmd) | @subscribe wildcards for cross-cutting compliance |
+| [Unit Testing](patterns/unit-testing.qmd) | Three strategies: minimal kernel, reactive testing, event testing |
+| [Hot Code Update](patterns/hot-update.qmd) | Blue-green replacement with snapshot/restore |
+
+## Reference {#reference}
+
+| Page | What's in it |
+|------|-------------|
+| [Traits (L0–L3)](ref/traits.qmd) | 23 traits — what each is, how the kernel infers it |
+| [Decorators](ref/decorators.qmd) | All 12 decorators — signature, parameters, example |
+| [Contracts](ref/contracts.qmd) | 8 Protocol interfaces — methods, providers, `self.rt.*` access |
+| [Kernel API](ref/kernel-api.qmd) | `Kernel`, `ServiceRegistry`, `Bus`, `Runtime`, `Signal`/`Computed`/`Effect` |
 
 ## The 12 Decorators
 
@@ -53,71 +110,13 @@ For the full explanation with code, see [Reading the Kernel: reactive.py](concep
 @subscribe                                  # events
 ```
 
-## Learn
-
-Tutorials teach one concept at a time. Each builds on the last.
-
-| # | Tutorial | Concepts |
-|---|----------|----------|
-| 1 | [First Component](guide/01-first-component.qmd) | `@component`, `@lifecycle`, boot, shutdown |
-| 2 | [Give and Take](guide/02-give-and-take.qmd) | `@provides`, `@requires`, typed contracts, `self.rt` |
-| 3 | [Dynamic Services](guide/03-dynamic-services.qmd) | `list[C]` aggregate, `@effect`, `hot_add`/`hot_remove` |
-| 4 | [Runnables & API](guide/04-runnables-and-api.qmd) | `@runnable`, `@api`, bus invocation, transports |
-| 6 | [Auth & Policy](guide/06-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
-| 7 | [Building a Provider](guide/07-building-a-provider.qmd) | Write your own `ICache` or `IDatabase`, bridge pattern |
-| | [Advanced Patterns](patterns/index.qmd) | Secret rotation, A/B testing, multi-tenant, extension bundles, circuit breaker, audit trail |
-
-## Reference
-
-| Page | What's in it |
-|------|-------------|
-| [Traits (L0–L3)](ref/traits.qmd) | 23 traits across 4 levels — what each is, how you get it, example |
-| [Decorators](ref/decorators.qmd) | All 12 decorators — signature, parameters, example |
-| [Contracts](ref/contracts.qmd) | 8 Protocol interfaces — methods, providers, usage |
-| [Kernel API](ref/kernel-api.qmd) | `Kernel`, `ServiceRegistry`, `Bus`, `Runtime`, `Signal`/`Computed`/`Effect` |
-
-## Concepts
-
-Read in this order — each builds on the last:
-
-| Page | What it explains |
-|------|-----------------|
-| [Architecture](concepts/architecture.qmd) | Constitution, two-axis model, what's in the kernel |
-| [**Reading the Kernel**](concepts/kernel-reading-guide.qmd) | **Every file explained from scratch. Start here for a thorough read-through.** |
-| [**Reactivity by Example**](concepts/reactivity-by-example.qmd) | **Consumer / Provider / Kernel side-by-side, one full cycle from boot to re-run** |
-| [Context, ContextVar, Active Consumer](concepts/contextvar-and-tracking.qmd) | Why a single `_active_consumer` ContextVar is enough for many effects |
-| [Reactive Engine: Line by Line](concepts/reactive-line-by-line.qmd) | Every line of `reactive.py` annotated |
-| [Threading Model](concepts/threading-model.qmd) | Threads, asyncio, RLock, ContextVar isolation, vs stdlib |
-| [Supervision and Reliability](concepts/supervision.qmd) | Bus timeout, fire-and-forget, dead letter, Erlang-style supervision |
-| [Bridging External Systems](concepts/bridging.qmd) | Bridge pattern, three access levels, 7 rules |
-| [Deployment Scales](concepts/deployment.qmd) | Monolith → containers → Dapr → agent system |
-
-## Examples
-
-| Example | Domain | Run |
-|---------|--------|-----|
-| `01_hello.py` | — | `PYTHONPATH=src python src/signalpy/examples/01_hello.py` |
-| `02_give_and_take.py` | IoT/sensors | `PYTHONPATH=src python src/signalpy/examples/02_give_and_take.py` |
-| `03_reactive_config.py` | Data pipeline | `PYTHONPATH=src python src/signalpy/examples/03_reactive_config.py` |
-| `04_dynamic_plugins.py` | Alerting | `PYTHONPATH=src python src/signalpy/examples/04_dynamic_plugins.py` |
-| `05_auth_protected_api.py` | CMS | `PYTHONPATH=src python src/signalpy/examples/05_auth_protected_api.py` |
-| `06_multi_provider_ranking.py` | Database | `PYTHONPATH=src python src/signalpy/examples/06_multi_provider_ranking.py` |
-| `07_fastapi_full.py` | Web app | `PYTHONPATH=src python src/signalpy/examples/07_fastapi_full.py` |
-| `secret_rotation.py` | Credential mgmt | `PYTHONPATH=src python -m signalpy.examples.secret_rotation` |
-| `ab_testing.py` | Experimentation | `PYTHONPATH=src python -m signalpy.examples.ab_testing` |
-| `multi_tenant.py` | SaaS / multi-tenant | `PYTHONPATH=src python -m signalpy.examples.multi_tenant` |
-| `extension_bundle.py` | Plugin system | `PYTHONPATH=src python -m signalpy.examples.extension_bundle` |
-| `circuit_breaker.py` | Resilience | `PYTHONPATH=src python -m signalpy.examples.circuit_breaker` |
-| `audit_trail.py` | Compliance | `PYTHONPATH=src python -m signalpy.examples.audit_trail` |
-
 ## At a Glance
 
 | | |
 |---|---|
 | Kernel core | ~3,100 lines, 9 files, zero required dependencies |
-| Decorators | 12: `@component`, `@provides`, `@requires`, `@computed`, `@effect`, `@runnable`, `@api`, `@lifecycle.*`, `@prop`, `@kind`, `@skill`, `@subscribe` |
-| Reactivity | Signal, Computed, Effect — Vue 3-style, zero dependencies |
-| Reliability | Bus timeout, fire-and-forget invoke, dead letter channel, Erlang-style supervision trees |
+| Reactivity | Signal, Computed, Effect — Vue 3-style auto-tracking |
+| Reliability | Bus timeout, fire-and-forget, dead letter, supervision trees |
 | Providers | 9: config, logging, credentials, storage, auth, tracing, workspace, gateway, configadmin |
 | Adapters | 3: REST (FastAPI), MCP, CLI (Click) |
 | Tests | 335 |

@@ -3,8 +3,8 @@ title: "Threading Model"
 subtitle: "Does this work with threads? How do two threads share a Signal? Are we reinventing the wheel?"
 ---
 
-> **Reading order:** [Reactive Engine: Line by Line](reactive-line-by-line.qmd) ->
-> **You are here** ->
+> **Reading order:** [Reactive Engine Internals](reactive-internals.qmd) →
+> **You are here** →
 > [Supervision and Reliability](supervision.qmd).
 
 When people first read the reactive engine they tend to ask three questions
@@ -709,7 +709,7 @@ Read all signals you depend on **before** the first `await`. After the
 `await`, the microtask resumes in a different context and
 `_active_consumer` may be reset. This is the same restriction Vue 3 and
 SolidJS document for their async-effect equivalents — see the
-[reactive engine line by line](reactive-line-by-line.qmd) doc for the
+[Reactive Engine Internals](reactive-internals.qmd) doc for the
 detailed mechanics.
 
 This is purely a *tracking* limitation, not a *correctness* one — if
@@ -722,8 +722,7 @@ dependency in the first place.
 ## See also
 
 - [Reactivity by Example](reactivity-by-example.qmd) — start here for the cycle
-- [Context, ContextVar, and the Active Consumer](contextvar-and-tracking.qmd) — why one slot is enough
-- [Reactive Engine: Line by Line](reactive-line-by-line.qmd) — every lock acquisition annotated
+- [Reactive Engine Internals](reactive-internals.qmd) — data structures, tracking mechanism, worked scenarios
 - [`tests/test_thread_safety.py`](https://github.com/bayeslearner/signalpy-kernel) — the five concurrency tests that pin this behavior
 - [PEP 567](https://peps.python.org/pep-0567/) — `ContextVar` design rationale
 - [Python `contextvars` docs](https://docs.python.org/3/library/contextvars.html)
