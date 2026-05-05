@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "signalpy-kernel"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Signal-based reactive component microkernel for Python backend services"
 readme = "README.md"
 requires-python = ">=3.10"
