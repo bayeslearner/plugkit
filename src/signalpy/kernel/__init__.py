@@ -814,17 +814,37 @@ class Kernel:
                 ),
             })
 
+        # Weak edges: potential invoke/publish targets (static analysis)
+        invocation_edges = []  # component → target it may invoke
+        publication_edges = []  # component → event it may publish
+        for ci in self.lifecycle.all_instances():
+            for target in ci.meta.invoke_targets:
+                invocation_edges.append({
+                    "from": ci.name,
+                    "to": target,
+                    "type": "weak",
+                })
+            for event in ci.meta.publish_events:
+                publication_edges.append({
+                    "from": ci.name,
+                    "event": event,
+                    "type": "weak",
+                })
+
         return {
             "components": components,
             "edges": {
                 "dependencies": dependency_edges,
                 "services": service_edges,
+                "invocations": invocation_edges,
+                "publications": publication_edges,
             },
             "bus": {
                 "handlers": bus_handlers,
                 "handler_count": len(bus_handlers),
             },
             "events": event_edges,
+            "call_stats": self.bus.call_graph,
         }
 
 

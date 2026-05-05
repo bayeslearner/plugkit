@@ -54,6 +54,19 @@ class HandlerSchema:
 
 
 @dataclass
+class _CallStats:
+    """Runtime statistics for a single bus target."""
+    count: int = 0
+    total_ms: float = 0.0
+    errors: int = 0
+    last_called: float = 0.0  # timestamp
+
+    @property
+    def avg_ms(self) -> float:
+        return self.total_ms / self.count if self.count else 0.0
+
+
+@dataclass
 class BusTransport:
     """Pluggable transport for cross-process bus calls.
 
@@ -103,6 +116,9 @@ class Bus:
         # Name resolution config (hallucination hardening)
         self.junk_suffixes: set[str] = set(self.DEFAULT_JUNK_SUFFIXES)
         self.fuzzy_max_distance: int = 2
+        # Runtime call graph: target → stats
+        self._call_stats: dict[str, _CallStats] = {}
+        self.record_call_graph: bool = True  # disable for zero-overhead prod
 
     # ── Registration (called by kernel during activation) ───────────
 
@@ -232,12 +248,23 @@ class Bus:
         handler = self._resolve_handler(target, p)
 
         if handler is not None:
+            t0 = time.time() if self.record_call_graph else 0
             try:
                 if timeout is not None:
-                    return await asyncio.wait_for(handler(p), timeout=timeout)
-                return await handler(p)
+                    result = await asyncio.wait_for(handler(p), timeout=timeout)
+                else:
+                    result = await handler(p)
+                if self.record_call_graph:
+                    self._record_call(target, time.time() - t0, error=False)
+                return result
             except asyncio.TimeoutError:
+                if self.record_call_graph:
+                    self._record_call(target, time.time() - t0, error=True)
                 self._dead_letter(target, p, reason="timeout")
+                raise
+            except Exception:
+                if self.record_call_graph:
+                    self._record_call(target, time.time() - t0, error=True)
                 raise
 
         # Try cross-process transports
@@ -313,6 +340,41 @@ class Bus:
                 return handler
 
         return None
+
+    # ── Runtime call graph ─────────────────────────────────────────────
+
+    def _record_call(self, target: str, elapsed: float, error: bool) -> None:
+        """Record a completed invocation for the runtime call graph."""
+        stats = self._call_stats.get(target)
+        if stats is None:
+            stats = _CallStats()
+            self._call_stats[target] = stats
+        stats.count += 1
+        stats.total_ms += elapsed * 1000
+        stats.last_called = time.time()
+        if error:
+            stats.errors += 1
+
+    @property
+    def call_graph(self) -> dict[str, dict[str, Any]]:
+        """Return the runtime call graph — actual invocations with stats.
+
+        Returns dict of target → {count, total_ms, avg_ms, errors, last_called}.
+        """
+        return {
+            target: {
+                "count": s.count,
+                "total_ms": round(s.total_ms, 2),
+                "avg_ms": round(s.avg_ms, 2),
+                "errors": s.errors,
+                "last_called": s.last_called,
+            }
+            for target, s in self._call_stats.items()
+        }
+
+    def reset_call_graph(self) -> None:
+        """Reset all runtime call statistics."""
+        self._call_stats.clear()
 
     # ── Dead letter channel ────────────────────────────────────────────
 

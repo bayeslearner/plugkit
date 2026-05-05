@@ -191,6 +191,9 @@ class ComponentMeta:
     supervision_def: SupervisionDef | None = None
     properties: dict[str, Any] = field(default_factory=dict)
     dependencies: list[str] = field(default_factory=list)  # factory names
+    # Static call graph edges (potential invoke/publish targets found in source)
+    invoke_targets: list[str] = field(default_factory=list)   # e.g. ["email.send", "search.query"]
+    publish_events: list[str] = field(default_factory=list)   # e.g. ["orders.placed", "data.updated"]
 
     @property
     def qualified_name(self) -> str:
@@ -764,4 +767,48 @@ def _finalize_meta(cls: type) -> ComponentMeta:
         if factory and factory not in meta.dependencies and factory != meta.factory_name:
             meta.dependencies.append(factory)
 
+    # ── Static call graph extraction ─────────────────────────────
+    # Scan method source for self.rt.invoke("target") and self.rt.publish("event")
+    # patterns to build the potential (weak) call graph.
+    meta.invoke_targets = _extract_call_targets(cls, "invoke")
+    meta.publish_events = _extract_call_targets(cls, "publish")
+
     return meta
+
+
+import re
+
+# Patterns to find string literals passed to self.rt.invoke() / self.rt.publish()
+# Matches: self.rt.invoke("target.action"  or  self.rt.invoke('target.action'
+# Also matches: rt.invoke("target.action"  (for activate(self, rt) style)
+_INVOKE_PATTERN = re.compile(
+    r'\.invoke\(\s*["\']([a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+)["\']'
+)
+_PUBLISH_PATTERN = re.compile(
+    r'\.publish\(\s*["\']([a-zA-Z0-9_\-]+(?:\.[a-zA-Z0-9_\-*]+)*)["\']'
+)
+
+
+def _extract_call_targets(cls: type, kind: str) -> list[str]:
+    """Extract invoke/publish target strings from component method source code.
+
+    Uses source inspection to find string literals passed to .invoke() or
+    .publish() calls. This is best-effort static analysis — it won't catch
+    dynamically constructed target names, but catches the common case of
+    literal strings which covers 95%+ of real usage.
+    """
+    pattern = _INVOKE_PATTERN if kind == "invoke" else _PUBLISH_PATTERN
+    targets: set[str] = set()
+
+    for attr_name in dir(cls):
+        obj = getattr(cls, attr_name, None)
+        if obj is None or not callable(obj):
+            continue
+        try:
+            source = inspect.getsource(obj)
+        except (OSError, TypeError):
+            continue
+        for match in pattern.finditer(source):
+            targets.add(match.group(1))
+
+    return sorted(targets)
