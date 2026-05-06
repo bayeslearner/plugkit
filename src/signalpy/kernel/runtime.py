@@ -104,11 +104,7 @@ class Runtime:
         """Subscribe to bus events."""
         self._bus.subscribe(event_type, handler)
 
-    # ── BUS INTROSPECTION ────────────────────────────────────────
-
-    @property
-    def bus_handlers(self) -> list[str]:
-        return self._bus.handlers
+    # ── BUS ACCESS ───────────────────────────────────────────────
 
     @property
     def bus(self) -> Bus:

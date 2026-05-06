@@ -13,7 +13,7 @@ Two modes:
     kernel = Kernel(); kernel.discover([...]); await kernel.boot()
     mount_mcp(server, kernel)
 
-Spec 011: Tools call schema.handler directly — no bus.invoke.
+Tools call schema.handler directly via kernel.runnables().
 """
 from __future__ import annotations
 

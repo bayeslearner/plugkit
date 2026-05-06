@@ -131,7 +131,7 @@ async def main():
 
     print("  === Core app running (no extensions) ===")
     await kernel.invoke("core-app.do_work", {})
-    assert not kernel.bus.has_handler("slack-notifier.notify")
+    assert kernel.get_schema("slack-notifier.notify") is None
     print("    No Slack handler registered yet.")
 
     # Install the Slack extension bundle
@@ -139,7 +139,8 @@ async def main():
     print("  === Installing Slack bundle (3 components) ===")
     for cls in SLACK_BUNDLE:
         await kernel.hot_add(cls)
-    print(f"    Handlers now: {[h for h in kernel.bus.handlers if 'slack' in h]}")
+    slack_schemas = [s.name for s in kernel.runnables() if "slack" in s.provider]
+    print(f"    Runnables now: {slack_schemas}")
 
     # Core work now triggers Slack notification automatically
     print()
@@ -164,7 +165,7 @@ async def main():
     print("  === Removing Slack bundle ===")
     for name in ["slack-commands", "slack-webhook", "slack-notifier"]:
         await kernel.hot_remove(name)
-    assert not kernel.bus.has_handler("slack-notifier.notify")
+    assert kernel.get_schema("slack-notifier.notify") is None
     print("    Slack handlers removed.")
 
     await kernel.shutdown()

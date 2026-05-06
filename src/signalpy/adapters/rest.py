@@ -12,7 +12,7 @@ Two modes:
     kernel = Kernel(); kernel.discover([...]); await kernel.boot()
     mount_rest(app, kernel)
 
-Spec 011: Routes call schema.handler directly — no bus.invoke.
+Routes call schema.handler directly via kernel.runnables_by_component().
 """
 import logging
 from typing import Any

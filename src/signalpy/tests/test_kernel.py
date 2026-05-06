@@ -163,32 +163,10 @@ class TestServiceRegistry:
         assert len(foo_entries) == 1
 
 
-# ── Bus ────────────────────────────────────────────────────────────
+# ── Event Bus ──────────────────────────────────────────────────────
 
 
-class TestBus:
-    @pytest.mark.asyncio
-    async def test_invoke(self):
-        bus = Bus()
-        async def handler(params):
-            return {"got": params}
-        bus.register_handler("test.echo", handler)
-        result = await bus.invoke("test.echo", {"msg": "hi"})
-        assert result == {"got": {"msg": "hi"}}
-
-    @pytest.mark.asyncio
-    async def test_invoke_missing_raises(self):
-        bus = Bus()
-        with pytest.raises(KeyError, match="No handler"):
-            await bus.invoke("nonexistent")
-
-    def test_duplicate_handler_raises(self):
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("x", h)
-        with pytest.raises(ValueError, match="already registered"):
-            bus.register_handler("x", h)
-
+class TestEventBus:
     @pytest.mark.asyncio
     async def test_publish_subscribe(self):
         bus = Bus()
@@ -197,155 +175,18 @@ class TestBus:
         await bus.publish("test.event", {"value": 42})
         assert received == [{"value": 42}]
 
-    def test_has_handler(self):
+    def test_event_types(self):
         bus = Bus()
-        async def h(p): pass
-        bus.register_handler("x", h)
-        assert bus.has_handler("x")
-        assert not bus.has_handler("y")
+        bus.subscribe("a", lambda et, d: None)
+        bus.subscribe("b", lambda et, d: None)
+        assert set(bus.event_types) == {"a", "b"}
 
-    def test_unregister_handler(self):
+    def test_unsubscribe(self):
         bus = Bus()
-        async def h(p): pass
-        bus.register_handler("x", h)
-        bus.unregister_handler("x")
-        assert not bus.has_handler("x")
-
-
-class TestBusNameResolution:
-    """Hallucination hardening — resolve wrong tool names."""
-
-    @pytest.mark.asyncio
-    async def test_strip_junk_suffix(self):
-        bus = Bus()
-        async def h(p): return "ok"
-        bus.register_handler("splunk.query", h)
-        # LLM adds _tool suffix
-        result = await bus.invoke("splunk.query_tool")
-        assert result == "ok"
-
-    @pytest.mark.asyncio
-    async def test_flip_hyphen_to_underscore(self):
-        bus = Bus()
-        async def h(p): return "ok"
-        bus.register_handler("mcp_gitlab.list_issues", h)
-        # LLM uses hyphens
-        result = await bus.invoke("mcp-gitlab.list-issues")
-        assert result == "ok"
-
-    @pytest.mark.asyncio
-    async def test_fuzzy_levenshtein(self):
-        bus = Bus()
-        async def h(p): return "ok"
-        bus.register_handler("splunk.query", h)
-        # LLM typo: "qurey" (distance 2)
-        result = await bus.invoke("splunk.qurey")
-        assert result == "ok"
-
-    @pytest.mark.asyncio
-    async def test_fuzzy_ambiguous_no_match(self):
-        bus = Bus()
-        async def h1(p): return "h1"
-        async def h2(p): return "h2"
-        bus.register_handler("ab", h1)
-        bus.register_handler("ac", h2)
-        # "aa" is distance 1 from both — ambiguous, should NOT resolve
-        with pytest.raises(KeyError, match="No handler"):
-            await bus.invoke("aa")
-
-    def test_resolve_returns_none_for_no_match(self):
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("splunk.query", h)
-        assert bus.resolve_handler_name("completely_different_name_xyz") is None
-
-    def test_custom_junk_suffix(self):
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("splunk.query", h)
-        bus.junk_suffixes.add("_v2")
-        assert bus.resolve_handler_name("splunk.query_v2") == "splunk.query"
-
-
-class TestBusSchema:
-    """Phase 0a: schema-carrying bus."""
-
-    def test_register_with_schema(self):
-        from signalpy.kernel.bus import HandlerSchema
-        bus = Bus()
-        async def h(p): pass
-        schema = HandlerSchema(name="greet", description="Say hello", provider="greeter")
-        bus.register_handler("greeter.greet", h, schema=schema)
-        schemas = bus.schemas()
-        assert len(schemas) == 1
-        assert schemas[0].name == "greet"
-        assert schemas[0].description == "Say hello"
-        assert schemas[0].provider == "greeter"
-
-    def test_schemas_excludes_internal(self):
-        from signalpy.kernel.bus import HandlerSchema
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("public.op", h, schema=HandlerSchema(name="op", description="Public"))
-        bus.register_handler("internal.op", h, schema=HandlerSchema(name="op", internal=True))
-        assert len(bus.schemas()) == 1
-        assert len(bus.schemas(include_internal=True)) == 2
-
-    def test_unregister_removes_schema(self):
-        from signalpy.kernel.bus import HandlerSchema
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("x.y", h, schema=HandlerSchema(name="y"))
-        bus.unregister_handler("x.y")
-        assert bus.schemas() == []
-
-    def test_get_schema(self):
-        from signalpy.kernel.bus import HandlerSchema
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("x.y", h, schema=HandlerSchema(name="y", description="test"))
-        assert bus.get_schema("x.y").description == "test"
-        assert bus.get_schema("nonexistent") is None
-
-
-class TestBusObservable:
-    """Phase 0b: observable bus via Signal."""
-
-    def test_handler_signal_updates_on_register(self):
-        bus = Bus()
-        async def h(p): pass
-        assert bus.handler_signal.get() == frozenset()
-        bus.register_handler("a.b", h)
-        assert "a.b" in bus.handler_signal.get()
-
-    def test_handler_signal_updates_on_unregister(self):
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("a.b", h)
-        bus.unregister_handler("a.b")
-        assert bus.handler_signal.get() == frozenset()
-
-    def test_effect_fires_on_handler_change(self):
-        from signalpy.kernel.reactive import Effect
-        bus = Bus()
-        log = []
-
-        def track():
-            names = bus.handler_signal.get()
-            log.append(frozenset(names))
-
-        Effect(track)
-        assert log == [frozenset()]  # initial run
-
-        async def h(p): pass
-        bus.register_handler("x.y", h)
-        assert log[-1] == frozenset({"x.y"})
-
-        bus.register_handler("a.b", h)
-        assert log[-1] == frozenset({"x.y", "a.b"})
-
-        bus.unregister_handler("x.y")
-        assert log[-1] == frozenset({"a.b"})
+        handler = lambda et, d: None
+        bus.subscribe("ev", handler)
+        assert "ev" in bus.event_types
+        bus.unsubscribe("ev", handler)
 
 
 class TestKernelGraph:

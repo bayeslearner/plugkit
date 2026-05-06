@@ -3,7 +3,7 @@
 ## What this is
 
 A Signal-based reactive component kernel for backend services. 11 decorators,
-~3,100 lines across 9 files. Source-embeddable package. Two-axis architecture:
+~3,800 lines across 9 files. Source-embeddable package. Two-axis architecture:
 
 - **Axis 1** (`src/signalpy/kernel/`) -- the irreplaceable mechanism: reactivity
   engine, lifecycle, registry with ref counting, bus, runtime, component model,
@@ -41,13 +41,11 @@ graph handles propagation automatically.
 @subscribe                                  # events
 ```
 
-Down from 21 in v1. Removed: `@requires_aggregate`, `@requires_map`,
-`@requires_best`, `@bind`, `@unbind`, `@on_change`, `@platform_app`,
-`@exportable`, `@api`. Unified `@requires` handles all injection modes.
-`@computed` and `@effect` replace manual dependency callbacks.
+Unified `@requires` handles all injection modes (single, aggregate, map,
+optional). `@computed` and `@effect` provide reactive dependency tracking.
 `@runnable` is schema-only (name, params, description); transport
 visibility is per-runnable via `transports=[]`. Transport config
-(REST prefix, MCP name) moves to `@component`.
+(REST prefix, MCP name) is on `@component`.
 
 ## How to write a component
 
@@ -116,11 +114,6 @@ Both types and strings work everywhere. Types are recommended for new code.
 - `def activate(self, rt):` -- just `def activate(self):`, use `self.rt.*`
 - `params.get("name") if isinstance(params, dict)` -- just `params.name`
 - `rt.config` in method args -- just `self.rt.config`
-- `@bind("config")` / `@unbind("config")` -- use `@effect` instead
-- `@on_change("config")` -- use `@effect`, it auto-tracks
-- `@platform_app(...)` -- be explicit with `@component`
-- `@api("rest", ...)` -- transport config moves to `@component`
-- `bus.invoke("target", params)` -- use `@requires` + direct method calls
 
 ## Key patterns
 
@@ -354,7 +347,7 @@ await kernel.shutdown()
 
 ```
 src/signalpy/
-  kernel/                  Axis 1 -- reactive kernel v2 (~2,600 lines, 9 files)
+  kernel/                  Axis 1 -- reactive kernel v2 (~3,800 lines, 9 files)
     reactive.py              Signal, Computed, Effect, batch
     component.py             11 decorators + metadata + SupervisionDef
     runtime.py               ReactiveRuntime with signal-backed injection
@@ -366,7 +359,7 @@ src/signalpy/
     __init__.py              Kernel orchestrator
   providers/               Axis 2 -- platform components
   adapters/                Axis 2 -- transport adapters (REST, MCP, CLI)
-  tests/                   Test suite (363 tests)
+  tests/                   Test suite (341 tests)
   examples/                Progressive examples (01-07)
 ```
 
@@ -374,7 +367,7 @@ src/signalpy/
 
 ```bash
 PYTHONPATH=src python -m signalpy.examples.03_reactive_config  # Signal-backed config
-PYTHONPATH=src python -m pytest src/signalpy/tests/             # 253 tests
+PYTHONPATH=src python -m pytest src/signalpy/tests/             # 341 tests
 ```
 
 ## Dependencies

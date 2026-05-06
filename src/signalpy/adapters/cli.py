@@ -1,6 +1,6 @@
 """CLI Transport — renders kernel runnables as Click commands.
 
-Spec 011: Commands call schema.handler directly — no bus.invoke.
+Commands call schema.handler directly via kernel.runnables_by_component().
 """
 from __future__ import annotations
 

@@ -73,32 +73,10 @@ class TestContracts:
 
 class TestBusCoverage:
     @pytest.mark.asyncio
-    async def test_bus_transport_invoke_not_implemented(self):
-        t = BusTransport(name="test")
-        with pytest.raises(NotImplementedError):
-            await t.invoke("x", {})
-
-    @pytest.mark.asyncio
     async def test_bus_transport_publish_not_implemented(self):
         t = BusTransport(name="test")
         with pytest.raises(NotImplementedError):
             await t.publish("x", {})
-
-    @pytest.mark.asyncio
-    async def test_remote_transport_fallback(self):
-        """When no local handler, bus tries remote transports."""
-        bus = Bus()
-        results = []
-
-        class MockTransport(BusTransport):
-            async def invoke(self, target, params):
-                results.append(target)
-                return {"remote": True}
-
-        bus.add_transport(MockTransport(name="mock"))
-        result = await bus.invoke("remote.target", {"a": 1})
-        assert result == {"remote": True}
-        assert results == ["remote.target"]
 
     @pytest.mark.asyncio
     async def test_remote_transport_publish(self):
@@ -114,24 +92,6 @@ class TestBusCoverage:
         await bus.publish("test.event", {"v": 1})
         assert published == [("test.event", {"v": 1})]
 
-    @pytest.mark.asyncio
-    async def test_remote_transport_not_implemented_skipped(self):
-        """If a transport raises NotImplementedError, bus tries next."""
-        bus = Bus()
-
-        class FailTransport(BusTransport):
-            async def invoke(self, target, params):
-                raise NotImplementedError
-
-        class SuccessTransport(BusTransport):
-            async def invoke(self, target, params):
-                return {"ok": True}
-
-        bus.add_transport(FailTransport(name="fail"))
-        bus.add_transport(SuccessTransport(name="success"))
-        result = await bus.invoke("x", {})
-        assert result == {"ok": True}
-
     def test_unsubscribe(self):
         bus = Bus()
         handler = lambda et, d: None
@@ -144,28 +104,6 @@ class TestBusCoverage:
         bus.subscribe("a", lambda et, d: None)
         bus.subscribe("b", lambda et, d: None)
         assert set(bus.event_types) == {"a", "b"}
-
-    @pytest.mark.asyncio
-    async def test_target_routing_via_bus(self):
-        """L3 target routing: factory.runnable + target param → instance.runnable."""
-        bus = Bus()
-
-        async def prod_handler(p):
-            return {"env": "prod"}
-
-        async def dev_handler(p):
-            return {"env": "dev"}
-
-        bus.register_handler("splunk-prod.query", prod_handler)
-        bus.register_handler("splunk-dev.query", dev_handler)
-        bus.register_target_route("splunk.query", "prod", "splunk-prod.query")
-        bus.register_target_route("splunk.query", "dev", "splunk-dev.query")
-
-        result = await bus.invoke("splunk.query", {"target": "prod"})
-        assert result == {"env": "prod"}
-
-        result = await bus.invoke("splunk.query", {"target": "dev"})
-        assert result == {"env": "dev"}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -224,16 +162,6 @@ class TestRuntimeCoverage:
             properties={}, _bus=bus,
         )
         assert rt.bus is bus
-
-    def test_bus_handlers_property(self):
-        bus = Bus()
-        async def h(p): pass
-        bus.register_handler("x.y", h)
-        rt = Runtime(
-            component_name="test", factory_name="test",
-            properties={}, _bus=bus,
-        )
-        assert "x.y" in rt.bus_handlers
 
     def test_services_property(self):
         bus = Bus()
@@ -609,7 +537,7 @@ class TestKernelInitCoverage:
         status = kernel.status()
         assert "components" in status
         assert "services" in status
-        assert "bus_handlers" in status
+        assert "runnables" in status
         assert "kinds" in status
         assert "skills" in status
         comp = status["components"][0]

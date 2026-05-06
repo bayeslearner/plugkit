@@ -304,7 +304,7 @@ class Kernel:
 
     # ── Bus handler factory ─────────────────────────────────────
 
-    def _make_bus_handler(self, runnable_def, instance, ci):
+    def _make_handler(self, runnable_def, instance, ci):
         sig = inspect.signature(runnable_def.fn)
         wants_rt = len(sig.parameters) - 1 >= 2
         needs_auth = bool(runnable_def.requires_action or runnable_def.requires_role)
@@ -411,7 +411,7 @@ class Kernel:
         """
         for rd in ci.meta.runnables:
             handler_name = f"{ci.name}.{rd.name}"
-            raw_handler = self._make_bus_handler(rd, ci.instance, ci)
+            raw_handler = self._make_handler(rd, ci.instance, ci)
             handler = self._wrap_handler(handler_name, raw_handler)
             schema = HandlerSchema.from_runnable_def(
                 rd, provider_name=ci.name, handler=handler,
@@ -591,7 +591,7 @@ class Kernel:
         gw = self.registry.require_optional("IGateway")
         if gw and hasattr(gw, "set_kernel"):
             gw.set_kernel(self)
-            log.info("Gateway rebuilt with %d bus handlers", len(self.bus.handlers))
+            log.info("Gateway rebuilt with %d runnables", len(self._runnable_schemas))
             for tname in transport_names:
                 ci = self.lifecycle.get_instance(tname)
                 if ci and ci.instance and ci.meta.activate_fn:
@@ -605,9 +605,9 @@ class Kernel:
                         log.error("Transport re-activation failed: %s: %s", tname, exc)
 
         self._state = KernelState.HEALTHY
-        log.info("Kernel booted: %d components, %d services, %d bus handlers",
+        log.info("Kernel booted: %d components, %d services, %d runnables",
                  len(self.lifecycle.active_instances()),
-                 len(self.registry), len(self.bus.handlers))
+                 len(self.registry), len(self._runnable_schemas))
 
     # ── Drain ───────────────────────────────────────────────────
 
@@ -925,7 +925,7 @@ class Kernel:
                 for ci in self.lifecycle.all_instances()
             ],
             "services": len(self.registry),
-            "bus_handlers": self.bus.handlers,
+            "runnables": list(self._runnable_schemas.keys()),
             "kinds": list(self.kinds.keys()),
             "skills": list(self.skills.keys()),
         }

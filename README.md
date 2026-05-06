@@ -103,7 +103,7 @@ Components never know which transport serves them.
   `@effect`, `@lifecycle.*`, `@runnable`, `@subscribe`, `@kind`, `@skill`,
   `@prop`. That's the whole API surface.
 
-- **Two-axis architecture.** Axis 1 (the kernel) is irreplaceable mechanism: ~2,600
+- **Two-axis architecture.** Axis 1 (the kernel) is irreplaceable mechanism: ~3,800
   LOC across 9 files, zero required dependencies. Axis 2 is replaceable vocabulary:
   config, logging, credentials, storage, REST/MCP/CLI transports — all just
   components. The kernel is small enough to read in one sitting.
@@ -126,7 +126,7 @@ The full guided tour is at **<https://bayeslearner.github.io/signalpy-kernel/>**
 
 ```
 src/signalpy/
-├── kernel/                  Axis 1 — the irreplaceable core (~2,600 LOC, 9 files)
+├── kernel/                  Axis 1 — the irreplaceable core (~3,800 LOC, 9 files)
 │   ├── reactive.py            Signal, Computed, Effect, batch
 │   ├── component.py           11 decorators + metadata
 │   ├── runtime.py             ReactiveRuntime: Signal-backed injection
@@ -140,7 +140,7 @@ src/signalpy/
 │                            credentials, storage, auth, tracing, gateway, …)
 ├── adapters/                Axis 2 — transport adapters (REST/FastAPI, MCP, CLI/Click)
 ├── examples/                Progressive examples 01–07
-└── tests/                   363 tests
+└── tests/                   341 tests
 ```
 
 ## Constitution (the non-negotiable rules)
