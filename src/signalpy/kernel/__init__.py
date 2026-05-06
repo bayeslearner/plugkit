@@ -794,7 +794,42 @@ class Kernel:
         self._state = KernelState.STOPPED
         log.info("Kernel shut down")
 
-    # ── Runnable discovery (spec 011) ─────────────────────────────
+    # ── Boot order ──────────────────────────────────────────────
+
+    def boot_order(self) -> list[dict[str, Any]]:
+        """Return the topological activation order with dependency details.
+
+        Each entry shows the component name, its state, what it requires,
+        and what blocked it (if anything). Useful for debugging "why didn't
+        my component activate" problems.
+        """
+        entries = []
+        for name in self.lifecycle._activation_order:
+            ci = self.lifecycle.get_instance(name)
+            if ci is None:
+                continue
+            requires_map = dict(ci.meta.requires)
+            # Check which deps are satisfied
+            unsatisfied = []
+            for attr, contract in requires_map.items():
+                req_def = next(
+                    (r for r in ci.meta.requirements if r.attr_name == attr), None
+                )
+                if req_def and req_def.optional:
+                    continue
+                if not self.registry.has(contract):
+                    unsatisfied.append(contract)
+            entries.append({
+                "name": name,
+                "factory": ci.meta.factory_name,
+                "state": ci.state.name,
+                "requires": requires_map,
+                "provides": list(ci.meta.provides),
+                "unsatisfied": unsatisfied,
+            })
+        return entries
+
+    # ── Runnable discovery ─────────────────────────────────────
 
     def get_schema(self, target: str) -> HandlerSchema | None:
         """Look up a runnable schema by qualified name (e.g. 'my-app.search')."""
