@@ -441,7 +441,7 @@ class TestKernelBoot:
         kernel = Kernel()
         kernel.discover([Math])
         await kernel.boot()
-        r = await kernel.bus.invoke("math-test.add", {"x": 5})
+        r = await kernel.invoke("math-test.add", {"x": 5})
         assert r == {"result": 6}
         await kernel.shutdown()
 
@@ -456,7 +456,7 @@ class TestKernelBoot:
         kernel = Kernel()
         kernel.discover([SyncTest])
         await kernel.boot()
-        r = await kernel.bus.invoke("sync-test.hello", {})
+        r = await kernel.invoke("sync-test.hello", {})
         assert r == {"sync": True}
         await kernel.shutdown()
 
@@ -623,7 +623,7 @@ class TestHotAddRemove:
                 return {"added": True}
 
         await kernel.hot_add(Added)
-        r = await kernel.bus.invoke("added.op", {})
+        r = await kernel.invoke("added.op", {})
         assert r == {"added": True}
         await kernel.shutdown()
 
@@ -639,9 +639,9 @@ class TestHotAddRemove:
         kernel = Kernel()
         kernel.discover([Removable])
         await kernel.boot()
-        assert kernel.bus.has_handler("removable.op")
+        assert kernel.get_schema("removable.op") is not None
         await kernel.hot_remove("removable")
-        assert not kernel.bus.has_handler("removable.op")
+        assert kernel.get_schema("removable.op") is None
         await kernel.shutdown()
 
 

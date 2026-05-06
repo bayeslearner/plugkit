@@ -83,11 +83,11 @@ class TestSecretRotation:
         db = kernel.lifecycle.get_instance("db-client").instance
         assert len(db.connection_log) == 1  # initial connect
 
-        await kernel.bus.invoke("vault.rotate", {})
+        await kernel.invoke("vault.rotate", {})
         await asyncio.sleep(0.01)
         assert len(db.connection_log) == 2  # rotated once
 
-        await kernel.bus.invoke("vault.rotate", {})
+        await kernel.invoke("vault.rotate", {})
         await asyncio.sleep(0.01)
         assert len(db.connection_log) == 3  # rotated twice
 
@@ -117,7 +117,7 @@ class TestABTesting:
 
         # 0% v2 — all traffic on v1
         for uid in ["a", "b", "c"]:
-            await kernel.bus.invoke("search-router.search", {"query": "q", "user_id": uid})
+            await kernel.invoke("search-router.search", {"query": "q", "user_id": uid})
         assert v1._call_count == 3
         assert v2._call_count == 0
 
@@ -126,7 +126,7 @@ class TestABTesting:
         v1._call_count = 0
         v2._call_count = 0
         for uid in ["a", "b", "c"]:
-            await kernel.bus.invoke("search-router.search", {"query": "q", "user_id": uid})
+            await kernel.invoke("search-router.search", {"query": "q", "user_id": uid})
         assert v1._call_count == 0
         assert v2._call_count == 3
 
@@ -145,8 +145,8 @@ class TestABTesting:
         await kernel.boot()
 
         # Same user_id, called twice — should get same variant
-        r1 = await kernel.bus.invoke("search-router.search", {"query": "q", "user_id": "alice"})
-        r2 = await kernel.bus.invoke("search-router.search", {"query": "q", "user_id": "alice"})
+        r1 = await kernel.invoke("search-router.search", {"query": "q", "user_id": "alice"})
+        r2 = await kernel.invoke("search-router.search", {"query": "q", "user_id": "alice"})
         assert r1["variant"] == r2["variant"]
 
         await kernel.shutdown()
@@ -176,8 +176,8 @@ class TestMultiTenant:
         kernel.instantiate("tenant-db", "tenant-db-t2", {"target": "t2"})
         await kernel.boot()
 
-        r1 = await kernel.bus.invoke("tenant-db.query", {"table": "x", "target": "t1"})
-        r2 = await kernel.bus.invoke("tenant-db.query", {"table": "x", "target": "t2"})
+        r1 = await kernel.invoke("tenant-db.query", {"table": "x", "target": "t1"})
+        r2 = await kernel.invoke("tenant-db.query", {"table": "x", "target": "t2"})
         assert r1["tenant"] == "t1"
         assert r1["db_url"] == "postgres://t1"
         assert r2["tenant"] == "t2"
@@ -201,7 +201,7 @@ class TestMultiTenant:
         config = kernel.registry.require("IConfig")
         config.set("tenants.t1.db_url", "postgres://new")
 
-        r = await kernel.bus.invoke("tenant-db.query", {"table": "x", "target": "t1"})
+        r = await kernel.invoke("tenant-db.query", {"table": "x", "target": "t1"})
         assert r["db_url"] == "postgres://new"
 
         await kernel.shutdown()
@@ -225,15 +225,15 @@ class TestExtensionBundle:
         await kernel.boot()
 
         # No Slack yet
-        assert not kernel.bus.has_handler("slack-notifier.notify")
+        assert kernel.get_schema("slack-notifier.notify") is None
 
         # Install bundle
         for cls in [SlackNotifier, SlackWebhookReceiver, SlackCommandHandler]:
             await kernel.hot_add(cls)
-        assert kernel.bus.has_handler("slack-notifier.notify")
+        assert kernel.get_schema("slack-notifier.notify") is not None
 
         # Core work triggers Slack notification via @subscribe
-        await kernel.bus.invoke("core-app.do_work", {})
+        await kernel.invoke("core-app.do_work", {})
         await asyncio.sleep(0.01)
 
         notifier = kernel.lifecycle.get_instance("slack-notifier").instance
@@ -243,7 +243,7 @@ class TestExtensionBundle:
         # Remove bundle
         for name in ["slack-commands", "slack-webhook", "slack-notifier"]:
             await kernel.hot_remove(name)
-        assert not kernel.bus.has_handler("slack-notifier.notify")
+        assert kernel.get_schema("slack-notifier.notify") is None
 
         await kernel.shutdown()
 
@@ -268,25 +268,25 @@ class TestCircuitBreaker:
         svc = kernel.lifecycle.get_instance("payment-svc").instance
 
         # Normal operation
-        r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+        r = await kernel.invoke("payment-svc.pay", {"amount": 10})
         assert r["paid"] is True
         assert svc.breaker_state() == "closed"
 
         # Take API down
-        await kernel.bus.invoke("ext-api.set_health", {"healthy": False})
+        await kernel.invoke("ext-api.set_health", {"healthy": False})
 
         # 2 failures → breaker opens (threshold=2)
-        await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
-        r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+        await kernel.invoke("payment-svc.pay", {"amount": 10})
+        r = await kernel.invoke("payment-svc.pay", {"amount": 10})
         assert svc.breaker_state() == "open"
 
         # Next call fails fast (circuit open)
-        r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+        r = await kernel.invoke("payment-svc.pay", {"amount": 10})
         assert r["error"] == "circuit open"
 
         # Recover API → breaker closes via probe
-        await kernel.bus.invoke("ext-api.set_health", {"healthy": True})
-        r = await kernel.bus.invoke("payment-svc.pay", {"amount": 10})
+        await kernel.invoke("ext-api.set_health", {"healthy": True})
+        r = await kernel.invoke("payment-svc.pay", {"amount": 10})
         assert r["paid"] is True
         assert svc.breaker_state() == "closed"
 
@@ -315,7 +315,7 @@ class TestAuditTrail:
         await kernel.boot()
 
         # Transfer triggers event → audit captures it
-        await kernel.bus.invoke("accounts.transfer", {
+        await kernel.invoke("accounts.transfer", {
             "from_account": "alice", "to_account": "bob", "amount": 50.0,
         })
         await asyncio.sleep(0.01)
@@ -350,7 +350,7 @@ class TestUnitTestingPatterns:
         })
         await kernel.boot()
 
-        r = await kernel.bus.invoke("order-service.place", {
+        r = await kernel.invoke("order-service.place", {
             "item": "Widget", "quantity": 2, "price": 25.0,
         })
         assert r["subtotal"] == 50.0
@@ -390,7 +390,7 @@ class TestUnitTestingPatterns:
         kernel.instantiate("config", properties={"defaults": {}})
         await kernel.boot()
 
-        await kernel.bus.invoke("order-service.place", {
+        await kernel.invoke("order-service.place", {
             "item": "Test", "quantity": 1, "price": 10.0,
         })
 
@@ -417,11 +417,11 @@ class TestHotUpdate:
         await kernel.boot()
 
         # Build state in V1
-        await kernel.bus.invoke("search.index_doc", {"id": "a", "text": "hello world"})
-        await kernel.bus.invoke("search.index_doc", {"id": "b", "text": "hello there"})
-        await kernel.bus.invoke("search.search", {"query": "hello"})
+        await kernel.invoke("search.index_doc", {"id": "a", "text": "hello world"})
+        await kernel.invoke("search.index_doc", {"id": "b", "text": "hello there"})
+        await kernel.invoke("search.search", {"query": "hello"})
 
-        status = await kernel.bus.invoke("search.status", {})
+        status = await kernel.invoke("search.status", {})
         assert status["version"] == "1.0"
         assert status["docs"] == 2
         assert status["queries"] == 1
@@ -430,13 +430,13 @@ class TestHotUpdate:
         await kernel.hot_update(SearchV2)
 
         # State preserved, version changed
-        status = await kernel.bus.invoke("search.status", {})
+        status = await kernel.invoke("search.status", {})
         assert status["version"] == "2.0"
         assert status["docs"] == 2       # index preserved
         assert status["queries"] == 1    # count preserved
 
         # V2 search returns scored results
-        r = await kernel.bus.invoke("search.search", {"query": "hello"})
+        r = await kernel.invoke("search.search", {"query": "hello"})
         assert r["engine"] == "v2-scored"
         assert len(r["results"]) == 2
         assert all("score" in hit for hit in r["results"])
@@ -477,8 +477,8 @@ class TestHotUpdate:
         kernel.discover([SimpleV1])
         await kernel.boot()
 
-        await kernel.bus.invoke("simple-svc.inc", {})
-        await kernel.bus.invoke("simple-svc.inc", {})
+        await kernel.invoke("simple-svc.inc", {})
+        await kernel.invoke("simple-svc.inc", {})
         # counter = 2, data = {"key": "v1"}
 
         await kernel.hot_update(SimpleV2)
@@ -489,7 +489,7 @@ class TestHotUpdate:
         assert svc.data == {"key": "v1"}
 
         # V2 behavior (increments by 10)
-        r = await kernel.bus.invoke("simple-svc.inc", {})
+        r = await kernel.invoke("simple-svc.inc", {})
         assert r["counter"] == 12  # 2 + 10
 
         await kernel.shutdown()
@@ -518,20 +518,20 @@ class TestHotUpdate:
 
             # Deploy v1
             shutil.copy2(here / "search_v1.py", plugin_dir / "search.py")
-            await kernel.bus.invoke("plugin-loader.scan", {})
+            await kernel.invoke("plugin-loader.scan", {})
 
-            await kernel.bus.invoke("search.index_doc", {"id": "1", "text": "hello"})
-            await kernel.bus.invoke("search.search", {"query": "hello"})
-            status = await kernel.bus.invoke("search.status", {})
+            await kernel.invoke("search.index_doc", {"id": "1", "text": "hello"})
+            await kernel.invoke("search.search", {"query": "hello"})
+            status = await kernel.invoke("search.status", {})
             assert status["version"] == "1.0"
             assert status["docs"] == 1
             assert status["queries"] == 1
 
             # Deploy v2 (overwrite)
             shutil.copy2(here / "search_v2.py", plugin_dir / "search.py")
-            await kernel.bus.invoke("plugin-loader.scan", {})
+            await kernel.invoke("plugin-loader.scan", {})
 
-            status = await kernel.bus.invoke("search.status", {})
+            status = await kernel.invoke("search.status", {})
             assert status["version"] == "2.0"
             assert status["docs"] == 1      # preserved
             assert status["queries"] == 1   # preserved

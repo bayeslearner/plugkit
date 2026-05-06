@@ -114,11 +114,8 @@ async def main():
     db = kernel.lifecycle.get_instance("db-client").instance
 
     # Find runnable schemas directly
-    status_schema = kernel.bus.get_schema("db-client.status")
-    rotate_schema = kernel.bus.get_schema("vault.rotate")
-
     # Initial state — effect already ran at boot
-    status = await status_schema.handler({})
+    status = await kernel.invoke("db-client.status", {})
     print(f"  Status: {status}")
     print(f"  Log: {db.connection_log}")
 
@@ -126,12 +123,12 @@ async def main():
     for i in range(3):
         print()
         print(f"  === Rotation {i + 1} ===")
-        await rotate_schema.handler({})
+        await kernel.invoke("vault.rotate", {})
         # Give async effects a tick to run
         await asyncio.sleep(0.01)
 
     print()
-    status = await status_schema.handler({})
+    status = await kernel.invoke("db-client.status", {})
     print(f"  Final status: {status}")
     print(f"  Full log: {db.connection_log}")
     assert len(db.connection_log) == 4  # 1 initial + 3 rotations

@@ -294,7 +294,7 @@ class TestKernelCoverage:
         kernel.discover([SyncRunnable])
         await kernel.boot()
 
-        result = await kernel.bus.invoke("sync-rbl.hello", {})
+        result = await kernel.invoke("sync-rbl.hello", {})
         assert result == {"sync": True}
 
         await kernel.shutdown()
@@ -413,11 +413,11 @@ class TestKernelCoverage:
         kernel.discover([Removable])
         await kernel.boot()
 
-        assert kernel.bus.has_handler("removable.op")
+        assert kernel.get_schema("removable.op") is not None
         assert kernel.registry.has("IRemovable")
 
         await kernel.hot_remove("removable")
-        assert not kernel.bus.has_handler("removable.op")
+        assert kernel.get_schema("removable.op") is None
         assert not kernel.registry.has("IRemovable")
 
         await kernel.shutdown()
@@ -861,7 +861,7 @@ class TestRunnableEdgeCases:
         kernel.discover([NoModel])
         await kernel.boot()
 
-        result = await kernel.bus.invoke("no-model.op", {"x": 1})
+        result = await kernel.invoke("no-model.op", {"x": 1})
         assert result == {"got": {"x": 1}}
 
         await kernel.shutdown()
@@ -879,7 +879,7 @@ class TestRunnableEdgeCases:
         kernel.discover([SyncRt])
         await kernel.boot()
 
-        result = await kernel.bus.invoke("sync-rt.op", {})
+        result = await kernel.invoke("sync-rt.op", {})
         assert result == {"name": "sync-rt"}
 
         await kernel.shutdown()
@@ -900,7 +900,7 @@ class TestRunnableEdgeCases:
         kernel.discover([PlainParamsComp])
         await kernel.boot()
 
-        result = await kernel.bus.invoke("plain-params.op", {"x": 1})
+        result = await kernel.invoke("plain-params.op", {"x": 1})
         assert result["type"] == "Params"  # falls through to Params dict
 
         await kernel.shutdown()

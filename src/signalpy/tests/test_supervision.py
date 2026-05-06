@@ -375,7 +375,7 @@ async def test_rest_for_one_restarts_from_failed():
         RuntimeError("simulated failure"),
         sup_ci,
         kernel._build_runtime,
-        register_bus=kernel._register_component_bus,
+        register_bus=kernel._register_component,
     )
 
     # "before-1" should NOT have been restarted

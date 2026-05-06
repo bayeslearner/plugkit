@@ -78,10 +78,8 @@ async def main():
     print()
 
     # Find and call the runnable schema directly
-    send_schema = kernel.bus.get_schema("dispatcher.send")
-
     # Send to all channels
-    r = await send_schema.handler({"message": "Server is down!"})
+    r = await kernel.invoke("dispatcher.send", {"message": "Server is down!"})
     print(f"  Sent: {r['sent']}")
 
     # Hot-add SMS plugin
@@ -98,7 +96,7 @@ async def main():
 
     await kernel.hot_add(SMSNotifier)
 
-    r = await send_schema.handler({"message": "Disk full!"})
+    r = await kernel.invoke("dispatcher.send", {"message": "Disk full!"})
     print(f"  Sent: {r['sent']}")
 
     # Hot-remove Slack
@@ -106,7 +104,7 @@ async def main():
     await kernel.hot_remove("slack-notifier")
     print("  [-] Slack notifier removed")
 
-    r = await send_schema.handler({"message": "All clear."})
+    r = await kernel.invoke("dispatcher.send", {"message": "All clear."})
     print(f"  Sent: {r['sent']}")
 
     dispatcher = kernel.lifecycle.get_instance("dispatcher").instance

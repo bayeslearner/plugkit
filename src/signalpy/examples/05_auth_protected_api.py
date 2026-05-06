@@ -81,16 +81,12 @@ async def main():
     print("=== Document Service ===\n")
 
     # Find runnable schemas directly
-    list_schema = kernel.bus.get_schema("doc-service.list")
-    create_schema = kernel.bus.get_schema("doc-service.create")
-    delete_schema = kernel.bus.get_schema("doc-service.delete")
-
     # Public: list (no auth needed)
-    r = await list_schema.handler({})
+    r = await kernel.invoke("doc-service.list", {})
     print(f"  List (public): {len(r['docs'])} docs")
 
     # Protected: create with writer token
-    r = await create_schema.handler({
+    r = await kernel.invoke("doc-service.create", {
         "title": "New Doc",
         "__auth_token__": "writer-token",
     })
@@ -98,26 +94,26 @@ async def main():
 
     # Protected: create without token → PermissionError
     try:
-        await create_schema.handler({"title": "Fail"})
+        await kernel.invoke("doc-service.create", {"title": "Fail"})
     except PermissionError as e:
         print(f"  Create (no auth): PermissionError — {e}")
 
     # Protected: create with reader token → PermissionError
     try:
-        await create_schema.handler({
+        await kernel.invoke("doc-service.create", {
             "title": "Fail", "__auth_token__": "reader-token",
         })
     except PermissionError as e:
         print(f"  Create (reader): PermissionError — {e}")
 
     # Protected: delete requires admin role
-    r = await delete_schema.handler({
+    r = await kernel.invoke("doc-service.delete", {
         "id": "doc-1", "__auth_token__": "admin-token",
     })
     print(f"  Delete (admin): {r}")
 
     try:
-        await delete_schema.handler({
+        await kernel.invoke("doc-service.delete", {
             "id": "doc-2", "__auth_token__": "writer-token",
         })
     except PermissionError as e:

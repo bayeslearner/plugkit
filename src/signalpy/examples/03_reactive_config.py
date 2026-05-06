@@ -66,7 +66,7 @@ async def main():
     config = kernel.registry.require("IConfig")
 
     # Initial state
-    r = await kernel.bus.get_schema("scraper.scrape").handler({})
+    r = await kernel.invoke("scraper.scrape", {})
     print(f"  Scraping: {r}")
     print(f"  Effect log: {scraper.effect_log}")
 
@@ -76,16 +76,16 @@ async def main():
     config.set("scraper.url", "http://production.com")
     config.set("scraper.interval", 30)
 
-    r = await kernel.bus.get_schema("scraper.scrape").handler({})
+    r = await kernel.invoke("scraper.scrape", {})
     print(f"  Scraping: {r}")
     print(f"  Effect log: {scraper.effect_log}")
 
     # Can also change via bus runnable
     print()
     print("  --- Config changed (via bus) ---")
-    await kernel.bus.get_schema("config.set").handler({"key": "scraper.url", "value": "http://staging.com"})
+    await kernel.invoke("config.set", {"key": "scraper.url", "value": "http://staging.com"})
 
-    r = await kernel.bus.get_schema("scraper.scrape").handler({})
+    r = await kernel.invoke("scraper.scrape", {})
     print(f"  Scraping: {r}")
 
     await kernel.shutdown()

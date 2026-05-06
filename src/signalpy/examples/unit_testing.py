@@ -142,10 +142,7 @@ async def main():
     await kernel.boot()
 
     # Test the runnable via schema handler
-    place_schema = kernel.bus.get_schema("order-service.place")
-    revenue_schema = kernel.bus.get_schema("order-service.revenue")
-
-    result = await place_schema.handler({
+    result = await kernel.invoke("order-service.place", {
         "item": "Widget", "quantity": 3, "price": 10.0,
     })
     print(f"    Order: {result}")
@@ -154,10 +151,10 @@ async def main():
     assert result["total"] == 32.4
 
     # Test revenue accumulation
-    await place_schema.handler({
+    await kernel.invoke("order-service.place", {
         "item": "Gadget", "quantity": 1, "price": 100.0,
     })
-    rev = await revenue_schema.handler({})
+    rev = await kernel.invoke("order-service.revenue", {})
     print(f"    Revenue: {rev}")
     assert rev["count"] == 2
 
@@ -212,9 +209,7 @@ async def main():
     await kernel.boot()
 
     collector = kernel.lifecycle.get_instance("event-collector").instance
-
-    place_schema = kernel.bus.get_schema("order-service.place")
-    await place_schema.handler({
+    await kernel.invoke("order-service.place", {
         "item": "Test Item", "quantity": 2, "price": 50.0,
     })
 

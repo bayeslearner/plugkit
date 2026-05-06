@@ -383,7 +383,7 @@ class TestKernelGraph:
         assert len(config_to_test) >= 1
 
         # Bus handler registered with schema
-        bus_handlers = g["bus"]["handlers"]
+        bus_handlers = g["runnables"]["entries"]
         test_handler = [h for h in bus_handlers if h["target"] == "test-app.do_thing"]
         assert len(test_handler) == 1
         assert test_handler[0]["description"] == "Does a thing"
@@ -493,7 +493,7 @@ class TestKernelIntegration:
         kernel.discover([LeafComponent, MidComponent])
         await kernel.boot()
 
-        result = await kernel.bus.invoke("mid.echo", {"message": "test"})
+        result = await kernel.invoke("mid.echo", {"message": "test"})
         assert result == {"echo": "test"}
 
         await kernel.shutdown()
@@ -516,9 +516,9 @@ class TestKernelIntegration:
         await kernel.boot()
 
         # Internal runnable IS on the bus
-        assert kernel.bus.has_handler("internal-test._private_op")
+        assert kernel.get_schema("internal-test._private_op") is not None
         # Public runnable is also on the bus
-        assert kernel.bus.has_handler("internal-test.public_op")
+        assert kernel.get_schema("internal-test.public_op") is not None
 
         # But internal should be excluded from api_runnables
         from signalpy.kernel.component import get_meta
@@ -550,7 +550,7 @@ class TestKernelIntegration:
         await kernel.boot()
 
         # Valid params — should work and use defaults from model
-        result = await kernel.bus.invoke("mid.echo", {})
+        result = await kernel.invoke("mid.echo", {})
         assert result == {"echo": "hello"}
 
         await kernel.shutdown()

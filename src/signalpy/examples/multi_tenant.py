@@ -101,22 +101,19 @@ async def main():
 
     # Direct instance calls — use runnable schemas
     print("  === Direct instance calls ===")
-    acme_query = kernel.bus.get_schema("tenant-db-acme.query")
-    globex_query = kernel.bus.get_schema("tenant-db-globex.query")
-
-    r = await acme_query.handler({"table": "orders"})
+    r = await kernel.invoke("tenant-db-acme.query", {"table": "orders"})
     print(f"    Acme: {r['tenant']} → {r['db_url']}")
 
-    r = await globex_query.handler({"table": "users"})
+    r = await kernel.invoke("tenant-db-globex.query", {"table": "users"})
     print(f"    Globex: {r['tenant']} → {r['db_url']}")
 
     # Target-routed calls (factory name + target param) — bus handles routing
     print()
     print("  === Target-routed calls (factory + target param) ===")
-    r = await kernel.bus.get_schema("tenant-db.query").handler({"table": "invoices", "target": "acme"})
+    r = await kernel.invoke("tenant-db.query", {"table": "invoices", "target": "acme"})
     print(f"    Route to acme: {r['tenant']} → {r['db_url']}")
 
-    r = await kernel.bus.get_schema("tenant-db.query").handler({"table": "invoices", "target": "initech"})
+    r = await kernel.invoke("tenant-db.query", {"table": "invoices", "target": "initech"})
     print(f"    Route to initech: {r['tenant']} → {r['db_url']}")
 
     # Reactive config change — update a tenant's DB URL
@@ -125,14 +122,14 @@ async def main():
     config = kernel.registry.require("IConfig")
     config.set("tenants.globex.db_url", "postgres://db-new.prod/globex-migrated")
 
-    r = await kernel.bus.get_schema("tenant-db.query").handler({"table": "users", "target": "globex"})
+    r = await kernel.invoke("tenant-db.query", {"table": "users", "target": "globex"})
     print(f"    Globex after migration: {r['db_url']}")
 
     # Status of all tenants — target-routed
     print()
     print("  === Tenant status ===")
     for tenant in ["acme", "globex", "initech"]:
-        r = await kernel.bus.get_schema("tenant-db.status").handler({"target": tenant})
+        r = await kernel.invoke("tenant-db.status", {"target": tenant})
         print(f"    {r['tenant']}: {r['queries']} queries, db={r['db_url']}")
 
     await kernel.shutdown()

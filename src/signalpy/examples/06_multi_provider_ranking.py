@@ -78,9 +78,7 @@ async def main():
 
     print()
     # Find and call the runnable schema directly
-    query_schema = kernel.bus.get_schema("app.query")
-
-    r = await query_schema.handler({"sql": "SELECT * FROM users"})
+    r = await kernel.invoke("app.query", {"sql": "SELECT * FROM users"})
     print(f"  Query result: db={r['db']}, rows={len(r['results'])}")
 
     # Hot-add a higher-priority Redis cache (acts as a "database")
@@ -98,7 +96,7 @@ async def main():
 
     await kernel.hot_add(RedisDB)
 
-    r = await query_schema.handler({"sql": "SELECT * FROM users"})
+    r = await kernel.invoke("app.query", {"sql": "SELECT * FROM users"})
     print(f"  Query result: db={r['db']}, rows={len(r['results'])}")
 
     app = kernel.lifecycle.get_instance("app").instance

@@ -405,7 +405,7 @@ class TestTypedSpellChecker:
         assert checker.check("bonjour monde", "FR") == []
 
         # Via bus
-        result = await kernel.bus.invoke("t-checker.check", {
+        result = await kernel.invoke("t-checker.check", {
             "text": "hello xyz",
             "language": "EN",
         })

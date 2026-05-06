@@ -101,6 +101,23 @@ class Params(dict):
         self[name] = value
 
 
+import time as _time
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class _CallStats:
+    """Runtime statistics for a single handler invocation."""
+    count: int = 0
+    total_ms: float = 0.0
+    errors: int = 0
+    last_called: float = 0.0
+
+    @property
+    def avg_ms(self) -> float:
+        return self.total_ms / self.count if self.count else 0.0
+
+
 class KernelState(Enum):
     CREATED = auto()
     BOOTING = auto()
@@ -117,7 +134,8 @@ class Kernel:
     Changes propagate through the reactive graph automatically.
     """
 
-    def __init__(self, policies: dict[str, dict] | None = None) -> None:
+    def __init__(self, policies: dict[str, dict] | None = None,
+                 record_call_graph: bool = True) -> None:
         self.traits = TraitRegistry()
         self.registry = ServiceRegistry()
         self.bus = Bus()
@@ -132,6 +150,11 @@ class Kernel:
         self._runnable_schemas: dict[str, HandlerSchema] = {}
         # Signal tracking available runnable names (for reactive transport adapters)
         self.runnable_signal: Signal[frozenset[str]] = Signal(frozenset())
+        # Runtime call graph recording
+        self.record_call_graph: bool = record_call_graph
+        self._call_stats: dict[str, _CallStats] = {}
+        # L3 target routing: factory.runnable → {target → instance.runnable}
+        self._target_routes: dict[str, dict[str, str]] = {}
         self._register_builtin_traits()
 
     @property
@@ -337,7 +360,7 @@ class Kernel:
 
         return handler
 
-    def _register_component_bus(self, ci: ComponentInstance) -> None:
+    def _register_component(self, ci: ComponentInstance) -> None:
         """Register bus handlers, subscriptions, kinds, skills, bind/unbind."""
         if ci.instance is None:
             return
@@ -353,34 +376,8 @@ class Kernel:
         for contract in ci.meta.provides:
             self.registry.provide(contract, ci.instance, ci.name, svc_properties)
 
-        # Register bus handlers for runnables (with schema for discovery).
-        # Batch so handler_signal fires ONCE per component, not per-handler.
-        from signalpy.kernel.reactive import batch as _batch
-        with _batch():
-            self._register_bus_handlers(ci)
-
-    def _register_bus_handlers(self, ci: ComponentInstance) -> None:
-        """Register bus handlers and runnable schemas.
-
-        Populates both the legacy bus handler registry and the new
-        kernel-level runnable schema registry (spec 011).
-        """
-        for rd in ci.meta.runnables:
-            handler_name = f"{ci.name}.{rd.name}"
-            bus_handler = self._make_bus_handler(rd, ci.instance, ci)
-            schema = HandlerSchema.from_runnable_def(
-                rd, provider_name=ci.name, handler=bus_handler,
-            )
-            # Legacy bus registration (will be removed in future)
-            self.bus.register_handler(handler_name, bus_handler, schema=schema)
-            # New: kernel-level schema registry
-            self._runnable_schemas[handler_name] = schema
-            target_value = ci.properties.get("target")
-            if target_value and ci.name != ci.meta.factory_name:
-                factory_handler = f"{ci.meta.factory_name}.{rd.name}"
-                self.bus.register_target_route(factory_handler, target_value, handler_name)
-        # Update the runnable signal
-        self.runnable_signal.set(frozenset(self._runnable_schemas.keys()))
+        # Register runnable schemas with handler references.
+        self._register_runnable_schemas(ci)
 
         # Register subscriptions
         for sd in ci.meta.subscriptions:
@@ -403,8 +400,76 @@ class Kernel:
         for sk in ci.meta.skills:
             self.skills[sk.name] = sk
 
-        # ── Set up reactive Effects and Computeds ──────────────
+        # Set up reactive Effects and Computeds
         self._setup_reactive(ci)
+
+    def _register_runnable_schemas(self, ci: ComponentInstance) -> None:
+        """Register runnable schemas with handler references.
+
+        Populates kernel._runnable_schemas. Each schema.handler is wrapped
+        with call graph recording if record_call_graph is enabled.
+        """
+        for rd in ci.meta.runnables:
+            handler_name = f"{ci.name}.{rd.name}"
+            raw_handler = self._make_bus_handler(rd, ci.instance, ci)
+            handler = self._wrap_handler(handler_name, raw_handler)
+            schema = HandlerSchema.from_runnable_def(
+                rd, provider_name=ci.name, handler=handler,
+            )
+            self._runnable_schemas[handler_name] = schema
+            # L3 target routing
+            target_value = ci.properties.get("target")
+            if target_value and ci.name != ci.meta.factory_name:
+                factory_handler = f"{ci.meta.factory_name}.{rd.name}"
+                self._target_routes.setdefault(factory_handler, {})[target_value] = handler_name
+        # Update the runnable signal
+        self.runnable_signal.set(frozenset(self._runnable_schemas.keys()))
+
+    def _wrap_handler(self, name: str, handler: Callable) -> Callable:
+        """Wrap a handler with call graph recording."""
+        if not self.record_call_graph:
+            return handler
+
+        async def _recording_handler(params):
+            t0 = _time.time()
+            try:
+                result = await handler(params)
+                self._record_call(name, _time.time() - t0, error=False)
+                return result
+            except Exception:
+                self._record_call(name, _time.time() - t0, error=True)
+                raise
+
+        return _recording_handler
+
+    def _record_call(self, target: str, elapsed: float, error: bool) -> None:
+        stats = self._call_stats.get(target)
+        if stats is None:
+            stats = _CallStats()
+            self._call_stats[target] = stats
+        stats.count += 1
+        stats.total_ms += elapsed * 1000
+        stats.last_called = _time.time()
+        if error:
+            stats.errors += 1
+
+    @property
+    def call_graph(self) -> dict[str, dict[str, Any]]:
+        """Runtime call graph — actual invocations with stats."""
+        return {
+            target: {
+                "count": s.count,
+                "total_ms": round(s.total_ms, 2),
+                "avg_ms": round(s.avg_ms, 2),
+                "errors": s.errors,
+                "last_called": s.last_called,
+            }
+            for target, s in self._call_stats.items()
+        }
+
+    def reset_call_graph(self) -> None:
+        """Reset all runtime call statistics."""
+        self._call_stats.clear()
 
     def _setup_reactive(self, ci: ComponentInstance) -> None:
         """Create Effect/Computed wrappers for @effect and @computed methods."""
@@ -485,7 +550,7 @@ class Kernel:
         # failures trigger the supervision strategy instead of propagating.
         await self.lifecycle.activate_supervised(
             ci.name, self._build_runtime,
-            register_bus=self._register_component_bus,
+            register_bus=self._register_component,
         )
         log.info("Spawned child: %s (parent=%s)", ci.name, parent_name)
         return ci.instance
@@ -518,7 +583,7 @@ class Kernel:
             except Exception as exc:
                 log.error("Failed to activate %s: %s — skipping", name, exc)
                 continue
-            self._register_component_bus(ci)
+            self._register_component(ci)
             if is_transport:
                 transport_names.append(name)
 
@@ -567,7 +632,7 @@ class Kernel:
         ci = self.lifecycle.instantiate(meta.factory_name, instance_name, properties)
         ci.state = State.RESOLVED
         await self.lifecycle.activate(ci.name, self._build_runtime)
-        self._register_component_bus(ci)
+        self._register_component(ci)
         gw = self.registry.require_optional("IGateway")
         if gw and hasattr(gw, "_rebuild"):
             gw._rebuild()
@@ -579,13 +644,10 @@ class Kernel:
         if ci is None:
             raise KeyError(f"No instance named {name!r}")
 
-        from signalpy.kernel.reactive import batch as _batch
-        with _batch():
-            for rd in ci.meta.runnables:
-                handler_name = f"{ci.name}.{rd.name}"
-                self.bus.unregister_handler(handler_name)
-                self._runnable_schemas.pop(handler_name, None)
-            self.runnable_signal.set(frozenset(self._runnable_schemas.keys()))
+        for rd in ci.meta.runnables:
+            handler_name = f"{ci.name}.{rd.name}"
+            self._runnable_schemas.pop(handler_name, None)
+        self.runnable_signal.set(frozenset(self._runnable_schemas.keys()))
 
         for entry in self.registry.query():
             if entry.provider_name == ci.name:
@@ -668,7 +730,8 @@ class Kernel:
         # ── Phase 2: Tear down old instances ───────────────────
         for ci in old_instances:
             for rd in ci.meta.runnables:
-                self.bus.unregister_handler(f"{ci.name}.{rd.name}")
+                self._runnable_schemas.pop(f"{ci.name}.{rd.name}", None)
+            self.runnable_signal.set(frozenset(self._runnable_schemas.keys()))
             for entry in self.registry.query():
                 if entry.provider_name == ci.name:
                     self.registry.unprovide(entry)
@@ -687,7 +750,7 @@ class Kernel:
             ci = self.lifecycle.instantiate(factory_name, inst_name, props)
             ci.state = State.RESOLVED
             await self.lifecycle.activate(ci.name, self._build_runtime)
-            self._register_component_bus(ci)
+            self._register_component(ci)
 
             # Restore state
             if ci.instance is not None and inst_name in snapshots:
@@ -719,7 +782,7 @@ class Kernel:
         await self.lifecycle.retry_erroneous(name, self._build_runtime)
         ci = self.lifecycle.get_instance(name)
         if ci and ci.state == State.ACTIVE:
-            self._register_component_bus(ci)
+            self._register_component(ci)
         return ci
 
     # ── Shutdown ────────────────────────────────────────────────
@@ -732,6 +795,33 @@ class Kernel:
         log.info("Kernel shut down")
 
     # ── Runnable discovery (spec 011) ─────────────────────────────
+
+    def get_schema(self, target: str) -> HandlerSchema | None:
+        """Look up a runnable schema by qualified name (e.g. 'my-app.search')."""
+        return self._runnable_schemas.get(target)
+
+    async def invoke(self, target: str, params: dict | None = None) -> Any:
+        """Invoke a runnable by qualified name. Convenience for tests/scripts.
+
+        Supports L3 target routing: if params has 'target' and the target name
+        is a factory runnable with routes, dispatches to the right instance.
+
+        For component-to-component calls, use @requires + direct method calls.
+        """
+        p = params or {}
+        schema = self._runnable_schemas.get(target)
+
+        # L3 target routing
+        if schema is None and isinstance(p, dict):
+            target_value = p.get("target")
+            if target_value and target in self._target_routes:
+                instance_target = self._target_routes[target].get(target_value)
+                if instance_target:
+                    schema = self._runnable_schemas.get(instance_target)
+
+        if schema is None:
+            raise KeyError(f"No runnable {target!r}")
+        return await schema.handler(p)
 
     def runnables(
         self,
@@ -886,16 +976,15 @@ class Kernel:
                     "contract": contract,
                 })
 
-        # Bus handlers with schemas
-        bus_handlers = []
-        for target in self.bus.handlers:
-            schema = self.bus.get_schema(target)
-            entry = {"target": target}
-            if schema:
-                entry["provider"] = schema.provider
-                entry["description"] = schema.description
-                entry["internal"] = schema.internal
-            bus_handlers.append(entry)
+        # Registered runnables with schemas
+        runnable_entries = []
+        for target, schema in self._runnable_schemas.items():
+            runnable_entries.append({
+                "target": target,
+                "provider": schema.provider,
+                "description": schema.description,
+                "transports": schema.transports,
+            })
 
         # Event subscriptions
         event_edges = []
@@ -932,12 +1021,12 @@ class Kernel:
                 "invocations": invocation_edges,
                 "publications": publication_edges,
             },
-            "bus": {
-                "handlers": bus_handlers,
-                "handler_count": len(bus_handlers),
+            "runnables": {
+                "entries": runnable_entries,
+                "count": len(runnable_entries),
             },
             "events": event_edges,
-            "call_stats": self.bus.call_graph,
+            "call_stats": self.call_graph,
         }
 
 

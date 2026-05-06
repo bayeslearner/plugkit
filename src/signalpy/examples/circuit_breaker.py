@@ -138,36 +138,31 @@ async def main():
     await kernel.boot()
 
     print()
-    # Find runnable schemas directly
-    pay_schema = kernel.bus.get_schema("payment-svc.pay")
-    pay_status = kernel.bus.get_schema("payment-svc.status")
-    set_health = kernel.bus.get_schema("ext-api.set_health")
-
     print("  === Normal operation (API healthy) ===")
-    r = await pay_schema.handler({"amount": 100.0})
+    r = await kernel.invoke("payment-svc.pay", {"amount": 100.0})
     print(f"    Pay $100: {r}")
-    r = await pay_schema.handler({"amount": 200.0})
+    r = await kernel.invoke("payment-svc.pay", {"amount": 200.0})
     print(f"    Pay $200: {r}")
 
     # Take the API down
     print()
     print("  === API goes down ===")
-    await set_health.handler({"healthy": False})
+    await kernel.invoke("ext-api.set_health", {"healthy": False})
 
     for i in range(4):
-        r = await pay_schema.handler({"amount": 50.0})
-        status = await pay_status.handler({})
+        r = await kernel.invoke("payment-svc.pay", {"amount": 50.0})
+        status = await kernel.invoke("payment-svc.status", {})
         print(f"    Attempt {i+1}: {r}  (breaker: {status['state']})")
 
     # Bring API back
     print()
     print("  === API recovers ===")
-    await set_health.handler({"healthy": True})
+    await kernel.invoke("ext-api.set_health", {"healthy": True})
 
-    r = await pay_schema.handler({"amount": 300.0})
+    r = await kernel.invoke("payment-svc.pay", {"amount": 300.0})
     print(f"    Pay $300 (probe): {r}")
 
-    status = await pay_status.handler({})
+    status = await kernel.invoke("payment-svc.status", {})
     print(f"    Final status: {status}")
 
     svc = kernel.lifecycle.get_instance("payment-svc").instance

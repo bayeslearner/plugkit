@@ -233,7 +233,7 @@ class TestPlatformAppBundle:
 
     async def test_bundle_boots_and_works(self):
         kernel = await boot_with(BundledApp)
-        result = await kernel.bus.invoke("bundled-app.ping", {})
+        result = await kernel.invoke("bundled-app.ping", {})
         assert result == {"pong": True}
         await kernel.shutdown()
 
@@ -253,17 +253,17 @@ class TestTargeted:
         await kernel.boot()
 
         # Direct instance call
-        result = await kernel.bus.invoke("td-alpha.whoami", {})
+        result = await kernel.invoke("td-alpha.whoami", {})
         assert result == {"target": "alpha"}
 
-        result = await kernel.bus.invoke("td-beta.whoami", {})
+        result = await kernel.invoke("td-beta.whoami", {})
         assert result == {"target": "beta"}
 
         # Target-routed call (factory name + target param)
-        result = await kernel.bus.invoke("target-demo.whoami", {"target": "alpha"})
+        result = await kernel.invoke("target-demo.whoami", {"target": "alpha"})
         assert result == {"target": "alpha"}
 
-        result = await kernel.bus.invoke("target-demo.whoami", {"target": "beta"})
+        result = await kernel.invoke("target-demo.whoami", {"target": "beta"})
         assert result == {"target": "beta"}
 
         await kernel.shutdown()
@@ -276,7 +276,7 @@ class TestTargeted:
         await kernel.boot()
 
         with pytest.raises(KeyError):
-            await kernel.bus.invoke("target-demo.whoami", {"target": "nonexistent"})
+            await kernel.invoke("target-demo.whoami", {"target": "nonexistent"})
 
         await kernel.shutdown()
 
@@ -317,10 +317,10 @@ class TestSpawn:
         kernel = await boot_with(ParentManager, ChildWorker)
 
         # Children are on the bus
-        result = await kernel.bus.invoke("worker-a.whoami", {})
+        result = await kernel.invoke("worker-a.whoami", {})
         assert result == {"worker_id": "A"}
 
-        result = await kernel.bus.invoke("worker-b.whoami", {})
+        result = await kernel.invoke("worker-b.whoami", {})
         assert result == {"worker_id": "B"}
 
         # Parent tracks children

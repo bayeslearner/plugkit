@@ -130,8 +130,7 @@ async def main():
     await kernel.boot()
 
     print("  === Core app running (no extensions) ===")
-    do_work_schema = kernel.bus.get_schema("core-app.do_work")
-    await do_work_schema.handler({})
+    await kernel.invoke("core-app.do_work", {})
     assert not kernel.bus.has_handler("slack-notifier.notify")
     print("    No Slack handler registered yet.")
 
@@ -145,8 +144,7 @@ async def main():
     # Core work now triggers Slack notification automatically
     print()
     print("  === Core app does work → auto-notifies Slack ===")
-    do_work_schema = kernel.bus.get_schema("core-app.do_work")
-    await do_work_schema.handler({})
+    await kernel.invoke("core-app.do_work", {})
     await asyncio.sleep(0.01)  # let async subscribe handler run
 
     notifier = kernel.lifecycle.get_instance("slack-notifier").instance
@@ -157,8 +155,7 @@ async def main():
     # Direct Slack calls also work
     print()
     print("  === Direct Slack calls ===")
-    notify_schema = kernel.bus.get_schema("slack-notifier.notify")
-    await notify_schema.handler({
+    await kernel.invoke("slack-notifier.notify", {
         "channel": "dev", "message": "Deploy successful"
     })
 

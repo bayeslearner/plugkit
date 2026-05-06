@@ -216,7 +216,7 @@ class TestFastAPIInternalRoutes:
     @pytest.mark.asyncio
     async def test_internal_still_on_bus(self):
         kernel, app = await boot_kernel_with_fastapi()
-        result = await kernel.bus.invoke("greeter._warmup", {})
+        result = await kernel.invoke("greeter._warmup", {})
         assert result == {"warmed": True}
         await kernel.shutdown()
 

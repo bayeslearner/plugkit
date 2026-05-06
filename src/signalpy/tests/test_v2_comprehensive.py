@@ -146,7 +146,7 @@ class TestHotAddRemove:
             async def op(self, params): return {"dynamic": True}
 
         await kernel.hot_add(Dynamic)
-        r = await kernel.bus.invoke("dynamic.op", {})
+        r = await kernel.invoke("dynamic.op", {})
         assert r == {"dynamic": True}
         await kernel.shutdown()
 
@@ -161,11 +161,11 @@ class TestHotAddRemove:
         kernel = Kernel()
         kernel.discover([Rm])
         await kernel.boot()
-        assert kernel.bus.has_handler("removable.op")
+        assert kernel.get_schema("removable.op") is not None
         assert kernel.registry.has("IRm")
 
         await kernel.hot_remove("removable")
-        assert not kernel.bus.has_handler("removable.op")
+        assert kernel.get_schema("removable.op") is None
         assert not kernel.registry.has("IRm")
         await kernel.shutdown()
 
@@ -196,9 +196,9 @@ class TestAuthEnforcement:
         auth._policies = {"admin": ["*"]}
 
         with pytest.raises(PermissionError):
-            await kernel.bus.invoke("protected.admin_op", {})
+            await kernel.invoke("protected.admin_op", {})
 
-        r = await kernel.bus.invoke("protected.admin_op", {"__auth_token__": "admin-tk"})
+        r = await kernel.invoke("protected.admin_op", {"__auth_token__": "admin-tk"})
         assert r == {"ok": True}
         await kernel.shutdown()
 
@@ -224,11 +224,11 @@ class TestAuthEnforcement:
             "normal-tk": {"identity": "user", "roles": ["user"]},
         }
 
-        r = await kernel.bus.invoke("role-app.su_op", {"__auth_token__": "su-tk"})
+        r = await kernel.invoke("role-app.su_op", {"__auth_token__": "su-tk"})
         assert r == {"super": True}
 
         with pytest.raises(PermissionError):
-            await kernel.bus.invoke("role-app.su_op", {"__auth_token__": "normal-tk"})
+            await kernel.invoke("role-app.su_op", {"__auth_token__": "normal-tk"})
         await kernel.shutdown()
 
 
@@ -329,7 +329,7 @@ class TestSyncAsync:
         kernel = Kernel()
         kernel.discover([S])
         await kernel.boot()
-        assert await kernel.bus.invoke("sync-r.op", {}) == {"sync": True}
+        assert await kernel.invoke("sync-r.op", {}) == {"sync": True}
         await kernel.shutdown()
 
     @pytest.mark.asyncio
@@ -342,7 +342,7 @@ class TestSyncAsync:
         kernel = Kernel()
         kernel.discover([A])
         await kernel.boot()
-        assert await kernel.bus.invoke("async-r.op", {}) == {"async": True}
+        assert await kernel.invoke("async-r.op", {}) == {"async": True}
         await kernel.shutdown()
 
     @pytest.mark.asyncio
@@ -455,10 +455,10 @@ class TestSpellCheckerE2E:
         kernel.discover([En, Fr, Checker])
         await kernel.boot()
 
-        r = await kernel.bus.invoke("checker.check", {"text": "hello world"})
+        r = await kernel.invoke("checker.check", {"text": "hello world"})
         assert r["misspelled"] == []
 
-        r = await kernel.bus.invoke("checker.check", {"text": "hello xyz"})
+        r = await kernel.invoke("checker.check", {"text": "hello xyz"})
         assert "xyz" in r["misspelled"]
 
         # Hot-add German
@@ -471,7 +471,7 @@ class TestSpellCheckerE2E:
             def check_word(self, w): return w.lower() in self.words
 
         await kernel.hot_add(De)
-        r = await kernel.bus.invoke("checker.check", {"text": "hallo welt"})
+        r = await kernel.invoke("checker.check", {"text": "hallo welt"})
         assert r["misspelled"] == []
 
         await kernel.shutdown()

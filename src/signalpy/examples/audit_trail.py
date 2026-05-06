@@ -136,14 +136,12 @@ async def main():
 
     print()
     print("  === Transfers with audit trail ===")
-    transfer_schema = kernel.bus.get_schema("accounts.transfer")
-
-    await transfer_schema.handler({
+    await kernel.invoke("accounts.transfer", {
         "from_account": "alice", "to_account": "bob", "amount": 150.0,
     })
     await asyncio.sleep(0.01)
 
-    await transfer_schema.handler({
+    await kernel.invoke("accounts.transfer", {
         "from_account": "bob", "to_account": "charlie", "amount": 75.0,
     })
     await asyncio.sleep(0.01)
@@ -158,8 +156,7 @@ async def main():
     # Check balances
     print()
     print("  === Final balances ===")
-    balance_schema = kernel.bus.get_schema("accounts.balance")
-    balances = await balance_schema.handler({})
+    balances = await kernel.invoke("accounts.balance", {})
     for name, bal in sorted(balances.items()):
         print(f"    {name}: ${bal:.2f}")
 

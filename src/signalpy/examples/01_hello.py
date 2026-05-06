@@ -35,8 +35,7 @@ async def main():
     await kernel.boot()
 
     # Find and call the runnable schema directly
-    hello_schema = kernel.bus.get_schema("greeter.hello")
-    result = await hello_schema.handler({"name": "Alice"})
+    result = await kernel.invoke("greeter.hello", {"name": "Alice"})
     print(result)  # {'message': 'Hello, Alice!'}
 
     await kernel.shutdown()

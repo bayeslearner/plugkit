@@ -184,33 +184,30 @@ async def kernel_with_target():
 
 @pytest.mark.asyncio
 async def test_runtime_call_graph_records_invocations(kernel_with_target):
-    """Bus records call count and timing for invoke calls."""
+    """Kernel records call count and timing for schema.handler calls."""
     kernel = kernel_with_target
-    bus = kernel.bus
 
-    # Make some calls
-    await bus.invoke("target-svc.action", {})
-    await bus.invoke("target-svc.action", {})
-    await bus.invoke("target-svc.slow", {})
+    await kernel.invoke("target-svc.action", {})
+    await kernel.invoke("target-svc.action", {})
+    await kernel.invoke("target-svc.slow", {})
 
-    graph = bus.call_graph
+    graph = kernel.call_graph
     assert "target-svc.action" in graph
     assert graph["target-svc.action"]["count"] == 2
     assert graph["target-svc.action"]["errors"] == 0
     assert graph["target-svc.slow"]["count"] == 1
-    assert graph["target-svc.slow"]["total_ms"] >= 5  # at least some time
+    assert graph["target-svc.slow"]["total_ms"] >= 5
 
 
 @pytest.mark.asyncio
 async def test_runtime_call_graph_records_errors(kernel_with_target):
-    """Bus records errors in call stats."""
+    """Kernel records errors in call stats."""
     kernel = kernel_with_target
-    bus = kernel.bus
 
     with pytest.raises(ValueError):
-        await bus.invoke("target-svc.fail", {})
+        await kernel.invoke("target-svc.fail", {})
 
-    graph = bus.call_graph
+    graph = kernel.call_graph
     assert "target-svc.fail" in graph
     assert graph["target-svc.fail"]["count"] == 1
     assert graph["target-svc.fail"]["errors"] == 1
@@ -220,13 +217,12 @@ async def test_runtime_call_graph_records_errors(kernel_with_target):
 async def test_runtime_call_graph_reset(kernel_with_target):
     """reset_call_graph clears all stats."""
     kernel = kernel_with_target
-    bus = kernel.bus
 
-    await bus.invoke("target-svc.action", {})
-    assert bus.call_graph != {}
+    await kernel.invoke("target-svc.action", {})
+    assert kernel.call_graph != {}
 
-    bus.reset_call_graph()
-    assert bus.call_graph == {}
+    kernel.reset_call_graph()
+    assert kernel.call_graph == {}
 
 
 # ── kernel.graph() integration ───────────────────────────────────────
@@ -272,8 +268,8 @@ async def test_kernel_graph_includes_weak_publication_edges(full_kernel):
 async def test_kernel_graph_includes_call_stats(full_kernel):
     """kernel.graph() includes runtime call stats after invocations."""
     kernel = full_kernel
-    await kernel.bus.invoke("target-svc.action", {})
-    await kernel.bus.invoke("target-svc.action", {})
+    await kernel.invoke("target-svc.action", {})
+    await kernel.invoke("target-svc.action", {})
 
     g = kernel.graph()
     assert "call_stats" in g

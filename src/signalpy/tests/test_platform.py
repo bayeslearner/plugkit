@@ -287,7 +287,7 @@ class TestGatewayIntegration:
             config_defaults={"test-app": {"greeting": "hey"}},
         )
 
-        result = await kernel.bus.invoke("test-app.greet", {"value": "world"})
+        result = await kernel.invoke("test-app.greet", {"value": "world"})
         assert result == {"greeting": "hey, world"}
 
         await kernel.shutdown()
@@ -317,6 +317,6 @@ class TestGatewayIntegration:
         assert "surface-test._hidden" not in rest_names
 
         # But internal IS on bus
-        assert kernel.bus.has_handler("surface-test._hidden")
+        assert kernel.get_schema("surface-test._hidden") is not None
 
         await kernel.shutdown()

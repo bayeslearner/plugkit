@@ -61,12 +61,10 @@ async def main():
 
     print()
     # Find and call the runnable schema directly
-    read_schema = kernel.bus.get_schema("sensor.read")
-
-    r = await read_schema.handler({"value": 100, "from_unit": "C", "to_unit": "F"})
+    r = await kernel.invoke("sensor.read", {"value": 100, "from_unit": "C", "to_unit": "F"})
     print(f"  {r['original']} → {r['converted']}")
 
-    r = await read_schema.handler({"value": 72, "from_unit": "F", "to_unit": "C"})
+    r = await kernel.invoke("sensor.read", {"value": 72, "from_unit": "F", "to_unit": "C"})
     print(f"  {r['original']} → {r['converted']}")
 
     await kernel.shutdown()

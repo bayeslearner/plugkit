@@ -78,13 +78,10 @@ async def main():
 
     # Test via runnable schemas
     print("\n=== Runnable schema invocations ===")
-    list_schema = kernel.bus.get_schema("task-service.list")
-    complete_schema = kernel.bus.get_schema("task-service.complete")
-
-    r = await list_schema.handler({})
+    r = await kernel.invoke("task-service.list", {})
     print(f"  Tasks: {r['count']} total")
 
-    r = await complete_schema.handler({"id": 2})
+    r = await kernel.invoke("task-service.complete", {"id": 2})
     print(f"  Completed: {r}")
 
     # Test via HTTP

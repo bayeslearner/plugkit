@@ -149,13 +149,13 @@ class TestAggregateRequires:
         kernel.discover([EnglishDict, FrenchDict, SpellCheckerAggregate])
         await kernel.boot()
 
-        result = await kernel.bus.invoke("spell-checker.check", {
+        result = await kernel.invoke("spell-checker.check", {
             "text": "hello world foo",
             "language": "EN",
         })
         assert result["misspelled"] == ["foo"]
 
-        result = await kernel.bus.invoke("spell-checker.check", {
+        result = await kernel.invoke("spell-checker.check", {
             "text": "bonjour bar",
             "language": "FR",
         })
@@ -337,7 +337,7 @@ class TestRequiresMap:
         kernel.discover([EnglishDict, FrenchDict, SpellCheckerMap])
         await kernel.boot()
 
-        result = await kernel.bus.invoke("spell-checker-map.check", {
+        result = await kernel.invoke("spell-checker-map.check", {
             "text": "hello foo",
             "language": "EN",
         })
@@ -490,18 +490,18 @@ class TestConfigAdmin:
         await kernel.boot()
 
         # Update via bus (now on "config" component, not separate "configadmin")
-        await kernel.bus.invoke("config.update", {
+        await kernel.invoke("config.update", {
             "pid": "test.pid",
             "properties": {"a": 1},
         })
 
         # Get via bus
-        result = await kernel.bus.invoke("config.get", {"pid": "test.pid"})
+        result = await kernel.invoke("config.get", {"pid": "test.pid"})
         assert result == {"a": 1}
 
         # Delete via bus
-        await kernel.bus.invoke("config.delete", {"pid": "test.pid"})
-        result = await kernel.bus.invoke("config.get", {"pid": "test.pid"})
+        await kernel.invoke("config.delete", {"pid": "test.pid"})
+        result = await kernel.invoke("config.get", {"pid": "test.pid"})
         assert result == {}
 
         await kernel.shutdown()
@@ -619,17 +619,17 @@ class TestAuthEnforcement:
 
         # Call without token → PermissionError
         with pytest.raises(PermissionError, match="requires authentication"):
-            await kernel.bus.invoke("protected-app.admin_op", {})
+            await kernel.invoke("protected-app.admin_op", {})
 
         # Call with valid admin token → success
-        result = await kernel.bus.invoke("protected-app.admin_op", {
+        result = await kernel.invoke("protected-app.admin_op", {
             "__auth_token__": "admin-token",
         })
         assert result == {"deleted": True}
 
         # Call with reader token (wrong role/action) → PermissionError
         with pytest.raises(PermissionError, match="Not authorized"):
-            await kernel.bus.invoke("protected-app.admin_op", {
+            await kernel.invoke("protected-app.admin_op", {
                 "__auth_token__": "reader-token",
             })
 
@@ -661,14 +661,14 @@ class TestAuthEnforcement:
         }
 
         # Superuser token → success
-        result = await kernel.bus.invoke("role-app.superuser_op", {
+        result = await kernel.invoke("role-app.superuser_op", {
             "__auth_token__": "su-token",
         })
         assert result == {"super": True}
 
         # Normal token → PermissionError
         with pytest.raises(PermissionError, match="Role.*required"):
-            await kernel.bus.invoke("role-app.superuser_op", {
+            await kernel.invoke("role-app.superuser_op", {
                 "__auth_token__": "normal-token",
             })
 
@@ -692,7 +692,7 @@ class TestAuthEnforcement:
         # No IAuth provider → requires_action is a no-op, but we still
         # need a token (the check happens before looking for IAuth)
         # Actually, the check looks for IAuth first — if not found, no enforcement
-        result = await kernel.bus.invoke("unprotected-app.op", {})
+        result = await kernel.invoke("unprotected-app.op", {})
         assert result == {"ok": True}
 
         await kernel.shutdown()
@@ -720,20 +720,20 @@ class TestSpellCheckerE2E:
         await kernel.boot()
 
         # English check
-        result = await kernel.bus.invoke("spell-checker.check", {
+        result = await kernel.invoke("spell-checker.check", {
             "text": "hello world",
             "language": "EN",
         })
         assert result["misspelled"] == []
 
-        result = await kernel.bus.invoke("spell-checker.check", {
+        result = await kernel.invoke("spell-checker.check", {
             "text": "hello xyz",
             "language": "EN",
         })
         assert result["misspelled"] == ["xyz"]
 
         # French check
-        result = await kernel.bus.invoke("spell-checker.check", {
+        result = await kernel.invoke("spell-checker.check", {
             "text": "bonjour le monde",
             "language": "FR",
         })
@@ -754,7 +754,7 @@ class TestSpellCheckerE2E:
         sc = kernel.lifecycle.get_instance("spell-checker").instance
         assert "DE" in sc.languages
 
-        result = await kernel.bus.invoke("spell-checker.check", {
+        result = await kernel.invoke("spell-checker.check", {
             "text": "hallo welt",
             "language": "DE",
         })
@@ -764,7 +764,7 @@ class TestSpellCheckerE2E:
         await kernel.hot_remove("dict-fr")
         assert "FR" not in sc.languages
 
-        result = await kernel.bus.invoke("spell-checker.check", {
+        result = await kernel.invoke("spell-checker.check", {
             "text": "bonjour",
             "language": "FR",
         })
