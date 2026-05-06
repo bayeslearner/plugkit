@@ -1,5 +1,5 @@
 ---
-title: "5. Auth & Policy"
+title: "6. Auth & Policy"
 subtitle: "Protect operations declaratively. Transport adapters enforce auth at the edge."
 ---
 

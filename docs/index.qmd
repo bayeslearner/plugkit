@@ -50,13 +50,13 @@ Each builds on the last. Read in order.
 
 | # | Tutorial | What you'll learn |
 |---|----------|----------|
-| 0 | [Layer Rules & Decision Guide](guide/00-layer-rules.qmd) | Which APIs to use where. @requires + direct calls vs publish/subscribe. The communication triangle. |
+| 0 | [Layer Rules & Decision Guide](guide/00-layer-rules.qmd) | Three orthogonal mechanisms: `@requires` + direct calls, `@runnable` + transports, `publish` / `@subscribe` |
 | 1 | [First Component](guide/01-first-component.qmd) | `@component`, `@lifecycle`, boot, shutdown |
 | 2 | [Give and Take](guide/02-give-and-take.qmd) | `@provides`, `@requires`, typed contracts, `self.rt` |
 | 3 | [Dynamic Services & Reactivity](guide/03-dynamic-services.qmd) | `list[C]` aggregate, `@effect`, `@computed`, `batch()`, hot-add/remove |
-| 4 | [Runnables & the Bus](guide/04-runnables-and-api.qmd) | `@runnable`, schema discovery via `kernel.runnables()` |
-| 5 | [Gateway & Transports](guide/05-gateway-and-transports.qmd) | How HTTP/MCP/CLI bindings are generated from `@component` transport config |
-| 6 | [Auth & Policy](guide/06-auth-and-policy.qmd) | `requires_action`, `requires_role`, bus-level auth |
+| 4 | [Runnables & Transport Config](guide/04-runnables-and-api.qmd) | `@runnable` schema declarations, `transports=[]`, transport config on `@component` |
+| 5 | [Transport Adapters](guide/05-gateway-and-transports.qmd) | How REST/MCP/CLI bindings are generated from `kernel.runnables()` |
+| 6 | [Auth & Policy](guide/06-auth-and-policy.qmd) | `requires_action`, `requires_role`, per-consumer auth enforcement |
 | 7 | [Building a Provider](guide/07-building-a-provider.qmd) | Write your own ICache, swap implementations |
 
 ## Concepts
@@ -65,11 +65,11 @@ Deep dives. Read any of these independently.
 
 | Page | What it explains |
 |------|-----------------|
-| [Architecture](concepts/architecture.qmd) | Constitution (12 rules), two-axis model, decoration -> activation lifecycle |
+| [Architecture](concepts/architecture.qmd) | Constitution, two-axis model, three orthogonal mechanisms |
 | [Reactivity by Example](concepts/reactivity-by-example.qmd) | One full reactive cycle: boot → first run → mutation → re-run (side-by-side) |
 | [Reactive Engine Internals](concepts/reactive-internals.qmd) | The 5 data structures, tracking mechanism, 3 worked scenarios |
 | [Threading & Async Model](concepts/threading-model.qmd) | Concurrency, async supersede, `is_stale()`, `cancel_on_supersede`, propagation algorithm |
-| [Supervision & Reliability](concepts/supervision.qmd) | Dead letter, Erlang-style supervision trees |
+| [Supervision & Reliability](concepts/supervision.qmd) | Erlang-style supervision trees, dead letter channel |
 | [Bridging External Systems](concepts/bridging.qmd) | Bridge pattern: lifecycle, 90% surface, escape hatch |
 | [Deployment Scales](concepts/deployment.qmd) | Monolith → containers → Dapr → agent system |
 | [Source Walkthrough](concepts/kernel-reading-guide.qmd) | All 9 kernel files explained in dependency order (reference companion) |

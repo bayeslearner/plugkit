@@ -264,37 +264,35 @@ notification sender — without the order service knowing about any of them.
 
 ---
 
-## Summary: The Communication Model
+## Summary: Three Orthogonal Mechanisms
 
 ```
-        @requires + direct calls
-        (I have it, I call its methods)
+    @requires + direct calls            @runnable + transports
+    (components talk to each other)     (outside world reaches components)
+            |                                     |
+            |   structural, reactive,             |   schema-only declaration,
+            |   boot-time, guaranteed,            |   transport adapters discover
+            |   type-safe                         |   and call schema.handler
+            |                                     |
+    --------+-------------------------------------+--------
+    |                   Component                          |
+    --------+----------------------------------------------+
             |
-            |   structural, reactive,
-            |   boot-time, guaranteed,
-            |   type-safe
+     self.rt.publish / @subscribe
+     (components react to events)
             |
-    --------+--------
-    |   Component    |
-    --------+--------
-            |
-     self.rt.publish
-     (I announce to
-      whoever cares)
-            |
-      fire-and-forget,
-      loose coupling,
-      many listeners
+      fire-and-forget, loose coupling, many listeners
 ```
 
-Two mechanisms, two purposes:
+Three mechanisms, three purposes, orthogonal:
 
-1. **@requires + direct calls** -- dependency injection. "I need this service, I call its methods."
-2. **@subscribe + publish** -- event notification. "Something happened, FYI."
+1. **@requires + direct calls** -- dependency injection. "I need this service, I call its methods." Components talk to each other.
+2. **@runnable + transports** -- schema declarations. "This operation exists, here's its shape." The outside world reaches components.
+3. **@subscribe + publish** -- event notification. "Something happened, FYI." Components react to events without coupling.
 
-Transport adapters bridge the outside world to `@runnable` handlers.
-If you're reaching for `registry.require()` from outside a component,
-you're in the wrong layer.
+These three don't overlap — components don't go through the bus to call each other,
+runnables don't use `@requires` to find their consumers, and the bus doesn't
+dispatch to runnables.
 
 ---
 
