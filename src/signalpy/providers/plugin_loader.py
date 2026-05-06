@@ -18,19 +18,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from signalpy.kernel import component, provides, requires, runnable, lifecycle
+from signalpy.kernel import component, provides, requires, lifecycle
 from signalpy.kernel.component import has_meta, get_meta
-from pydantic import BaseModel
-
 log = logging.getLogger(__name__)
-
-
-class ScanParams(BaseModel):
-    pass
-
-
-class LoadParams(BaseModel):
-    module_path: str = ""
 
 
 @component("plugin-loader", version="0.1", depends=["config"])
@@ -61,8 +51,7 @@ class PluginLoader:
         self._loaded_factories: dict[str, str] = {}  # factory_name → filename
         self.load_log: list[str] = []
 
-    @runnable("scan", params=ScanParams, description="Scan plugin directory for new/updated components", transports=["native"])
-    async def scan(self, params):
+    async def scan(self, params=None):
         """Scan the plugin directory. New files → hot_add. Changed files → hot_update."""
         if not self._plugin_dir:
             return {"error": "No plugin_dir configured"}
@@ -82,25 +71,23 @@ class PluginLoader:
 
         return {"loaded": results}
 
-    @runnable("load", params=LoadParams, description="Load a specific module by dotted path", transports=["native"])
-    async def load_module(self, params):
+    async def load_module(self, module_path: str):
         """Import a module by dotted path and hot-add its components."""
         if self._kernel is None:
             return {"error": "No kernel reference"}
         try:
-            mod = importlib.import_module(params.module_path)
+            mod = importlib.import_module(module_path)
             classes = _find_components(mod)
             results = []
             for cls in classes:
-                result = await self._add_or_update(cls, params.module_path)
+                result = await self._add_or_update(cls, module_path)
                 results.append(result)
             return {"loaded": results}
         except Exception as e:
             log.exception("Failed to load module: %s", params.module_path)
             return {"error": str(e)}
 
-    @runnable("status", params=BaseModel, description="Plugin loader status", transports=["native"])
-    async def status(self, params):
+    async def status(self):
         return {
             "plugin_dir": self._plugin_dir,
             "loaded_modules": list(self._loaded_modules.keys()),

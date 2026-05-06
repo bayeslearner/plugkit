@@ -47,7 +47,8 @@ async def main():
         print("  === Deploy V1: copy search_v1.py into plugins/ ===")
         shutil.copy2(SEARCH_V1, plugin_dir / "search.py")
 
-        result = await kernel.invoke("plugin-loader.scan", {})
+        loader = kernel.lifecycle.get_instance("plugin-loader").instance
+        result = await loader.scan()
         print(f"    Scan result: {result}")
 
         # Index some documents
@@ -79,7 +80,8 @@ async def main():
         print("  === Deploy V2: overwrite search.py with v2 ===")
         shutil.copy2(SEARCH_V2, plugin_dir / "search.py")
 
-        result = await kernel.invoke("plugin-loader.scan", {})
+        loader = kernel.lifecycle.get_instance("plugin-loader").instance
+        result = await loader.scan()
         print(f"    Scan result: {result}")
 
         # Search with V2 — state should be preserved
@@ -101,7 +103,7 @@ async def main():
 
         # Plugin loader status
         print()
-        loader_status = await kernel.invoke("plugin-loader.status", {})
+        loader_status = await loader.status()
         print(f"  === Plugin loader status ===")
         print(f"    Loaded factories: {loader_status['loaded_factories']}")
         print(f"    Load log: {loader_status['load_log']}")

@@ -518,7 +518,8 @@ class TestHotUpdate:
 
             # Deploy v1
             shutil.copy2(here / "search_v1.py", plugin_dir / "search.py")
-            await kernel.invoke("plugin-loader.scan", {})
+            loader = kernel.lifecycle.get_instance("plugin-loader").instance
+            await loader.scan()
 
             await kernel.invoke("search.index_doc", {"id": "1", "text": "hello"})
             await kernel.invoke("search.search", {"query": "hello"})
@@ -529,7 +530,8 @@ class TestHotUpdate:
 
             # Deploy v2 (overwrite)
             shutil.copy2(here / "search_v2.py", plugin_dir / "search.py")
-            await kernel.invoke("plugin-loader.scan", {})
+            loader = kernel.lifecycle.get_instance("plugin-loader").instance
+            await loader.scan()
 
             status = await kernel.invoke("search.status", {})
             assert status["version"] == "2.0"
