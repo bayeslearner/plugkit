@@ -114,7 +114,7 @@ Each pattern is a standalone recipe using only standard kernel APIs.
 
 | | |
 |---|---|
-| Kernel core | ~3,100 lines, 9 files, zero required dependencies |
+| Kernel core | ~3,800 lines, 9 files, zero required dependencies |
 | Reactivity | Signal, Computed, Effect — Vue 3-style auto-tracking |
 | Reliability | Dead letter, supervision trees |
 | Providers | 9: config, logging, credentials, storage, auth, tracing, workspace, gateway, configadmin |

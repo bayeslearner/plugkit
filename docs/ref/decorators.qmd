@@ -226,8 +226,7 @@ handler registration -- transport adapters discover schemas via
 `kernel.runnables()` and call `schema.handler` directly.
 
 Use `transports=["native"]` to restrict a runnable to kernel-internal
-calls only (replaces the old `internal=True`). By default all transports
-can discover the runnable.
+calls only. By default all transports can discover the runnable.
 
 ```python
 @runnable("search", params=SearchParams, description="Search")

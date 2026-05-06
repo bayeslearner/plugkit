@@ -8,7 +8,7 @@ subtitle: "Every file in src/signalpy/kernel/, explained in dependency order. A 
 > the code. For the mental model without source-diving, see
 > [Architecture](architecture.qmd) or [Reactivity by Example](reactivity-by-example.qmd).
 
-The kernel is 9 files, ~3,100 lines. You can read the whole thing in one
+The kernel is 9 files, ~3,800 lines. You can read the whole thing in one
 sitting. Here is the order that will make the most sense — each file only
 depends on the ones before it.
 
@@ -301,9 +301,8 @@ propagation: when a service changes, update all consumer Runtimes.
 - **publish(event_type, data)** --- broadcast an event to all subscribers.
   Like a radio station.
 
-Cross-component calls no longer go through the bus. Use `@requires` to
-inject a dependency and call its methods directly. The bus is event-only
-(publish/subscribe).
+Cross-component calls use `@requires` to inject a dependency and call
+its methods directly. The bus is event-only (publish/subscribe).
 
 ### Reliability features
 
@@ -547,4 +546,4 @@ After reading, try this:
 | `lifecycle_manager.py` | ~560 | State machine + supervision |
 | `traits.py` | ~180 | L0-L3 trait inference |
 | `__init__.py` | ~900 | Kernel orchestrator |
-| **Total** | **~3,100** | |
+| **Total** | **~3,800** | |

@@ -19,7 +19,7 @@ Non-negotiable design rules. Every decision traces back to one of these.
 7. **Apps are deployment units, components are composition units.**
 8. **Lifecycle is explicit and managed.** Dependency-ordered activation, reverse shutdown.
 9. **Every API has a client counterpart.** One declaration, every surface.
-10. **The kernel is small.** ~3,100 lines across 9 files. Readable in one sitting.
+10. **The kernel is small.** ~3,800 lines across 9 files. Readable in one sitting.
 11. **Scoping is structural, not opt-in.** Credentials and storage are per-component by default.
 12. **Concurrency is correct by default.** Per-flow tracking via `ContextVar`, shared-state mutation via `RLock`. Threads and asyncio tasks share Signals safely without consumer code touching a lock. ([Threading Model](threading-model.qmd))
 
@@ -51,7 +51,7 @@ graph LR
     U --> REG
 ```
 
-**Axis 1** is the kernel — the irreplaceable mechanism. ~3,100 lines. Cannot be swapped.
+**Axis 1** is the kernel — the irreplaceable mechanism. ~3,800 lines. Cannot be swapped.
 
 **Axis 2** is everything written *using* the kernel. Providers, adapters, your apps. All components. All replaceable.
 

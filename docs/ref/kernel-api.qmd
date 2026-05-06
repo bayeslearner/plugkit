@@ -58,8 +58,8 @@ The orchestrator. `from signalpy.kernel import Kernel`
 
 `from signalpy.kernel import Bus`
 
-The bus handles pub/sub events. Invocation (`bus.invoke`) has been removed --
-use `@requires` + direct method calls instead.
+The bus handles pub/sub events. Component-to-component calls use
+`@requires` + direct method calls.
 
 | Method | Description |
 |---|---|
