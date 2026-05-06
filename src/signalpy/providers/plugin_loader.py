@@ -61,7 +61,7 @@ class PluginLoader:
         self._loaded_factories: dict[str, str] = {}  # factory_name → filename
         self.load_log: list[str] = []
 
-    @runnable("scan", params=ScanParams, description="Scan plugin directory for new/updated components")
+    @runnable("scan", params=ScanParams, description="Scan plugin directory for new/updated components", transports=["native"])
     async def scan(self, params):
         """Scan the plugin directory. New files → hot_add. Changed files → hot_update."""
         if not self._plugin_dir:
@@ -82,7 +82,7 @@ class PluginLoader:
 
         return {"loaded": results}
 
-    @runnable("load", params=LoadParams, description="Load a specific module by dotted path")
+    @runnable("load", params=LoadParams, description="Load a specific module by dotted path", transports=["native"])
     async def load_module(self, params):
         """Import a module by dotted path and hot-add its components."""
         if self._kernel is None:
@@ -99,7 +99,7 @@ class PluginLoader:
             log.exception("Failed to load module: %s", params.module_path)
             return {"error": str(e)}
 
-    @runnable("status", params=BaseModel, description="Plugin loader status")
+    @runnable("status", params=BaseModel, description="Plugin loader status", transports=["native"])
     async def status(self, params):
         return {
             "plugin_dir": self._plugin_dir,

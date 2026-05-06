@@ -591,42 +591,9 @@ class ConfigProvider:
         """Register a managed service factory for a PID."""
         self._factories[pid] = factory
 
-    # ── Bus-exposed runnables ────────────────────────────────────
-
-    @runnable("update", params=UpdateParams, description="Update a managed config by PID")
-    async def update_config(self, params):
-        self.update(params.pid, params.properties)
-        return {"pid": params.pid, "updated": True}
-
-    @runnable("delete", params=DeleteParams, description="Delete a managed config by PID")
-    async def delete_config(self, params):
-        self.delete(params.pid)
-        return {"pid": params.pid, "deleted": True}
-
-    @runnable("get", params=GetParams, description="Get a managed config by PID")
-    async def get_managed_config(self, params):
-        return self.get_configuration(params.pid)
-
-    @runnable("set", params=SetParams, description="Set a config key at runtime")
-    async def set_config(self, params):
-        self.set(params.key, params.value, layer=params.layer)
-        return {"key": params.key, "updated": True}
-
-    @runnable("set_branch", params=SetBranchParams, description="Set a config subtree")
-    async def set_branch_config(self, params):
-        strategy = MergeStrategy[params.merge.upper()] if params.merge else MergeStrategy.REPLACE
-        self.set_branch(params.key, params.value, layer=params.layer, merge=strategy)
-        return {"key": params.key, "updated": True}
-
-    @runnable("reset", params=ResetParams, description="Reset a key to lower-layer default")
-    async def reset_config(self, params):
-        self.reset(params.key, layer=params.layer)
-        return {"key": params.key, "reset": True}
-
-    @runnable("source", params=GetSourceParams, description="Get value provenance")
-    async def get_source(self, params):
-        value, layer_name = self.get_with_source(params.key)
-        return {"key": params.key, "value": value, "layer": layer_name}
+    # Config operations are accessed via @requires(config=IConfig) or
+    # @requires(config_admin=IConfigAdmin) + direct method calls.
+    # No @runnable needed — these are not routable operations.
 
     @lifecycle.deactivate
     def deactivate(self):

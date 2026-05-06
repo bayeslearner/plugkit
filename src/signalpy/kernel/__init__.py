@@ -936,6 +936,41 @@ class Kernel:
             result[provider]["schemas"].append(schema)
         return result
 
+    def runnables_by_transport(
+        self,
+        transport: str | None = None,
+    ) -> dict[str, list[HandlerSchema]] | list[HandlerSchema]:
+        """Query runnables grouped by transport.
+
+        With no argument: returns a dict keyed by transport name, where
+        each value is the list of schemas visible on that transport.
+
+            kernel.runnables_by_transport()
+            # → {'native': [...], 'mcp': [...], 'rest': [...]}
+
+        With argument: returns a flat list filtered to that transport.
+
+            kernel.runnables_by_transport('mcp')
+            # → [schema1, schema2, ...]
+        """
+        if transport is not None:
+            return self.runnables(transport=transport)
+
+        # Collect all declared transports across all components
+        all_transports = {"native"}
+        for ci in self.lifecycle.all_instances():
+            all_transports.update(ci.meta.transport_config.keys())
+        # Also check per-runnable explicit transports
+        for schema in self._runnable_schemas.values():
+            if schema.transports:
+                all_transports.update(schema.transports)
+
+        return {
+            t: self.runnables(transport=t)
+            for t in sorted(all_transports)
+            if self.runnables(transport=t)  # skip empty
+        }
+
     # ── Status ──────────────────────────────────────────────────
 
     def status(self) -> dict[str, Any]:

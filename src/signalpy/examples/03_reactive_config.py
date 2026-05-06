@@ -80,10 +80,10 @@ async def main():
     print(f"  Scraping: {r}")
     print(f"  Effect log: {scraper.effect_log}")
 
-    # Can also change via bus runnable
+    # Can also change via direct method call on config
     print()
-    print("  --- Config changed (via bus) ---")
-    await kernel.invoke("config.set", {"key": "scraper.url", "value": "http://staging.com"})
+    print("  --- Config changed (direct) ---")
+    config.set("scraper.url", "http://staging.com")
 
     r = await kernel.invoke("scraper.scrape", {})
     print(f"  Scraping: {r}")

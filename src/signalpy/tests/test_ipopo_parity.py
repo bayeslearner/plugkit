@@ -482,26 +482,22 @@ class TestConfigAdmin:
 
     @pytest.mark.asyncio
     async def test_configadmin_bus_runnables(self):
-        """ConfigAdmin runnables are accessible via the bus."""
+        """ConfigAdmin is accessible via @requires(config_admin=IConfigAdmin)."""
         from signalpy.providers.config import ConfigProvider
 
         kernel = Kernel()
         kernel.discover([ConfigProvider])
         await kernel.boot()
 
-        # Update via bus (now on "config" component, not separate "configadmin")
-        await kernel.invoke("config.update", {
-            "pid": "test.pid",
-            "properties": {"a": 1},
-        })
+        # Access via direct method calls on the IConfigAdmin contract
+        config_admin = kernel.registry.require("IConfigAdmin")
 
-        # Get via bus
-        result = await kernel.invoke("config.get", {"pid": "test.pid"})
+        config_admin.update("test.pid", {"a": 1})
+        result = config_admin.get_configuration("test.pid")
         assert result == {"a": 1}
 
-        # Delete via bus
-        await kernel.invoke("config.delete", {"pid": "test.pid"})
-        result = await kernel.invoke("config.get", {"pid": "test.pid"})
+        config_admin.delete("test.pid")
+        result = config_admin.get_configuration("test.pid")
         assert result == {}
 
         await kernel.shutdown()
