@@ -174,17 +174,49 @@ class LifecycleManager:
     def resolve_all(self) -> list[str]:
         """Toposort all Discovered instances by dependencies.
 
+        Two sources of activation order:
+
+        1. Explicit `depends=[factory_name]` on @component — hard-coded
+           ordering hint for cases where the contract isn't enough.
+        2. Contract @requires — scalar, non-aggregate, non-optional
+           requirements imply "I need this provider activated first".
+           Aggregate (list[X]) and optional deps DO NOT block: the
+           kernel re-injects them reactively as providers come online.
+
+        Including @requires in the toposort means components don't have
+        to also list their providers in `depends=`. The contract surface
+        is the single source of truth for boot order, matching the
+        kernel-discipline thesis.
+
         Returns activation order (list of instance names).
         """
+        # Map contract name → list of provider instance names
+        providers_by_contract: dict[str, list[str]] = {}
+        for name, ci in self._instances.items():
+            for contract in ci.meta.provides:
+                providers_by_contract.setdefault(contract, []).append(name)
+
         # Build adjacency: instance → [instances it depends on]
         dep_graph: dict[str, set[str]] = {}
         for name, ci in self._instances.items():
             deps: set[str] = set()
+
+            # Source 1: explicit depends=[factory_name]
             for dep_factory in ci.meta.dependencies:
-                # Find instances of that factory
                 for other_name, other_ci in self._instances.items():
                     if other_ci.meta.factory_name == dep_factory:
                         deps.add(other_name)
+
+            # Source 2: scalar non-optional non-aggregate @requires
+            for req in ci.meta.requirements:
+                if req.aggregate or req.optional:
+                    continue  # reactive paths — don't block boot
+                providers = providers_by_contract.get(req.contract, [])
+                # Don't self-edge if a component @provides AND @requires
+                # the same contract (rare but legal — e.g. decorator pattern).
+                providers = [p for p in providers if p != name]
+                deps.update(providers)
+
             dep_graph[name] = deps
 
         # Kahn's algorithm on the dependency graph.
