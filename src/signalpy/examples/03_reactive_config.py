@@ -21,7 +21,7 @@ class ScrapeParams(BaseModel):
     pass
 
 
-@component("scraper", depends=["config"])
+@component("scraper")
 @requires(config="IConfig")
 class Scraper:
     @lifecycle.activate

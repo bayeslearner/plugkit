@@ -31,7 +31,7 @@ class TransferParams(BaseModel):
     amount: float = 0.0
 
 
-@component("accounts", version="1.0", depends=["config"])
+@component("accounts", version="1.0")
 @requires(config="IConfig")
 class AccountService:
     """Manages user accounts."""
@@ -67,7 +67,7 @@ class NotifyParams(BaseModel):
     message: str = ""
 
 
-@component("notifications", version="1.0", depends=["config"])
+@component("notifications", version="1.0")
 @requires(config="IConfig")
 class NotificationService:
     """Sends notifications to users."""
@@ -92,7 +92,7 @@ class NotificationService:
 
 # ── Audit trail component ──────────────────────────────────────
 
-@component("audit-trail", version="1.0", depends=["config"])
+@component("audit-trail", version="1.0")
 @requires(config="IConfig")
 class AuditTrail:
     """Captures bus events into a queryable audit log.

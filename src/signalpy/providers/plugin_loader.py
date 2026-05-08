@@ -23,7 +23,7 @@ from signalpy.kernel.component import has_meta, get_meta
 log = logging.getLogger(__name__)
 
 
-@component("plugin-loader", version="0.1", depends=["config"])
+@component("plugin-loader", version="0.1")
 @provides("IPluginLoader")
 @requires(config="IConfig")
 class PluginLoader:

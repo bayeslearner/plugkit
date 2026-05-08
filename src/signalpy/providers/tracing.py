@@ -116,7 +116,7 @@ class _OTelSpanWrapper:
 
 # ── The component ───────────────────────────────────────────────
 
-@component("tracing", version="0.1", depends=["config"])
+@component("tracing", version="0.1")
 @provides("ITracer")
 @requires(config="IConfig")
 class TracingProvider:

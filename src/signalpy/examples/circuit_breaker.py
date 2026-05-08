@@ -59,7 +59,7 @@ class PayParams(BaseModel):
     amount: float = 0.0
 
 
-@component("payment-svc", version="1.0", depends=["config", "ext-api"])
+@component("payment-svc", version="1.0")
 @requires(config="IConfig", ext_api="IExternalAPI")
 class PaymentService:
     """Payment service with a circuit breaker around the external API.

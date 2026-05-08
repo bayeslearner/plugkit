@@ -38,7 +38,7 @@ class AlertParams(BaseModel):
     message: str = ""
 
 
-@component("core-app", version="1.0", depends=["config"])
+@component("core-app", version="1.0")
 @requires(config="IConfig")
 class CoreApp:
     """The main application. Extensions integrate by subscribing to its events."""
@@ -57,7 +57,7 @@ class CoreApp:
 
 # ── Slack extension bundle (3 components) ───────────────────────
 
-@component("slack-notifier", version="1.0", depends=["config"])
+@component("slack-notifier", version="1.0")
 @provides(ISlackNotifier)
 @requires(config="IConfig")
 class SlackNotifier:
@@ -75,7 +75,7 @@ class SlackNotifier:
         return {"sent": True, "channel": params.channel}
 
 
-@component("slack-webhook", version="1.0", depends=["config"])
+@component("slack-webhook", version="1.0")
 @requires(config="IConfig")
 class SlackWebhookReceiver:
     """Receives Slack webhooks and publishes events on the bus."""
@@ -92,7 +92,7 @@ class SlackWebhookReceiver:
         return {"ack": True}
 
 
-@component("slack-commands", version="1.0", depends=["config", "slack-notifier"])
+@component("slack-commands", version="1.0")
 @requires(config="IConfig", notifier=ISlackNotifier)
 class SlackCommandHandler:
     """Handles /slash commands from Slack. Also listens for core events."""

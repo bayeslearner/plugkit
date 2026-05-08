@@ -7,7 +7,7 @@ class SearchParams(BaseModel):
     query: str = ""
 
 
-@component("search", version="2.0", depends=["config"])
+@component("search", version="2.0")
 @requires(config="IConfig")
 @provides("ISearch")
 class SearchV2:

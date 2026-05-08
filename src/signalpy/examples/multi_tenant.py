@@ -30,7 +30,7 @@ class QueryParams(BaseModel):
     limit: int = 10
 
 
-@component("tenant-db", version="1.0", depends=["config", "credentials"])
+@component("tenant-db", version="1.0")
 @requires(config="IConfig", creds="ICredentials")
 class TenantDatabase:
     """Database adapter scoped to a single tenant.

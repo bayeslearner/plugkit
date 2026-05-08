@@ -28,7 +28,7 @@ from signalpy.providers.credentials import CredentialProvider
 
 # ── The database client — reconnects when credentials change ────────
 
-@component("db-client", version="1.0", depends=["config", "credentials"])
+@component("db-client", version="1.0")
 @requires(config="IConfig", creds="ICredentials")
 class DatabaseClient:
     """Simulated database client that uses an API key from credentials.
@@ -63,7 +63,7 @@ class DatabaseClient:
 
 # ── The vault — rotates secrets by updating config ──────────────────
 
-@component("vault", version="1.0", depends=["config"])
+@component("vault", version="1.0")
 @requires(config="IConfig")
 class VaultSimulator:
     """Simulates a vault that rotates API keys.

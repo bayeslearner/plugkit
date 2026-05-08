@@ -65,7 +65,7 @@ class SearchV2:
 
 # ── A/B Router — reads split from config, routes by user_id ────
 
-@component("search-router", version="1.0", depends=["config", "search-v1", "search-v2"])
+@component("search-router", version="1.0")
 @provides("ISearchRouter")
 @requires(config="IConfig")
 @requires(backends="ISearch", key="version")

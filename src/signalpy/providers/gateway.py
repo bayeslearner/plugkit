@@ -49,7 +49,7 @@ class APISurface:
         return result
 
 
-@component("gateway", version="0.2", depends=["config", "logging"])
+@component("gateway", version="0.2")
 @provides("IGateway")
 @requires(config="IConfig", logger="ILogger")
 class APIGateway:

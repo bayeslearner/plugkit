@@ -49,7 +49,7 @@ class QueryParams(BaseModel):
     sql: str = "SELECT 1"
 
 
-@component("app", depends=["sqlite-db", "postgres-db"])
+@component("app")
 @requires(db=IDatabase)
 class App:
     @lifecycle.activate

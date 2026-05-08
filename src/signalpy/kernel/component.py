@@ -194,7 +194,6 @@ class ComponentMeta:
     restore_is_async: bool = False
     supervision_def: SupervisionDef | None = None
     properties: dict[str, Any] = field(default_factory=dict)
-    dependencies: list[str] = field(default_factory=list)  # factory names
     # Static call graph edges (potential invoke/publish targets found in source)
     invoke_targets: list[str] = field(default_factory=list)   # e.g. ["email.send", "search.query"]
     publish_events: list[str] = field(default_factory=list)   # e.g. ["orders.placed", "data.updated"]
@@ -252,7 +251,6 @@ def component(
     *,
     namespace: str = "",
     version: str = "0.0.0",
-    depends: list[str] | None = None,
     rest: dict[str, Any] | None = None,
     mcp: dict[str, Any] | None = None,
     cli: dict[str, Any] | None = None,
@@ -281,7 +279,6 @@ def component(
         meta.factory_name = name
         meta.namespace = namespace
         meta.version = version
-        meta.dependencies = depends or []
         # Transport config
         if rest is not None:
             meta.transport_config["rest"] = rest
@@ -721,23 +718,6 @@ def _finalize_meta(cls: type) -> ComponentMeta:
                 is_async=inspect.iscoroutinefunction(obj),
                 **cfg,
             )
-
-    # Auto-infer dependencies from @requires contracts
-    # Convention: IConfig → "config", ILogger → "logging", etc.
-    _CONTRACT_TO_FACTORY = {
-        "IConfig": "config",
-        "ILogger": "logging",
-        "ICredentials": "credentials",
-        "IStorage": "storage",
-        "IAuth": "auth",
-        "ITracer": "tracing",
-        "IWorkspace": "workspace",
-        "IGateway": "gateway",
-    }
-    for contract in meta.requires.values():
-        factory = _CONTRACT_TO_FACTORY.get(contract)
-        if factory and factory not in meta.dependencies and factory != meta.factory_name:
-            meta.dependencies.append(factory)
 
     # ── Static call graph extraction ─────────────────────────────
     # Scan method source for self.rt.invoke("target") and self.rt.publish("event")

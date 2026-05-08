@@ -13,7 +13,7 @@ from typing import Any
 from signalpy.kernel import component, provides, requires, lifecycle
 
 
-@component("credentials", version="0.1", depends=["config"])
+@component("credentials", version="0.1")
 @provides("ICredentials")
 @requires(config="IConfig")
 class CredentialProvider:

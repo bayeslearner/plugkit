@@ -1028,15 +1028,23 @@ class Kernel:
                 },
             }
 
-            # Dependency edges: this component requires contracts provided by others
+            # Dependency edges: this component requires contracts provided by others.
+            # Each edge carries `aggregate` + `optional` flags so consumers can
+            # distinguish boot-blocking deps (scalar required) from reactive
+            # aggregation (list[X]) and best-effort lookups (optional=True).
+            req_by_attr = {r.attr_name: r for r in ci.meta.requirements}
             for attr, contract in requires_map.items():
-                # Find who provides this contract
+                req = req_by_attr.get(attr)
+                aggregate = bool(req and req.aggregate)
+                optional = bool(req and req.optional)
                 for entry in self.registry.entries_for(contract):
                     dependency_edges.append({
                         "from": entry.provider_name,
                         "to": ci.name,
                         "contract": contract,
                         "type": "strong",
+                        "aggregate": aggregate,
+                        "optional": optional,
                     })
 
             # Service provision edges

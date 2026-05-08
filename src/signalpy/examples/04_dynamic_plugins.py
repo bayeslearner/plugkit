@@ -48,7 +48,7 @@ class SlackNotifier:
 
 # ── Dispatcher ───────────────────────────────────────────────────
 
-@component("dispatcher", depends=["email-notifier", "slack-notifier"])
+@component("dispatcher")
 @requires(notifiers=list[INotifier])
 class NotificationDispatcher:
     @lifecycle.activate

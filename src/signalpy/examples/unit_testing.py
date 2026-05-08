@@ -42,7 +42,7 @@ class OrderParams(BaseModel):
     price: float = 0.0
 
 
-@component("order-service", version="1.0", depends=["config", "logging"])
+@component("order-service", version="1.0")
 @requires(config="IConfig", logger="ILogger")
 class OrderService:
     """A service that processes orders. Has @computed and @effect."""

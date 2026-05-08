@@ -30,7 +30,7 @@ class SearchParams(BaseModel):
     query: str = ""
 
 
-@component("search", version="1.0", depends=["config"])
+@component("search", version="1.0")
 @requires(config="IConfig")
 @provides("ISearch")
 class SearchV1:
@@ -88,7 +88,7 @@ class SearchV1:
 # Version 2 — same component name, improved search algorithm
 # ══════════════════════════════════════════════════════════════════
 
-@component("search", version="2.0", depends=["config"])
+@component("search", version="2.0")
 @requires(config="IConfig")
 @provides("ISearch")
 class SearchV2:

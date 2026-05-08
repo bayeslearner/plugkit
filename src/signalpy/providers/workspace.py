@@ -17,7 +17,7 @@ from signalpy.kernel import component, provides, requires, lifecycle
 log = logging.getLogger(__name__)
 
 
-@component("workspace", version="0.1", depends=["config"])
+@component("workspace", version="0.1")
 @provides("IWorkspace")
 @requires(config="IConfig")
 class WorkspaceProvider:

@@ -19,7 +19,7 @@ from signalpy.kernel import component, provides, requires, lifecycle
 log = logging.getLogger(__name__)
 
 
-@component("auth", version="0.1", depends=["config"])
+@component("auth", version="0.1")
 @provides("IAuth")
 @requires(config="IConfig")
 class AuthProvider:

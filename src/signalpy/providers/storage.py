@@ -14,7 +14,7 @@ from typing import Any
 from signalpy.kernel import component, provides, requires, lifecycle
 
 
-@component("storage", version="0.1", depends=["config"])
+@component("storage", version="0.1")
 @provides("IStorage")
 @requires(config="IConfig")
 class StorageProvider:

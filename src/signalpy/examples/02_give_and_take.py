@@ -38,7 +38,7 @@ class TemperatureConverter:
         return value
 
 
-@component("sensor", depends=["converter"])
+@component("sensor")
 @requires(converter=IUnitConverter)
 class SensorReader:
     @lifecycle.activate
