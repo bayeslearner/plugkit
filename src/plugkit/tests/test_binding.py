@@ -48,6 +48,19 @@ class Greeter:
         return f"{self.prefix} {name}"
 
 
+class Timeouts:
+    """Holds reactive state. Still imports nothing: `reactive` is a parameter."""
+
+    def __init__(self, reactive, seconds=30):
+        self.seen = []
+        self.seconds = reactive.signal(seconds)
+        self._reactive = reactive
+        reactive.effect(lambda: self.seen.append(self.seconds.get()))
+
+    def follow(self, sink):
+        self._reactive.effect(lambda: sink.append(self.seconds.get()))
+
+
 class GreeterDeps(Protocol):
     database: Database
     cache: Cache
@@ -202,6 +215,55 @@ async def test_binding_works_without_reactive_mounted():
     root.config.set("db.dsn", "two://")
     await settle()
     assert root.database.dsn == "one://", "rebuilt without ReactiveService mounted"
+
+
+async def test_a_plain_component_registers_fiber_owned_effects():
+    """Reactive state reaches a plain class without marking the class up.
+
+    `reactive` arrives as an ordinary constructor argument, and what the class
+    stores is a view already addressed to the binding's fiber — so an effect it
+    registers later, from a method, is owned by that fiber too. Unload stops
+    both, and registering afterwards raises instead of leaking.
+    """
+    root = Context()
+    await root.plugin(ReactiveService)
+    fiber = await root.plugin(provide(Timeouts, "timeouts", needs=["reactive"]))
+    await settle()
+
+    timeouts = root.timeouts
+    assert timeouts.seen == [30], "the effect made in __init__ did not run"
+
+    late = []
+    timeouts.follow(late)
+    timeouts.seconds.set(45)
+    await settle()
+    assert timeouts.seen == [30, 45]
+    assert late == [30, 45], "an effect registered from a method did not follow"
+
+    await fiber.dispose()
+    await settle()
+    timeouts.seconds.set(99)
+    await settle()
+    assert timeouts.seen == [30, 45], "an effect outlived the fiber that owned it"
+    assert late == [30, 45], "the method's effect outlived the fiber"
+
+    with pytest.raises(Exception, match="inactive"):
+        timeouts.follow([])
+
+
+def test_a_component_holding_signals_still_needs_no_kernel():
+    """The stand-in for `reactive` in a unit test is two lines of stdlib."""
+    import types
+
+    from plugkit import Effect, Signal
+
+    seen = []
+    timeouts = Timeouts(types.SimpleNamespace(signal=Signal, effect=Effect), seconds=5)
+    timeouts.follow(seen)
+    timeouts.seconds.set(7)
+
+    assert timeouts.seen == [5, 7]
+    assert seen == [5, 7]
 
 
 async def test_a_context_manager_component_is_entered():

@@ -53,19 +53,14 @@ def summary(name: str) -> str:
 
 
 def rows(names: list[str]) -> str:
-    lines = []
-    for name in names:
-        code = f"<code>{name}</code>"
-        sig = ""
-        obj = getattr(plugkit, name)
-        if callable(obj):
-            try:
-                sig = str(inspect.signature(obj)).strip("()")
-            except (ValueError, TypeError):
-                sig = ""
-            if sig:
-                code = f"<code>{name}({sig})</code>"
-        lines.append(f"| `{name}` | {summary(name)} |")
+    """A pipe table, header row included.
+
+    The header row is not decoration: without it pandoc does not see a table at
+    all, and the published page rendered every row as a line of prose with
+    literal `|` characters in it for as long as this function omitted it.
+    """
+    lines = ["| Name | What it is |", "|---|---|"]
+    lines += [f"| `{name}` | {summary(name)} |" for name in names]
     return "\n".join(lines)
 
 

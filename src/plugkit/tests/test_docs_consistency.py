@@ -72,23 +72,18 @@ def _python_blocks(text: str) -> list[str]:
     return blocks
 
 
-#: Generated, not hand-authored: `guide-one.qmd` concatenates the eight guide
-#: chapters into one page. Its internal chapter cross-links (`02-popo-components.qmd`)
-#: resolve relative to `guide/` when quarto renders them into the single page, so
-#: the link checker would read them as broken repo paths. It has no own truth to
-#: hold to the code, so it is not a CURRENT doc.
-_GENERATED_DOCS = {"docs/guide-one.qmd"}
-
-
 def _current_docs() -> list[Path]:
-    """Docs that describe the present. A stale count here is a defect."""
+    """Docs that describe the present. A stale count here is a defect.
+
+    Nothing is exempt. The one-page build used to be a generated `.qmd` that had
+    to be skipped, because its chapter cross-links resolved relative to `guide/`
+    and read here as broken repo paths; it is `docs/plugkit-guide.html` now, and
+    a `.html` file is not markdown truth to begin with.
+    """
     files = [REPO / name for name in ("README.md", "CLAUDE.md", "CHANGELOG.md")]
     for pattern in ("docs/*.qmd", "docs/guide/*.qmd", "docs/design/*", "docs/steering/*"):
         files += sorted(REPO.glob(pattern))
-    return [
-        f for f in files
-        if f.is_file() and f.suffix in (".md", ".qmd") and _rel(f) not in _GENERATED_DOCS
-    ]
+    return [f for f in files if f.is_file() and f.suffix in (".md", ".qmd")]
 
 
 def _archival_docs() -> list[Path]:
@@ -344,4 +339,31 @@ def test_api_reference_agrees_with_all():
     )
     assert not extra, (
         "names on the API reference that __all__ does not export:\n  " + "\n  ".join(extra)
+    )
+
+
+# ── I7: the one-page guide is rebuilt when a chapter is ──────────────────
+
+
+def test_the_one_page_guide_holds_every_chapter():
+    """`docs/plugkit-guide.html` is generated; a new chapter has to reach it.
+
+    The hand-made page it replaced went stale the day chapter 08 was written: it
+    still announced eight chapters and still linked a design doc under its old
+    `.md` name. A generated artifact that is simply never rebuilt breaks nothing
+    and says nothing, so this is what notices.
+
+    Rebuild with `uv run --with markdown --with pygments python scripts/build-guide.py`.
+    """
+    page = (REPO / "docs/plugkit-guide.html").read_text(encoding="utf-8")
+    missing = []
+    for chapter in sorted(REPO.glob("docs/guide/*.qmd")):
+        title = re.search(r'^title:\s*"(.*)"', chapter.read_text(encoding="utf-8"), re.M)
+        if f'id="ch-{chapter.name[:2]}"' not in page:
+            missing.append(f"{_rel(chapter)} has no section on the page")
+        elif title and title.group(1) not in page:
+            missing.append(f"{_rel(chapter)} is on the page under an older title")
+    assert not missing, (
+        "the one-page guide is out of date -- rerun scripts/build-guide.py:\n  "
+        + "\n  ".join(missing)
     )

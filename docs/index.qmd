@@ -45,6 +45,10 @@ root.greeter.hello("world")          # "hello world"
 | [Supervision](guide/08-supervision.qmd) | what to do about `FAILED` |
 | [API reference](api-reference.qmd) | every public name in one line |
 
+Every chapter and the API reference also exist as
+[one self-contained page](plugkit-guide.html) — one file, no assets, readable
+offline.
+
 ## Before you adopt it
 
 plugkit ships fewer features than `dependency-injector`, `pluggy` or `iPOPO`. It

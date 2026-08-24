@@ -69,6 +69,15 @@ the harness tree. Every README and guide example is executed by the suite,
 `test_docs_consistency.py` checks the claims that are not code, and
 `test_typing.py` runs pyright over the typed-context patterns.
 
+### Documentation
+
+The guide also ships as one self-contained page, `docs/plugkit-guide.html`,
+generated from the chapters by `scripts/build-guide.py` — replacing two
+divergent one-page builds, one of which was hand-made and had gone stale. The
+API reference emits real tables; without a header row pandoc rendered every row
+as prose with literal `|` in it. Two design notes added: signals versus plain
+objects, and what is worth borrowing from a DI container.
+
 ### Requires
 
 Python 3.13+, for `typing.get_protocol_members`. Optional extras: `config`

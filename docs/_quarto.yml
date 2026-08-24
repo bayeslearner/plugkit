@@ -47,6 +47,10 @@ website:
             href: design/what-it-does-not-replace.qmd
           - text: "Why not build on iPOPO"
             href: design/why-not-ipopo.qmd
+          - text: "Signals and plain objects"
+            href: design/signals-and-plain-objects.qmd
+          - text: "What to borrow from a DI container"
+            href: design/what-to-borrow-from-di-containers.qmd
           - text: "Pillars"
             href: steering/pillars.md
       - text: "GitHub"

@@ -9,6 +9,8 @@ the suite will flag the drift.
 
 ## The kernel
 
+| Name | What it is |
+|---|---|
 | `Context` | A dependency-injection context. |
 | `Service` | Base class for cordis services. |
 | `Fiber` | One mounted plugin, plus everything it registered. The unit of lifetime. |
@@ -18,6 +20,8 @@ the suite will flag the drift.
 
 ## Binding
 
+| Name | What it is |
+|---|---|
 | `provide` | Wrap a plain class or factory as a plugin that registers one service. |
 | `plugin` | Mark a function as a plugin, and say what it needs. |
 | `bind` | Several `provide()` results at once, for a composition root. |
@@ -26,6 +30,8 @@ the suite will flag the drift.
 
 ## Signals
 
+| Name | What it is |
+|---|---|
 | `Signal` | Reactive value container. |
 | `Computed` | Derived reactive value. Caches result. Recomputes lazily when deps change. |
 | `Effect` | Reactive side effect. Re-runs when tracked dependencies change. |
@@ -34,6 +40,8 @@ the suite will flag the drift.
 
 ## Shipped services
 
+| Name | What it is |
+|---|---|
 | `ConfigService` | Provides `ctx.config`. |
 | `PointsService` | Provides `ctx.points`. |
 | `describe` | A plain, JSON-serialisable snapshot of the running system. |
@@ -49,6 +57,8 @@ the suite will flag the drift.
 
 ## Tool pipeline
 
+| Name | What it is |
+|---|---|
 | `Tool` | A convenience shape. Any object with these attributes also works. |
 | `ToolExecution` | One call, frozen. Handed to every stage. |
 | `ToolResult` | A tool call's outcome: whether it succeeded, what it returned or errored. |
@@ -60,6 +70,8 @@ the suite will flag the drift.
 
 ## Errors
 
+| Name | What it is |
+|---|---|
 | `CordisError` | Base error carrying a symbolic cordis code. |
 | `ValidationError` | Inappropriate argument type. |
 | `AggregateError` | Python's answer to `AggregateError` — raised by `ctx.parallel()`. |
