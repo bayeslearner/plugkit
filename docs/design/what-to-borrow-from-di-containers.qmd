@@ -29,12 +29,10 @@ any price.
 
 Nothing on this list is worth building twice.
 
-## Worth shipping, in this order
+## Not a borrow: async construction
 
-### 1. Async construction — this one is a defect, not a wish
-
-`dependency-injector` has `Coroutine` and async `Resource`. plugkit has neither,
-and the way it lacks them is the problem:
+There is a real problem here, and `dependency-injector` is the wrong place to
+look for its answer. The problem:
 
 ```python
 async def connect(dsn="..."):        # asyncpg, httpx, aiobotocore — the normal shape
@@ -44,18 +42,27 @@ await root.plugin(provide(connect, "db"))
 root.db          # <coroutine object connect> — and a RuntimeWarning, nothing else
 ```
 
-The service registers successfully and is a coroutine object. Every dependent
-gets it, nothing raises, and the failure appears later as an attribute error on
-something that looked constructed.
+The service registers, the fiber goes `ACTIVE`, `describe()` reports a healthy
+system, and the only signal is a warning about a coroutine nobody awaited.
 
-This is already half-solved next door: `_setup_teardown` refuses an async context
-manager with a message naming the fix, precisely so it cannot fail quietly, and
-the kernel already awaits an awaitable returned from a plugin's `apply`
-(`src/plugkit/cordis/fiber.py`). What is missing is `provide()` awaiting its
-factory. The smallest change on this page and the only one that closes a way to
-be silently wrong.
+But the reference has an answer already, and it is not `Coroutine` providers. In
+Cordis a service registers itself **synchronously**, from its constructor
+(`vendor/cordis/src/service.ts`) — a JavaScript constructor cannot be async, so
+the case above is unreachable there — and anything needing an await goes in the
+init hook, which the fiber awaits (`fiber.ts:257`). Dependents are not released
+until it settles; the vendored `test_pending_inject` is that guarantee. DSH's own
+services do exactly this: `host/webserver`, `session-persistence-sqlite`,
+`workspace` and `credentials-local` all define `async [Service.init]()`.
 
-### 2. `Selector` — the implementation named by a config value
+plugkit already implements that hook as `__cordis_init__`, for `Service` classes.
+What is unresolved is how a *plain* component bound with `provide()` reaches it,
+since a plain class has no kernel symbol to hang it on. That is a design question
+with an upstream shape to match, not a feature to import from a container, and it
+belongs in a spec rather than on this page.
+
+## Worth shipping, in this order
+
+### 1. `Selector` — the implementation named by a config value
 
 ```python
 provide_selected("database", key="db.kind", options={"pg": PostgresDatabase, "sqlite": SqliteDatabase})
@@ -68,7 +75,7 @@ than in a container: the losing implementation is not just unused, it is
 — and the machinery to do it is the config-watch restart `provide()` already
 performs. A container cannot make that offer, because it has no lifetime to end.
 
-### 3. `Factory` — promoted from example to shipped
+### 2. `Factory` — promoted from example to shipped
 
 `plugkit.examples.alternative_binding.provide_factory` already exists and already
 has tests: it registers a maker instead of an instance, and — the part
