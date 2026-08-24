@@ -278,6 +278,8 @@ def _make_guard(ctx, dispose: Callable):
 
 
 class Fiber:
+    """One mounted plugin, plus everything it registered. The unit of lifetime."""
+
     uid: Optional[int]
     config: Any
     state: FiberState = FiberState.PENDING

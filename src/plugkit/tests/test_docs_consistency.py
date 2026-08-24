@@ -317,3 +317,31 @@ def test_guide_snippets_import_what_they_name():
     assert not incomplete, (
         "guide code that cannot be run as printed:\n  " + "\n  ".join(incomplete)
     )
+
+
+# ── I5: the API reference covers __all__ ─────────────────────────────────
+
+
+def test_api_reference_agrees_with_all():
+    """A public name missing from `docs/api-reference.qmd` is undocumentable drift.
+
+    The page is generated from `__all__` (see `scripts/build-api-reference.py`), so
+    this is the guard that a hand-edit -- or a name added to `__all__` without
+    regenerating -- does not silently desync the reference from the surface.
+    """
+    page = (REPO / "docs/api-reference.qmd").read_text(encoding="utf-8")
+    on_page = {
+        row.split("|")[1].strip()  # `` `name` ``
+        for row in page.splitlines()
+        if row.startswith("| `")
+    }
+    on_page = {name.strip("`") for name in on_page}
+    exports = _plugkit_exports()
+    missing = sorted(exports - on_page)
+    extra = sorted(on_page - exports)
+    assert not missing, (
+        "names exported but missing from the API reference:\n  " + "\n  ".join(missing)
+    )
+    assert not extra, (
+        "names on the API reference that __all__ does not export:\n  " + "\n  ".join(extra)
+    )

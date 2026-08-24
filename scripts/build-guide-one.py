@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Concatenate the 8 guide chapters into one .qmd.
+"""Concatenate the guide chapters into one .qmd.
 
 Rendering `docs/guide-one.qmd` with quarto makes a single self-contained
 bright HTML page (`guide-one.html`) combining every chapter, with the mermaid
@@ -24,11 +24,12 @@ ORDER = [
     "05-config-and-reactivity.qmd",
     "06-composition-from-a-file.qmd",
     "07-testing.qmd",
+    "08-supervision.qmd",
 ]
 
 FRONTMATTER = """---
 title: "plugkit — the whole guide"
-subtitle: "All eight chapters, one bright page"
+subtitle: "Every chapter, one bright page"
 format:
   html:
     theme:
@@ -58,10 +59,12 @@ def main() -> None:
     content = FRONTMATTER + "\n\n" + "\n\n".join(bodies) + "\n"
     OUT.write_text(content)
 
-    # Self-check: the page must hold all eight chapters and the bright theme.
-    for name in ORDER:
-        if name not in content:
-            raise SystemExit(f"missing chapter {name}")
+    # Self-check: every chapter in ORDER contributes a non-empty body, and the
+    # bright theme is wired. `len(bodies)` is the count the rest of the script
+    # and the subtitle must agree with.
+    missing = [name for name, body in zip(ORDER, bodies) if not body]
+    if missing:
+        raise SystemExit(f"empty chapter(s): {missing}")
     if "theme-light.scss" not in FRONTMATTER:
         raise SystemExit("bright theme not wired")
     print(f"wrote {OUT} ({len(content)} chars, {len(bodies)} chapters)")

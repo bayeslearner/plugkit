@@ -99,6 +99,8 @@ class ToolExecution:
 
 @dataclass
 class ToolResult:
+    """A tool call's outcome: whether it succeeded, what it returned or errored."""
+
     ok: bool
     value: Any = None
     error: dict | None = None
@@ -113,16 +115,20 @@ class ToolResult:
 
 @dataclass(frozen=True)
 class Allow:
-    pass
+    """Stage 2/3: the tool call may proceed."""
 
 
 @dataclass(frozen=True)
 class Deny:
+    """Stage 2/3: reject the call before it runs, with a reason."""
+
     reason: str
 
 
 @dataclass(frozen=True)
 class Ask:
+    """Stage 2/3: defer to a human, optionally stating why."""
+
     reason: str | None = None
 
 

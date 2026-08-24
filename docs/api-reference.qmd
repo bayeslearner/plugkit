@@ -1,0 +1,66 @@
+---
+title: "API reference"
+subtitle: "Every public name in one line — the signatures the guide uses"
+---
+
+This page is generated from `plugkit.__all__` and each name's one-line
+docstring by `scripts/build-api-reference.py`. If you edit it by hand,
+the suite will flag the drift.
+
+## The kernel
+
+| `Context` | A dependency-injection context. |
+| `Service` | Base class for cordis services. |
+| `Fiber` | One mounted plugin, plus everything it registered. The unit of lifetime. |
+| `FiberState` | Enum where members are also (and must be) ints |
+| `Inject` | `@Inject('foo')` / `@Inject('foo', config)` decorator. |
+| `this_` | The carrier of the dispatch currently running, or None. |
+
+## Binding
+
+| `provide` | Wrap a plain class or factory as a plugin that registers one service. |
+| `plugin` | Mark a function as a plugin, and say what it needs. |
+| `bind` | Several `provide()` results at once, for a composition root. |
+| `snake_case` | `HTTPClient` -> `http_client`. |
+| `CONTEXT_MEMBERS` | Build an immutable unordered collection of unique elements. |
+
+## Signals
+
+| `Signal` | Reactive value container. |
+| `Computed` | Derived reactive value. Caches result. Recomputes lazily when deps change. |
+| `Effect` | Reactive side effect. Re-runs when tracked dependencies change. |
+| `batch` | Group signal changes. Effects fire once when the batch ends. |
+| `is_stale` | Has a newer run been scheduled while *the currently running effect's* |
+
+## Shipped services
+
+| `ConfigService` | Provides `ctx.config`. |
+| `PointsService` | Provides `ctx.points`. |
+| `describe` | A plain, JSON-serialisable snapshot of the running system. |
+| `format_tree` | Render a snapshot as a readable tree. |
+| `DIAGNOSTICS` | the extension point name `describe()` reads for diagnostics |
+| `Contribution` | One plugin's entry in a point. |
+| `FileLoader` | Provides `ctx.loader`. Resolves plugin names as Python module paths. |
+| `load_app` | Mount `FileLoader` and load `path`. Returns the loader. |
+| `ReactiveService` | Provides `ctx.reactive`. Mount it once; every plugin can then use it. |
+| `SupervisorService` | Provides `ctx.supervisor`. |
+| `ToolsService` | Provides `ctx.tools`. |
+| `timeout_policy` | Reference stage-3 plugin: enforce each tool's own `timeout_s`. |
+
+## Tool pipeline
+
+| `Tool` | A convenience shape. Any object with these attributes also works. |
+| `ToolExecution` | One call, frozen. Handed to every stage. |
+| `ToolResult` | A tool call's outcome: whether it succeeded, what it returned or errored. |
+| `Allow` | Stage 2/3: the tool call may proceed. |
+| `Deny` | Stage 2/3: reject the call before it runs, with a reason. |
+| `Ask` | Stage 2/3: defer to a human, optionally stating why. |
+| `Accept` | Stage 4: keep the result, optionally replacing its value. |
+| `Block` | Stage 4: reject the result and give the caller feedback instead. |
+
+## Errors
+
+| `CordisError` | Base error carrying a symbolic cordis code. |
+| `ValidationError` | Inappropriate argument type. |
+| `AggregateError` | Python's answer to `AggregateError` — raised by `ctx.parallel()`. |
+

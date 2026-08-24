@@ -255,7 +255,8 @@ that changes.
 
 `FAILED` is also what `SupervisorService` watches. Mounting it gives failed fibers
 a restart strategy — `one_for_one`, `one_for_all` or `rest_for_one`, with backoff
-— built on this state and nothing else.
+— built on this state and nothing else. The whole [supervision chapter](08-supervision.qmd)
+teaches what to do about `FAILED`.
 :::
 
 ## Next

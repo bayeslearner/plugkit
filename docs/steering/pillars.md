@@ -22,7 +22,7 @@ adopt.
 | **Kernel** | 🟢 strong | The vendored suite, 17 conformance assertions, and one file per feature, all green [src:src/plugkit/tests/] |
 | **Adoptability** | 🟢 strong | `binding.provide()` keeps components POPO; `test_component_needs_no_kernel_at_all` is the guard [src:src/plugkit/tests/test_binding.py] |
 | **Conformance** | 🟡 partial | 17 assertions cover the load-bearing semantics. Of DeepSeek Harness's 58 service keys, one is implemented (`ctx.tools`) [src:src/plugkit/services/tools.py] |
-| **Teaching** | 🟡 partial | The guide runs from why it exists to testing, every example executed by `test_guide_examples.py` and `test_readme_examples.py`, and `test_docs_consistency.py` holds each page to importing what it names [src:src/plugkit/tests/test_docs_consistency.py]. `ctx.supervisor` ships with no chapter, and there is no API reference page |
+| **Teaching** | 🟢 strong | The guide runs from why it exists through supervision, every example executed by `test_guide_examples.py` and `test_readme_examples.py`, and `test_docs_consistency.py` holds each page to importing what it names and the API reference to `__all__` [src:src/plugkit/tests/test_docs_consistency.py] |
 | **Packaging** | 🟡 partial | One package, `plugkit` 0.1.0, with honest `config`/`hmr` extras. Unreleased; the PyPI name is claimed but nothing is published. The vendored kernel is a fork, not a dependency [src:src/plugkit/VENDORED.md] |
 
 ## The honest read
@@ -35,7 +35,9 @@ steps and the one decision left are written down in `docs/history/`.
 **Teaching moved from strong to partial, on measurement rather than on new
 damage.** Reading every page against the code found a shipped service with no
 chapter and thirteen snippets that could not be run as printed. The snippets are
-fixed and now checked; the missing chapter is a sprint of its own.
+fixed and now checked. The supervision chapter (spec 06) closed that gap: the
+guide now runs to supervision, and an API-reference page generated from `__all__`
+and docstrings holds the public surface to what ships.
 
 **Conformance is a ceiling, not a gap.** The assertion count is the right number
 for what exists. It grows as services are added, not before, and

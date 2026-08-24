@@ -4,6 +4,7 @@ project:
   render:
     - index.qmd
     - guide/*.qmd
+    - api-reference.qmd
     - design/*.qmd
     - steering/*.md
 
@@ -32,6 +33,10 @@ website:
             href: guide/06-composition-from-a-file.qmd
           - text: "Testing"
             href: guide/07-testing.qmd
+          - text: "Supervision"
+            href: guide/08-supervision.qmd
+          - text: "API reference"
+            href: api-reference.qmd
       - text: "Design"
         menu:
           - text: "Kernel architecture"
@@ -58,6 +63,8 @@ website:
         - guide/05-config-and-reactivity.qmd
         - guide/06-composition-from-a-file.qmd
         - guide/07-testing.qmd
+        - guide/08-supervision.qmd
+        - api-reference.qmd
 
 format:
   html:

@@ -13,6 +13,7 @@ from plugkit import (
     FiberState,
     PointsService,
     Service,
+    SupervisorService,
     plugin,
     provide,
 )
@@ -302,3 +303,29 @@ async def test_the_diagnostics_example_from_the_chapter():
     await settle()
 
     assert describe(root)["diagnostics"]["database"] == {"pool_size": 4}
+
+
+# ── chapter 8: supervision ───────────────────────────────────────────────
+
+
+async def test_a_supervised_transient_failure_recovers():
+    """The chapter's 'Try it' block: a flaky plugin restarts under supervision."""
+    state = {"n": 0}
+
+    def flaky(ctx, config=None):
+        state["n"] += 1
+        if state["n"] <= 2:
+            raise RuntimeError("not ready")
+
+    root = Context()
+    await root.plugin(SupervisorService)
+    fiber = root.plugin(flaky)   # not awaited: a failing mount rethrows
+    await settle()
+    assert fiber.state is FiberState.FAILED
+
+    root.supervisor.supervise(fiber, base_delay=0, backoff="constant")
+    fiber.restart()              # kick it so the next failure is observed under policy
+    await settle()
+
+    assert state["n"] >= 3
+    assert fiber.state is FiberState.ACTIVE

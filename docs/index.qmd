@@ -42,6 +42,8 @@ root.greeter.hello("world")          # "hello world"
 | [Config and reactivity](guide/05-config-and-reactivity.qmd) | values that change while the program runs |
 | [Composition from a file](guide/06-composition-from-a-file.qmd) | an application as a YAML list |
 | [Testing](guide/07-testing.qmd) | what plain components buy you |
+| [Supervision](guide/08-supervision.qmd) | what to do about `FAILED` |
+| [API reference](api-reference.qmd) | every public name in one line |
 
 ## Before you adopt it
 
