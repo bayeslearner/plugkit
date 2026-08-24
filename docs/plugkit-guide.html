@@ -1016,6 +1016,18 @@ manager protocol, and calls whichever it finds on unload:</p>
 <span class="n">provide</span><span class="p">(</span><span class="n">Cache</span><span class="p">,</span> <span class="s2">&quot;cache&quot;</span><span class="p">,</span> <span class="n">close</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>       <span class="c1"># nothing to tear down</span>
 </code></pre></div>
 
+<h2 id="ch-02-construction-that-needs-an-await">Construction that needs an await</h2>
+<p>A factory may be <code>async def</code>, and it may return an async context manager — the
+shape most asyncio clients ship. <code>provide()</code> awaits it, and enters the manager:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">connect</span><span class="p">(</span><span class="n">dsn</span><span class="o">=</span><span class="s2">&quot;postgres://localhost/app&quot;</span><span class="p">):</span>
+    <span class="k">return</span> <span class="k">await</span> <span class="n">asyncpg</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">dsn</span><span class="p">)</span>
+
+<span class="n">provide</span><span class="p">(</span><span class="n">connect</span><span class="p">,</span> <span class="s2">&quot;database&quot;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;dsn&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;db.dsn&quot;</span><span class="p">,</span> <span class="s2">&quot;postgres://localhost/app&quot;</span><span class="p">)})</span>
+</code></pre></div>
+
+<p>The service is the connection, not the coroutine, and the plugin waiting on
+<code>database</code> waits exactly as it would for a synchronous one. On unload the same
+teardown rules apply, <code>aclose</code> and <code>__aexit__</code> included.</p>
 <h2 id="ch-02-a-ctx-your-type-checker-understands">A <code>ctx</code> your type checker understands</h2>
 <p>Cordis resolves by name only — <code>reflect.get(name: string)</code> is the whole lookup.
 Its code looks type-aware because TypeScript merges declarations into the shared

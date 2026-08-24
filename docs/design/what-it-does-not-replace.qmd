@@ -26,7 +26,7 @@ It is a container. plugkit is not, and does not try to be.
 | Wiring into functions | `@inject` with `Provide[...]` markers | none |
 | Container overriding for tests | ✅ mature | `ctx.config.override()`, config only |
 | Cython-compiled | ✅ | ❌ |
-| Async resource init and shutdown | ✅ | via a plugin's disposer |
+| Async resource init and shutdown | ✅ | ✅ awaited factories, `__aenter__`/`__aexit__`, and the fiber's disposer |
 | Lifetime ownership of side effects | ❌ | ✅ |
 
 For a fixed object graph it is fewer lines, synchronous, and better. plugkit's

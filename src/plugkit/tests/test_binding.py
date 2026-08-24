@@ -337,20 +337,82 @@ async def test_close_beats_the_context_manager_protocol():
     assert log == ["close"]
 
 
-async def test_an_async_only_context_manager_says_what_to_do():
-    """Entering needs an await, and apply is synchronous. Say so, don't guess."""
+async def test_an_async_factory_is_awaited():
+    """The service must be the connection, never the coroutine that makes one.
+
+    `async def connect(...)` is the shape every asyncio client ships. Registering
+    the coroutine object instead succeeds, activates the fiber, and reports
+    nothing but a RuntimeWarning — which is the exact failure this project cites
+    as reason #1 not to build on iPOPO. It cannot be allowed to be ours.
+    """
+
+    class Connection:
+        def __init__(self, dsn):
+            self.dsn = dsn
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    async def connect(dsn="sqlite://"):
+        await asyncio.sleep(0)
+        return Connection(dsn)
+
+    root = Context()
+    fiber = await root.plugin(provide(connect, "db"))
+    await settle()
+
+    assert isinstance(root.db, Connection), f"registered a {type(root.db).__name__}"
+    assert root.db.dsn == "sqlite://"
+
+    connection = root.db
+    await fiber.dispose()
+    await settle()
+    assert connection.closed is True, "an awaited component skipped its teardown"
+
+
+async def test_an_async_context_manager_is_entered_and_exited():
+    """`__aexit__` on something never entered is the same broken promise as `__exit__`."""
 
     class AsyncPool:
+        def __init__(self):
+            self.entered = False
+            self.exited = False
+
         async def __aenter__(self):
+            self.entered = True
             return self
 
         async def __aexit__(self, *exc):
-            pass
+            self.exited = True
 
     root = Context()
-    fiber = root.plugin(provide(AsyncPool, "pool"))
-    with pytest.raises(TypeError, match="close="):
-        await fiber
+    fiber = await root.plugin(provide(AsyncPool, "pool"))
+    await settle()
+
+    pool = root.pool
+    assert pool.entered is True, "the async context manager was registered unentered"
+    assert pool.exited is False
+
+    await fiber.dispose()
+    await settle()
+    assert pool.exited is True
+
+
+async def test_an_async_component_injects_like_any_other():
+    """Waiting on an async-built service is the ordinary PENDING path, not a special case."""
+
+    async def make_database(dsn="async://"):
+        await asyncio.sleep(0)
+        return Database(dsn)
+
+    root = Context()
+    await root.plugin(provide(Greeter, "greeter", needs=["database"]))
+    await root.plugin(provide(make_database, "database"))
+    await settle()
+
+    assert root.greeter.database.dsn == "async://"
+    assert root.greeter.hello("world") == "hello world"
 
 
 async def test_mount_config_cannot_shadow_an_injected_service():

@@ -69,6 +69,16 @@ the harness tree. Every README and guide example is executed by the suite,
 `test_docs_consistency.py` checks the claims that are not code, and
 `test_typing.py` runs pyright over the typed-context patterns.
 
+### Fixed
+
+- `provide()` awaits an `async def` factory, and enters an async context
+  manager, registering what `__aenter__` returned with `__aexit__` as its
+  disposer. It used to register the coroutine object itself: the service
+  existed, the fiber went `ACTIVE`, and the only signal was a `RuntimeWarning`
+  about a coroutine that was never awaited — which is the failure this project
+  cites as reason #1 not to build on iPOPO, and which `binding.py`, the README
+  and `what-it-does-not-replace.qmd` all already claimed did not happen here.
+
 ### Documentation
 
 The guide also ships as one self-contained page, `docs/plugkit-guide.html`,
