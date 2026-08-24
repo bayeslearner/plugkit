@@ -1,0 +1,81 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - index.qmd
+    - guide/*.qmd
+    - design/*.qmd
+    - steering/*.md
+
+website:
+  title: "plugkit"
+  site-url: "https://bayeslearner.github.io/plugkit/"
+  repo-url: "https://github.com/bayeslearner/plugkit"
+  repo-actions: [edit, issue]
+  navbar:
+    left:
+      - text: "Guide"
+        menu:
+          - text: "Why plugkit exists"
+            href: guide/00-why.qmd
+          - text: "Your first plugin"
+            href: guide/01-first-plugin.qmd
+          - text: "Plain components"
+            href: guide/02-popo-components.qmd
+          - text: "Tools and permission"
+            href: guide/03-tools.qmd
+          - text: "Extension points"
+            href: guide/04-your-own-service.qmd
+          - text: "Config and reactivity"
+            href: guide/05-config-and-reactivity.qmd
+          - text: "Composition from a file"
+            href: guide/06-composition-from-a-file.qmd
+          - text: "Testing"
+            href: guide/07-testing.qmd
+      - text: "Design"
+        menu:
+          - text: "Kernel architecture"
+            href: design/kernel-architecture.qmd
+          - text: "The reactive engine"
+            href: design/reactive-engine.qmd
+          - text: "What it does not replace"
+            href: design/what-it-does-not-replace.qmd
+          - text: "Why not build on iPOPO"
+            href: design/why-not-ipopo.qmd
+          - text: "Pillars"
+            href: steering/pillars.md
+      - text: "GitHub"
+        href: https://github.com/bayeslearner/plugkit
+
+  sidebar:
+    - title: "Guide"
+      contents:
+        - guide/00-why.qmd
+        - guide/01-first-plugin.qmd
+        - guide/02-popo-components.qmd
+        - guide/03-tools.qmd
+        - guide/04-your-own-service.qmd
+        - guide/05-config-and-reactivity.qmd
+        - guide/06-composition-from-a-file.qmd
+        - guide/07-testing.qmd
+
+format:
+  html:
+    # Light is first, so it is the default and the toggle starts bright.
+    # Each bracket's .scss is compiled only for that theme, so the two colour
+    # files never fight for specificity. Shared layout is in theme-neutral.css.
+    theme:
+      light: [cosmo, theme-light.scss]
+      dark: [darkly, theme-dark.scss]
+    css:
+      - theme-neutral.css
+    code-copy: true
+    code-overflow: wrap
+    toc: true
+    toc-depth: 3
+    mermaid:
+      # `neutral` renders closest to the light palette before the CSS above
+      # takes over, so a diagram is not dark-on-white for the first paint.
+      theme: neutral
+    filters:
+      - present-mode

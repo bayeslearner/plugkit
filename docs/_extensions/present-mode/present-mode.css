@@ -1,0 +1,81 @@
+/* present-mode.css — distraction-free "present / teaching" view for docs sites.
+ * Pairs with present-mode.js (injects the button + Shift+P toggle → body.present-mode).
+ * Carries selectors for BOTH MkDocs Material (.md-*) and Quarto (#quarto-*, .navbar);
+ * the other platform's rules are simply inert on a given site, so one file serves both.
+ */
+
+/* ------------------------------ the toggle button ------------------------------ */
+#present-toggle {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 2000;
+  padding: 0.4rem 0.85rem;
+  border: none;
+  border-radius: 2rem;
+  /* Material exposes theme vars; Quarto/others fall back to a neutral indigo. */
+  background: var(--md-primary-fg-color, #4051b5);
+  color: var(--md-primary-bg-color, #fff);
+  font: 700 0.72rem/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  opacity: 0.82;
+  transition: opacity 0.15s ease;
+}
+#present-toggle:hover { opacity: 1; }
+#present-toggle .pt-off { display: none; }
+body.present-mode #present-toggle .pt-on { display: none; }
+body.present-mode #present-toggle .pt-off { display: inline; }
+
+/* ============================ MkDocs Material ============================ */
+body.present-mode .md-header,
+body.present-mode .md-tabs,
+body.present-mode .md-sidebar,
+body.present-mode .md-content__button { display: none !important; }
+
+body.present-mode .md-main__inner { margin-top: 0; }
+body.present-mode .md-content {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 4rem;
+}
+body.present-mode .md-typeset { font-size: 1.2rem; line-height: 1.8; }
+body.present-mode .md-typeset h1 { font-size: 2.4rem; }
+body.present-mode .md-typeset h2 { font-size: 1.75rem; margin-top: 1.6em; }
+body.present-mode .md-typeset h3 { font-size: 1.35rem; }
+body.present-mode .md-typeset pre > code { font-size: 0.92em; line-height: 1.55; }
+body.present-mode .md-typeset table { font-size: 1rem; }
+
+/* ============================ Quarto (Bootstrap) ============================ */
+body.present-mode #quarto-header,
+body.present-mode .navbar,
+body.present-mode #quarto-sidebar,
+body.present-mode #quarto-sidebar-glass,
+body.present-mode #quarto-margin-sidebar,
+body.present-mode .sidebar.margin-sidebar,
+body.present-mode #TOC,
+body.present-mode .nav-footer,
+body.present-mode #quarto-footer { display: none !important; }
+
+/* The content sits in a columns grid with the sidebars; collapse it and recenter. */
+body.present-mode #quarto-content,
+body.present-mode .page-columns { display: block !important; }
+body.present-mode #quarto-content > * { grid-column: unset !important; }
+body.present-mode #quarto-document-content,
+body.present-mode main.content,
+body.present-mode #quarto-content main {
+  max-width: 60rem !important;
+  margin: 0 auto !important;
+  float: none !important;
+  font-size: 1.2rem;
+  line-height: 1.8;
+}
+body.present-mode #quarto-document-content h1,
+body.present-mode #quarto-content main h1 { font-size: 2.4rem; }
+body.present-mode #quarto-document-content h2,
+body.present-mode #quarto-content main h2 { font-size: 1.75rem; margin-top: 1.6em; }
+body.present-mode #quarto-document-content h3,
+body.present-mode #quarto-content main h3 { font-size: 1.35rem; }
+body.present-mode #quarto-document-content pre code,
+body.present-mode #quarto-content main pre code { font-size: 0.95em; line-height: 1.5; }

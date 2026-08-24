@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "plugkit"
+version = "0.1.0"
+description = "A plugin kernel for Python: every registration returns its undo, and a fiber owns it"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "Kun Deng", email = "bayeslearner@gmail.com" }]
+keywords = ["plugin", "microkernel", "dependency-injection", "cordis", "reactive", "signals", "ioc"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+# The kernel has zero required dependencies. Everything below is an extra
+# for one of the shipped services, each of which degrades rather than fails.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/bayeslearner/plugkit"
+Documentation = "https://bayeslearner.github.io/plugkit/"
+Repository = "https://github.com/bayeslearner/plugkit"
+Issues = "https://github.com/bayeslearner/plugkit/issues"
+
+[project.optional-dependencies]
+# Platform providers
+providers = ["pyyaml>=6.0"]
+# Transport adapters
+rest = ["fastapi>=0.100", "uvicorn>=0.20"]
+mcp = []  # MCP SDK — add when pinned
+# 2.0: config loading (YAML/env/pydantic layering) — optional, degrades to dict+YAML
+config = ["dependency-injector>=4.41"]
+# 2.0: hot module replacement for the plugin loader
+hmr = ["watchdog>=4.0"]
+cli = ["click>=8.0"]
+# Observability
+tracing = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
+]
+# Example / development
+dev = [
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "fastapi>=0.100",
+    "click>=8.0",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "httpx>=0.24",  # for FastAPI ASGI integration tests
+    "dependency-injector>=4.41",  # 2.0 ConfigService
+    "watchdog>=4.0",  # 2.0 loader HMR
+]
+# Everything
+all = [
+    "plugkit[providers,rest,cli,tracing,config,hmr,dev]",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plugkit"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]

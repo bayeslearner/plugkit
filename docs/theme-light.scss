@@ -1,0 +1,297 @@
+/*-- scss:defaults --*/
+
+// Bootstrap variables, set before the theme compiles so the navbar, sidebar and
+// links inherit them instead of being overridden afterwards.
+$body-bg: #ffffff;
+$body-color: #1f2328;
+$link-color: #0969da;
+$code-color: #1f2328;
+$border-color: #d0d7de;
+
+/*-- scss:rules --*/
+
+/* plugkit docs — the light half, and the default.
+ *
+ * Quarto compiles a theme-bracket file only for the theme that names it, so
+ * these rules never load in dark mode. `theme-neutral.css` holds what both
+ * halves share: layout, spacing and shape. A colour here has a counterpart at
+ * the same place in `theme-dark.scss`; keep the two files in the same order so
+ * a missing pair is visible.
+ *
+ * Palette is GitHub Light: #ffffff page, #f6f8fa code, #0969da accent.
+ */
+
+/* ── Page body ─────────────────────────────────────────────────── */
+body {
+  background-color: #ffffff !important;
+  color: #1f2328 !important;
+}
+
+/* ── Code blocks: tinted against the white page, accent border ─── */
+div.sourceCode,
+pre.sourceCode {
+  background-color: #f6f8fa !important;
+  border: 1px solid #d0d7de !important;
+  border-left: 4px solid #0969da !important;
+}
+
+/* Inline code: subtle highlight */
+code:not(.sourceCode) {
+  background-color: #eff2f5 !important;
+  color: #1f2328 !important;
+}
+
+/* Code text colour: the line-wrapper spans.
+ * Quarto's own default here is #003B4F, which is legible on #f6f8fa — unlike in
+ * dark mode, where it is near-invisible and has to be overridden. It is set
+ * explicitly anyway so both halves state the same fact in the same place. */
+div.sourceCode code,
+pre.sourceCode code,
+pre > code.sourceCode > span,
+code.sourceCode > span,
+div.sourceCode pre.sourceCode {
+  color: #1f2328 !important;
+}
+
+/* ── Syntax highlighting tokens: light palette ─────────────────
+ * GitHub Light. Every class here has a dark counterpart in
+ * theme-dark.scss at the same position.
+ */
+pre > code.sourceCode > span > a:first-child::before {
+  color: #8c959f !important;  /* line number gutter */
+}
+code span.al { color: #cf222e !important; }                     /* alert */
+code span.an { color: #6e7781 !important; font-style: italic; } /* annotation */
+code span.at { color: #0550ae !important; }                     /* attribute */
+code span.bn { color: #0550ae !important; }                     /* base-N number */
+code span.bu { color: #953800 !important; }                     /* builtin */
+code span.cf { color: #cf222e !important; }                     /* control flow */
+code span.ch { color: #0a3069 !important; }                     /* char */
+code span.cn { color: #0550ae !important; }                     /* constant */
+code span.co { color: #6e7781 !important; font-style: italic; } /* comment */
+code span.cv { color: #6e7781 !important; font-style: italic; } /* comment var */
+code span.do { color: #6e7781 !important; font-style: italic; } /* docstring */
+code span.dt { color: #953800 !important; }                     /* data type */
+code span.dv { color: #0550ae !important; }                     /* decimal value */
+code span.er { color: #cf222e !important; font-weight: bold; }  /* error */
+code span.ex { color: #1f2328 !important; }                     /* extension */
+code span.fl { color: #0550ae !important; }                     /* float */
+code span.fu { color: #8250df !important; }                     /* function */
+code span.im { color: #cf222e !important; }                     /* import */
+code span.in { color: #6e7781 !important; font-style: italic; } /* information */
+code span.kw { color: #cf222e !important; }                     /* keyword */
+code span.op { color: #cf222e !important; }                     /* operator */
+code span.ot { color: #0550ae !important; }                     /* other */
+code span.pp { color: #8250df !important; }                     /* preprocessor */
+code span.sc { color: #0a3069 !important; }                     /* special char */
+code span.ss { color: #0a3069 !important; }                     /* special string */
+code span.st { color: #0a3069 !important; }                     /* string */
+code span.va { color: #953800 !important; }                     /* variable */
+code span.vs { color: #0a3069 !important; }                     /* verbatim string */
+code span.wa { color: #9a6700 !important; font-style: italic; } /* warning */
+code span.bi { color: #953800 !important; }                     /* builtin (Quarto variant) */
+
+/* ── ASCII art / pre blocks (non-code): distinct from body ──── */
+pre:not(.sourceCode) {
+  background-color: #f6f8fa !important;
+  color: #1f2328 !important;
+  border: 1px solid #d0d7de !important;
+  border-left: 4px solid #1a7f37 !important;
+}
+
+/* ── Mermaid diagrams ────────────────────────────────────────────
+ * One central place for ALL mermaid theming. Do NOT add inline
+ * %%{init: {'theme':...}}%% blocks in .qmd files — they fight these
+ * rules and produce inconsistent colours per-page (recurring bug).
+ */
+.mermaid {
+  background: #f6f8fa !important;
+  border: 1px solid #d0d7de !important;
+}
+/* All text-bearing elements */
+.mermaid text,
+.mermaid .nodeLabel,
+.mermaid .edgeLabel,
+.mermaid .label,
+.mermaid .cluster-label,
+.mermaid span,
+.mermaid foreignObject div {
+  color: #1f2328 !important;
+  fill: #1f2328 !important;
+}
+/* edgeLabel backgrounds (the little label-on-arrow bg) */
+.mermaid .edgeLabel,
+.mermaid .edgeLabel rect,
+.mermaid .edgeLabel foreignObject {
+  background-color: #f6f8fa !important;
+  fill: #f6f8fa !important;
+}
+.mermaid .edgeLabel .labelBkg {
+  fill: #f6f8fa !important;
+  background-color: #f6f8fa !important;
+  opacity: 1 !important;
+}
+
+/* ── Flowchart nodes ─────────────────────────────────────────────── */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node polygon,
+.mermaid .node ellipse,
+.mermaid .node path {
+  fill: #ffffff !important;
+  stroke: #0969da !important;
+  stroke-width: 2px !important;
+}
+.mermaid .edgePath .path,
+.mermaid .flowchart-link {
+  stroke: #57606a !important;
+  stroke-width: 2px !important;
+  fill: none !important;
+}
+.mermaid .arrowheadPath,
+.mermaid #arrowhead path,
+.mermaid marker path {
+  fill: #57606a !important;
+  stroke: #57606a !important;
+}
+
+/* ── Subgraph (cluster) ──────────────────────────────────────────── */
+.mermaid .cluster rect {
+  fill: #eaeef2 !important;
+  stroke: #0969da66 !important;
+  stroke-width: 2px !important;
+}
+.mermaid .cluster-label,
+.mermaid .cluster-label .nodeLabel,
+.mermaid .cluster-label foreignObject div {
+  color: #8250df !important;
+  fill: #8250df !important;
+}
+
+/* ── Sequence diagrams ───────────────────────────────────────────── */
+.mermaid .actor,
+.mermaid rect.actor {
+  fill: #ffffff !important;
+  stroke: #0969da !important;
+  stroke-width: 2px !important;
+}
+.mermaid text.actor,
+.mermaid .actor > tspan,
+.mermaid .actor-box text {
+  fill: #1f2328 !important;
+}
+.mermaid .actor-line,
+.mermaid line.actor-line {
+  stroke: #8c959f !important;
+  stroke-width: 1px !important;
+}
+.mermaid line.messageLine0,
+.mermaid line.messageLine1,
+.mermaid path.messageLine0,
+.mermaid path.messageLine1 {
+  stroke: #57606a !important;
+  stroke-width: 1.5px !important;
+  fill: none !important;
+}
+.mermaid .messageText,
+.mermaid text.messageText {
+  fill: #8250df !important;
+  stroke: none !important;
+  font-weight: 500 !important;
+}
+.mermaid .note,
+.mermaid rect.note {
+  fill: #fff8c5 !important;
+  stroke: #9a6700 !important;
+}
+.mermaid .noteText,
+.mermaid text.noteText,
+.mermaid .note text {
+  fill: #1f2328 !important;
+  stroke: none !important;
+}
+.mermaid .loopText,
+.mermaid text.loopText,
+.mermaid .loopLine {
+  fill: #9a6700 !important;
+  stroke: #9a6700 !important;
+}
+.mermaid .activation0,
+.mermaid .activation1,
+.mermaid .activation2 {
+  fill: #eaeef2 !important;
+  stroke: #0969da !important;
+}
+.mermaid .labelText,
+.mermaid text.labelText {
+  fill: #1f2328 !important;
+}
+
+/* ── Triptych + badges: colour only. Layout is in theme-neutral.css ── */
+.triptych .col-head {
+  color: #0969da;
+  border-bottom: 1px solid #d0d7de;
+}
+.cnum {
+  background: #0969da;
+  color: #ffffff !important;
+}
+.cnum-c { background: #1a7f37; }   /* consumer */
+.cnum-p { background: #8250df; }   /* provider */
+.cnum-k { background: #bc4c00; }   /* kernel */
+
+/* ── Callout blocks ────────────────────────────────────────────── */
+.callout {
+  background-color: #f6f8fa !important;
+}
+.callout-note {
+  border-left-color: #0969da !important;
+}
+.callout-tip {
+  border-left-color: #1a7f37 !important;
+}
+.callout-warning {
+  border-left-color: #9a6700 !important;
+}
+.callout-important {
+  border-left-color: #cf222e !important;
+}
+
+/* ── Tables: readable borders and header ───────────────────────── */
+.table, table {
+  border-color: #d0d7de !important;
+}
+.table thead th, table thead th {
+  border-bottom: 2px solid #0969da !important;
+  color: #1f2328 !important;
+  background-color: #f6f8fa !important;
+}
+.table td, table td {
+  border-color: #d0d7de !important;
+}
+.table tr:nth-child(even) td {
+  background-color: #f6f8fa !important;
+}
+
+/* ── Sidebar + navbar: slightly different shade ────────────────── */
+.sidebar, .quarto-sidebar {
+  background-color: #f6f8fa !important;
+}
+.navbar {
+  background-color: #f6f8fa !important;
+  border-bottom: 1px solid #d0d7de !important;
+}
+
+/* ── Level tags: colour only ───────────────────────────────────── */
+.l0 { background: #0969da14; color: #0969da; border: 1px solid #0969da; }
+.l1 { background: #8250df14; color: #8250df; border: 1px solid #8250df; }
+.l2 { background: #1a7f3714; color: #1a7f37; border: 1px solid #1a7f37; }
+.l3 { background: #9a670014; color: #9a6700; border: 1px solid #9a6700; }
+
+/* ── Links ──────────────────────────────────────────────────────── */
+a {
+  color: #0969da !important;
+}
+a:hover {
+  color: #0550ae !important;
+}

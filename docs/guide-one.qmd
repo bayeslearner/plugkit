@@ -1,0 +1,1813 @@
+---
+title: "plugkit — the whole guide"
+subtitle: "All eight chapters, one bright page"
+format:
+  html:
+    theme:
+      light: [cosmo, theme-light.scss]
+      dark: [darkly, theme-dark.scss]
+    css: theme-neutral.css
+    code-copy: true
+    code-overflow: wrap
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    mermaid:
+      theme: neutral
+---
+
+
+## The route that will not go away
+
+Below is a component in a hypothetical framework that gives components a
+lifecycle. The decorator names are invented for this example — iPOPO, Spring and
+OSGi's Declarative Services all spell them differently — but the shape is the one
+they share: declare what you provide, declare what you need, and write a pair of
+lifecycle methods.
+
+```python
+@component("http-server")
+@provides("IHttpServer")
+class HttpServer:
+    @lifecycle.activate
+    def activate(self):
+        self.app = FastAPI()
+        self.app.add_route("/health", self.health)
+
+    @lifecycle.deactivate
+    def deactivate(self):
+        self.app = None
+```
+
+A second component adds a route to that server:
+
+```python
+@component("admin-api")
+@requires(server="IHttpServer")
+class AdminApi:
+    @lifecycle.activate
+    def activate(self):
+        self.server.app.add_route("/admin", self.handle)
+```
+
+Unload `AdminApi`. The `/admin` route stays.
+
+Nothing recorded that `AdminApi` added it, so nothing removes it, and the route
+now points at a method on a component that no longer exists. The author of
+`AdminApi` can write a `deactivate` that removes it, and probably will, and will
+get it right today and wrong in six months when someone adds a second route and
+updates only one of the two lists.
+
+**This is not a missing feature. It is a missing invariant.** Nothing *owns* the
+undo of what a component did, so teardown is a promise each component makes
+individually and the framework cannot check it.
+
+Nor is it a defect in the invented framework: every real one named above behaves
+this way. [Why not build on iPOPO](../design/why-not-ipopo.qmd) runs this exact
+test against iPOPO, where the route survives `@Invalidate`.
+
+## The one idea in plugkit
+
+**Say the undo once, next to the thing it undoes, and let the lifetime own it.**
+
+```python
+def admin_api(ctx, config=None):
+    ctx.server.add_route("/admin", handle)
+    return lambda: ctx.server.remove_route("/admin")     # the undo
+
+admin_api.inject = ["server"]
+```
+
+**You write that lambda.** `add_route` does not return a disposer; `Server` is
+your class and no kernel can change what your methods return.
+
+The *fiber* — the object representing this plugin's lifetime — holds it and calls
+it on unload. It is a return value rather than a separate method, so there is
+nothing to forget, and it sits on the line below the call it reverses rather than
+in a `deactivate` twenty lines away.
+
+Unload happens for more reasons than you would handle by hand:
+
+- the `server` service was replaced by a different implementation
+- a config value the plugin was built from changed
+- a supervisor restarted the plugin after a failure
+- the whole composition is shutting down
+- the module was edited and hot-reloaded
+
+`try/finally` covers one. A `deactivate` method covers the ones its author
+thought of.
+
+Several undos: `ctx.effect` collects each and starts them in reverse
+registration order on unload.
+
+```python
+def admin_api(ctx, config=None):
+    def route(path, handler):
+        def install():
+            ctx.server.add_route(path, handler)
+            return lambda: ctx.server.remove_route(path)
+        return install
+
+    ctx.effect(route("/admin", admin_page))
+    ctx.effect(route("/health", health_check))
+```
+
+Everything else follows from that:
+
+**Hot reload is free.** Reloading a plugin is unload-then-apply. Unload is total,
+so reload is clean. There is no reload mechanism to implement.
+
+**Dependency-driven activation is free.** If a plugin can be stopped and started
+cleanly, then "stop it when its database goes away, start it when a database
+appears" is just calling those two operations at the right moment.
+
+**Swapping an implementation is free.** Replace the database service and every
+plugin holding a reference to the old one is rebuilt — not patched, rebuilt —
+so nobody is left holding a stale object.
+
+## Declarative versus imperative
+
+| | lifecycle-only frameworks | plugkit |
+|---|---|---|
+| A component is | a class wearing decorators | a plain class |
+| Registration happens | by the kernel, reading metadata | by the plugin, calling a method |
+| Teardown happens | in a `deactivate` you write | by calling the disposers you returned |
+| The unit of lifetime is | a component instance | a fiber |
+| Vocabulary size | 12 decorators | 4 concepts |
+
+A declarative framework asks you to *describe* your component and trusts itself
+to do the right thing. plugkit asks you to *do* things and hands you the undo each
+time, which is what lets it guarantee teardown instead of hoping for it.
+
+## "But now my class imports the framework"
+
+Correct, and that is the usual cost. A class covered in framework decorators
+cannot be constructed in a test without the framework, and cannot be moved into
+another project.
+
+plugkit separates the component from its registration:
+
+```python
+# services/greeter.py — imports nothing. Not a framework file.
+class Greeter:
+    def __init__(self, database, prefix="hello"):
+        self.database = database
+        self.prefix = prefix
+
+    def hello(self, name):
+        return f"{self.prefix} {name}"
+```
+
+```python
+# app.py — the only file that knows a kernel exists
+from plugkit import provide
+from services.greeter import Greeter
+
+greeter = provide(Greeter, "greeter", needs=["database"], config={"prefix": "greeter.prefix"})
+```
+
+`Greeter` is testable as `Greeter(database=FakeDB(), prefix="hi")`. No kernel, no
+container, no fixtures. That is [chapter 2](02-popo-components.qmd).
+
+## Where this design comes from
+
+The kernel is a port of **Cordis**, the plugin framework underneath
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — DeepSeek's
+open-source agent runtime, ~457,000 lines of TypeScript across ~219 packages,
+every one of them a Cordis plugin.
+
+plugkit matches Cordis's *semantics* — the same event names, the same dispatch
+modes, the same lifetime rules — so dsh's documentation stays a working
+specification for anything built here. Its 58-service catalogue, its five-stage
+tool pipeline and its file-system policy events all describe a substrate that
+means the same thing in this kernel.
+
+`src/plugkit/VENDORED.md` records which port was vendored, why, and what was
+changed in it.
+
+## Is this not just a DI container?
+
+For a fixed object graph, a container is better. `dependency-injector` wires the
+quick-start example in fewer lines, synchronously, with no strings.
+
+The difference appears when components come and go. Measured against
+`dependency-injector` 4.x:
+
+| | `dependency-injector` | plugkit |
+|---|---|---|
+| Request a service that does not exist | `AttributeError` | the dependent waits in `PENDING` until it appears |
+| Swap an implementation | the existing dependent keeps the old object until `full_reset()` | dependents are rebuilt automatically; replaced objects' `close()` runs |
+| Remove a service | no API for it | dependents stop, their `close()` runs, the name disappears |
+| Undo what a component registered elsewhere | not tracked | the fiber owns it |
+
+The first three rows are what a container does not attempt. The fourth is the
+one described above, and is the reason the other three are possible.
+
+## What to read next
+
+- [First plugin](01-first-plugin.qmd) — inject, effects, and watching unload be total
+- [Plain components](02-popo-components.qmd) — `provide()`, and a typed `ctx`
+- [Tools](03-tools.qmd) — the five-stage pipeline, and why a guard has no "allow"
+
+## A plugin is a function
+
+That is the whole contract. It takes a context, it does things, and it returns a
+disposer if it has anything to undo.
+
+```python
+def hello(ctx, config=None):
+    print("hello")
+```
+
+Mount it:
+
+```python
+import asyncio
+from plugkit import Context
+
+async def main():
+    root = Context()
+    await root.plugin(hello)
+
+asyncio.run(main())
+```
+
+`Context()` is the root — the top of the tree. `root.plugin(fn)` mounts your
+function and returns a **fiber**, the object representing that mounted plugin's
+lifetime.
+
+## `inject` decides when it runs
+
+Real plugins need things. Say what, and the kernel handles the rest:
+
+```python
+def greeter(ctx, config=None):
+    print(ctx.database.query("SELECT 1"))
+
+greeter.inject = ["database"]
+```
+
+Now `greeter` does not run when you mount it. It runs when a service named
+`database` exists — which might be immediately, might be later, might be never.
+
+::: {.callout-note}
+## You will not write this line for long
+
+`fn.inject = [...]` is the primitive spelling, used here because it shows the
+list plainly. It runs correctly and pyright rejects it — you cannot assign
+arbitrary attributes to a function. [Chapter 2](02-popo-components.qmd)
+introduces `@plugin`, which carries the list and can derive it from a Protocol,
+and `provide()`, which derives it from `needs`. Both are what you use in real
+code.
+:::
+
+```python
+async def main():
+    root = Context()
+    await root.plugin(greeter)      # nothing printed: no database yet
+    await root.plugin(provide(Database, "database"))
+    # greeter runs here
+```
+
+::: {.callout-important}
+## You cannot read a service you did not inject
+
+Reading a name absent from `inject` raises, even when the service exists:
+
+```python
+def sneaky(ctx, config=None):
+    ctx.database.query("...")     # AttributeError: cannot get property
+                                  # "database" without inject
+```
+
+This is not pedantry. The kernel decides when to reload your plugin by tracking
+the identity of the fibers providing your injected services. A dependency it
+cannot see is a dependency whose replacement will not reload you — so you would
+be left holding a stale object with no way to find out. Refusing the read is
+what makes the guarantee trustworthy.
+:::
+
+**Ordering does not matter.** Mount `greeter` first or `Database` first; the
+result is the same. There is no boot sequence to get right, because activation is
+driven by availability rather than by position.
+
+## Effects: registration with an undo
+
+Anything your plugin sets up, it should be able to tear down. Rather than
+remembering to, you register it as an **effect**:
+
+```python
+def watcher(ctx, config=None):
+    def start():
+        handle = open_file_watcher("/tmp")
+        return handle.stop            # <- the undo
+    ctx.effect(start, "file-watcher")
+```
+
+`ctx.effect(fn, label)` calls `fn` immediately. Whatever `fn` returns is kept by
+your fiber as the undo, and is called on unload.
+
+Disposers are **started in reverse registration order**, and then run
+concurrently (`fiber.py` uses `asyncio.gather`). With synchronous disposers that
+produces exact reverse order, because each finishes before the next begins. An
+**async** disposer yields at its first `await`, so a later one can finish first:
+completion order is decided by how long each takes, not by registration order.
+
+If two teardown steps must happen in sequence, put both in one disposer and
+`await` them there. Do not rely on ordering between separate effects.
+
+For a single teardown you can skip the ceremony and just return it:
+
+```python
+def watcher(ctx, config=None):
+    handle = open_file_watcher("/tmp")
+    return handle.stop
+```
+
+## Listening to events
+
+`ctx.on` registers a listener. It is an effect, so it comes with its own undo:
+
+```python
+def logger_plugin(ctx, config=None):
+    ctx.on("user/created", lambda user: print(f"new user: {user}"))
+```
+
+You do not need to unregister it. When `logger_plugin` unloads, the listener goes
+with it. Not "should go" — goes, because the fiber holds the disposer and calls
+it.
+
+A listener's parameters are exactly the event's arguments. If you need to know
+*who* dispatched an event, `this_()` gives you the carrier:
+
+```python
+from plugkit import this_
+
+def audit(ctx, config=None):
+    ctx.on("internal/status", lambda fiber, old: print(fiber.name, old, this_()))
+```
+
+## Watch unload be total
+
+Run this one. The behaviour is easier to believe from output than from prose:
+
+```python
+import asyncio
+from plugkit import Context, provide
+
+log = []
+
+class Database:
+    def close(self):
+        log.append("database closed")
+
+
+def feature(ctx, config=None):
+    log.append("feature started")
+
+    def acquire(n):
+        def start():
+            log.append(f"acquired {n}")
+            return lambda: log.append(f"released {n}")
+        return start
+
+    ctx.effect(acquire(1))
+    ctx.effect(acquire(2))
+    ctx.on("ping", lambda: log.append("pong"))
+    return lambda: log.append("feature stopped")
+
+feature.inject = ["database"]
+
+
+async def main():
+    root = Context()
+    fiber = await root.plugin(feature)
+    print(log)                      # []  <- gated on the database
+
+    db = await root.plugin(provide(Database, "database"))
+    await fiber                     # wait for `feature` itself to finish loading
+    print(log)                      # ['feature started', 'acquired 1', 'acquired 2']
+
+    root.emit("ping")
+    print(log[-1])                  # 'pong'
+
+    log.clear()
+    await db.dispose()              # take the database away
+    print(log)                      # ['feature stopped', 'released 2', 'released 1',
+                                    #  'database closed']
+    root.emit("ping")
+    print(log[-1])                  # still 'database closed' — the listener is gone
+
+asyncio.run(main())
+```
+
+The `await fiber` on line 6 is necessary. `await root.plugin(...)` waits for the
+plugin it mounted, not for other plugins that mount unblocked. When the database
+mount returns, `feature` is still `LOADING`. Awaiting its own fiber waits for it.
+
+`await db.dispose()` needs no equivalent, because dispose waits for the unload it
+cascades to dependents.
+
+Three things happened that nobody wrote code for:
+
+1. Disposing the **database** unloaded the **feature**, because the feature
+   declared it.
+2. The feature's effects released in reverse order — 2 before 1. Both are
+   synchronous here, so reverse order is exact.
+3. The feature's event listener stopped receiving events, without an
+   unregister call anywhere.
+
+## The six states
+
+A fiber is always in one of these. You rarely look, but knowing they exist makes
+the behaviour above stop feeling like magic:
+
+| State | Meaning |
+|---|---|
+| `PENDING` | mounted, waiting for an injected service |
+| `LOADING` | the plugin function is running |
+| `ACTIVE` | loaded, its services available to others |
+| `FAILED` | the plugin function raised |
+| `UNLOADING` | disposers are running |
+| `DISPOSED` | gone for good, cannot restart |
+
+Read the current state from the fiber:
+
+```python
+from plugkit import FiberState
+print(fiber.state is FiberState.ACTIVE)
+```
+
+::: {.callout-warning}
+## `await root.plugin(p)` re-raises a startup error
+
+If your plugin function raises, awaiting the mount re-raises it. To observe a
+failure rather than propagate it, don't await — check the state:
+
+```python
+fiber = root.plugin(might_fail)
+try:
+    await fiber
+except RuntimeError:
+    pass
+assert fiber.state is FiberState.FAILED
+```
+
+Awaiting waits for the load transition and then re-raises, so catching the
+exception leaves you with a settled fiber. Do not substitute
+`await asyncio.sleep(0)` — a failed load takes three ticks to reach `FAILED`,
+going through `UNLOADING` on the way, and a test that counts ticks breaks when
+that changes.
+
+`FAILED` is also what `SupervisorService` watches. Mounting it gives failed fibers
+a restart strategy — `one_for_one`, `one_for_all` or `rest_for_one`, with backoff
+— built on this state and nothing else.
+:::
+
+## Next
+
+[Plain components](02-popo-components.qmd) — how to keep your own classes free of
+all of this.
+
+## The problem with framework decorators
+
+Most Python DI frameworks ask you to mark up your classes:
+
+```python
+@ComponentFactory("greeter-factory")           # iPOPO
+@Provides("greeter.service")
+@Requires("_db", "database.service")
+class Greeter: ...
+```
+
+```python
+@inject                                        # dependency-injector
+def __init__(self, db: Database = Provide[Container.db]): ...
+```
+
+Both work. Both cost you the same three things:
+
+1. **Your class now imports the framework.** It cannot be moved to another
+   project without bringing the framework along.
+2. **You cannot construct it in a test.** `Greeter()` needs a kernel, a
+   container, or a fixture that stands one up.
+3. **The wiring is scattered.** To learn how the app fits together you read
+   every class, because each one declares its own part.
+
+plugkit's answer is to move the wiring out of the class.
+
+## `provide()`
+
+The component is a plain class with a normal constructor:
+
+```python
+# services/greeter.py — this file imports nothing from plugkit
+class Greeter:
+    def __init__(self, database, prefix="hello"):
+        self.database = database
+        self.prefix = prefix
+
+    def hello(self, name):
+        return f"{self.prefix} {name}"
+
+    def close(self):
+        self.database = None
+```
+
+One line elsewhere says how to wire it:
+
+```python
+# app.py — the only file that knows a kernel exists
+from plugkit import provide
+from services.greeter import Greeter
+
+greeter = provide(Greeter, "greeter", needs=["database"])
+await root.plugin(greeter)
+```
+
+`provide()` returns a plugin. When its dependencies exist it constructs
+`Greeter(database=<the database service>)`, registers the result under
+`greeter`, and arranges for `close()` on unload.
+
+And the test needs nothing:
+
+```python
+def test_greeting():
+    greeter = Greeter(database=FakeDB(), prefix="hi")
+    assert greeter.hello("world") == "hi world"
+```
+
+No kernel. No fixture. No `async`.
+
+## Naming the service — and why you must
+
+The second argument to `provide()` is the name the result is registered under:
+
+```python
+provide(Greeter, "greeter")
+```
+
+The second argument is required. There is no default, and that is deliberate,
+because the alternative caused exactly the confusion you might be having now.
+
+**Nothing here is type-based.** `needs=["database"]` does not mean "find me a
+`Database`". It means "the service registered under the string `database`". The
+class is never consulted. The link between provider and consumer is a string,
+written in two places:
+
+```python
+provide(PostgresDatabase, "database")            # registers under "database"
+provide(Greeter,  "greeter", needs=["database"]) # asks for "database"
+```
+
+Deriving the name from the class would break silently. Rename `Database` to
+`PostgresDatabase` and the service becomes `postgres_database`, so `Greeter`
+waits forever for a `database` that never arrives — with **no error**, because a
+plugin waiting on an absent service is indistinguishable from one that is not
+needed yet.
+
+Naming it yourself also pushes you toward the *role* rather than the
+implementation, which is what makes swapping possible:
+
+```python
+provide(PostgresDatabase, "database")     # today
+provide(SqliteDatabase,   "database")     # tomorrow — no dependent changes
+```
+
+### Two spellings for the same lookup
+
+Attribute access and subscript access resolve identically:
+
+```python
+root.database        # attribute
+root["database"]     # subscript — identical lookup, same rules
+"database" in root   # can this fiber read it?
+```
+
+The subscript form is the honest one: it puts the string on screen, so nobody
+reads it as type-based injection. It is also the only way to reach a service
+whose name is not a valid Python identifier — `root["db.primary"]`.
+
+### And `needs` is strings too
+
+`needs` maps a constructor keyword to a service name:
+
+```python
+needs=["database"]              # kwarg `database` gets service `database`
+needs={"db": "database"}        # kwarg `db`       gets service `database`
+```
+
+The list form is shorthand for "the constructor parameter and the service happen
+to share a name". When they differ, use the dict.
+
+## Saying what it needs
+
+Three forms, increasingly good:
+
+```python
+provide(Greeter, "greeter", needs=["database"])                  # kwarg name == service name
+provide(Greeter, "greeter", needs={"db": "database"})            # kwarg `db` gets `ctx.database`
+provide(Greeter, "greeter", needs=GreeterDeps)                   # a Protocol
+```
+
+The third removes a duplication the other two have.
+
+```python
+from typing import Protocol
+
+class GreeterDeps(Protocol):
+    database: Database
+    cache: Cache
+
+provide(Greeter, "greeter", needs=GreeterDeps)     # inject == ["cache", "database"]
+```
+
+`typing.get_protocol_members` (Python 3.13+) reads the member names straight off
+the Protocol. So the Protocol is simultaneously:
+
+- what the **kernel** injects at runtime, and
+- what your **type checker** validates the constructor against.
+
+One declaration, not a typed one and a string list that drift apart.
+
+## Config
+
+Constructor arguments can come from config instead of from services:
+
+```python
+provide(
+    Database,
+    "database",
+    config={"dsn": ("db.dsn", "sqlite://")},   # (key, default)
+)
+```
+
+That reads `ctx.config.get("db.dsn", "sqlite://")` and passes it as `dsn=`.
+
+**What happens when the config changes?** A constructor argument cannot be
+changed after construction, so the honest answer is a new object — and that is
+what happens, provided `ReactiveService` is mounted:
+
+```python
+from plugkit import ConfigService, ReactiveService
+
+await root.plugin(ReactiveService)
+await root.plugin(ConfigService, {"dict": {"db": {"dsn": "one://"}}})
+await root.plugin(provide(Database, "database", config={"dsn": ("db.dsn", "sqlite://")}))
+
+first = root.database                 # dsn == "one://"
+root.config.set("db.dsn", "two://")
+
+root.database is first                # False — rebuilt
+first.closed                          # True  — the old one was closed
+```
+
+Without `ReactiveService` mounted the binding still works; it just doesn't
+rebuild. Reacting to config is opt-in, and a minimal composition still boots.
+
+## Teardown
+
+`provide()` looks for `close`, `aclose`, `shutdown`, or `dispose`, or the context
+manager protocol, and calls whichever it finds on unload:
+
+```python
+provide(Server, "server", close="stop")     # name a different method
+provide(Cache, "cache", close=False)       # nothing to tear down
+```
+
+## A `ctx` your type checker understands
+
+Cordis resolves by name only — `reflect.get(name: string)` is the whole lookup.
+Its code looks type-aware because TypeScript merges declarations into the shared
+`Context` interface at compile time (`interface Context { tools: ToolRuntime }`),
+while the runtime still reads `store['tools']`.
+
+Python has no declaration merging. plugkit makes the same split with a Protocol
+on your own parameter: typed at check time, resolved by name at run time.
+
+`Context.__getattr__` returns `Any`, because which services exist depends on
+which plugins are mounted, and no type system knows that at import time.
+
+You do not need the *Context* typed. You need **your plugin's parameter** typed,
+and that is an ordinary Protocol:
+
+```python
+from typing import Any, Protocol
+from plugkit import plugin
+
+class Tools(Protocol):
+    def register(self, tool: Any) -> Any: ...
+
+class ReportDeps(Protocol):
+    database: Database
+    tools: Tools
+    def on(self, event: str, listener: Any) -> Any: ...   # a ctx method you call
+
+@plugin
+def report(ctx: ReportDeps, config=None) -> None:
+    rows = ctx.database.query("SELECT 1")   # typed: list[dict]
+    ctx.tools.register(...)
+    ctx.databse                             # pyright: Cannot access attribute
+```
+
+Verified against pyright, not asserted:
+
+| approach | result |
+|---|---|
+| pass a raw `Context` where a Protocol is wanted | **rejected** — `__getattr__ -> Any` does not satisfy protocol members |
+| annotate your own parameter with a Protocol | **works** — completion, typo detection |
+| `get[T](token: type[T]) -> T` token lookup | works |
+| `cast(MyDeps, ctx)` once at the top | works |
+
+`src/plugkit/tests/test_typing.py` runs pyright over these and fails if any
+stops being true.
+
+### Why `@plugin` and not `fn.inject = [...]`
+
+Cordis's own idiom is attribute assignment on a function. It runs fine and
+pyright rejects it — you cannot assign arbitrary attributes to a function. So
+`@plugin` returns a mapping instead, and with no explicit `inject` it derives the
+list from the Protocol on the first parameter, dropping the context's own methods
+(`on`, `effect`, `emit`, …) so they don't become phantom service dependencies.
+
+```python
+@plugin                       # inject derived from ReportDeps
+def report(ctx: ReportDeps, config=None): ...
+
+@plugin(inject=["database"])  # or be explicit
+def report(ctx, config=None): ...
+```
+
+## Other frameworks do this differently, and it is a real trade-off
+
+Not every Python DI framework uses strings.
+
+- **`injector`** and **`lagom`** resolve by **type annotation**:
+  `def __init__(self, db: Database)` and the container finds a `Database`.
+- **`dependency-injector`** uses a marker referencing a container attribute:
+  `db: Database = Provide[Container.db]`. The annotation is for your type
+  checker; the resolution is the marker.
+
+Type-based resolution has a genuine advantage plugkit does not have: **it is
+rename-safe and IDE-navigable.** Rename the class and your editor updates every
+reference. There is no string to typo.
+
+The cost is coupling. Asking for a `Database` by type means **importing**
+`Database`, so the consumer imports the provider. A plugin system needs the
+opposite: `admin_api` asks for `server` without knowing which package supplies
+it, or whether one is loaded at all. Late binding needs a late-bound key, and a
+string is one.
+
+There is a second reason here specifically: Cordis is string-keyed, and matching
+it is what keeps dsh's documentation valid for this kernel. A type-based layer
+could be built on top — `provide()` is one small module, and
+[a rival policy](#where-the-kernelplugin-line-falls) is an ordinary plugin — but
+it would be a second lookup mechanism, and two ways to find a service is worse
+than one imperfect way.
+
+What plugkit does to soften the cost:
+
+| The problem with strings | What helps |
+|---|---|
+| typos are silent — the plugin just never activates | declare `needs` as a Protocol; the same names type-check your constructor |
+| you cannot see what is available | `"database" in root`, and `root.registry` lists the mounted plugins |
+| it reads like type-based injection | `root["database"]`, which cannot be misread |
+| renaming a class silently rewires | it does not — the service name is explicit and separate from the class name |
+
+## Where the kernel/plugin line falls
+
+A fair question at this point: if components are plain and `provide()` is just a
+function, **is dependency injection itself a plugin?**
+
+Mostly yes. The split falls in a specific place.
+
+**Below the line — the kernel, and it cannot be a plugin.** Resolution (`ctx.database`
+finding the object) and lifetime (when your plugin runs, and unwinding it when a
+dependency leaves). You cannot mount a plugin that provides the ability to mount
+plugins.
+
+**Above the line — everything usually meant by "a DI framework".** Construction
+strategy, scopes, per-object lifetimes, config binding, the wiring format. All
+policy, and policy is a plugin.
+
+`provide()` is one such policy, and it reaches the kernel through a small,
+countable surface:
+
+| It calls | To |
+|---|---|
+| `ctx.provide(name, obj)` | register the constructed component |
+| `ctx.inject(names, child)` | watch config *only if* `ReactiveService` is mounted |
+| `ctx.fiber.restart()` | rebuild when a constructor argument's config key changes |
+| returning a disposer | hand teardown to the fiber |
+
+That is the whole contract. Anything that can call those can be a rival.
+`plugkit/examples/alternative_binding.py` is one:
+`provide_factory()` registers a *maker* instead of an instance, so every caller
+gets its own object — `Factory` rather than `Singleton`, in dependency-injector's
+vocabulary — and it needed no kernel change to exist.
+
+```python
+await root.plugin(provide_factory(RequestScope, "request"))
+a, b = root.request(), root.request()      # different objects
+```
+
+Instances it made are still owned by its fiber, so a per-call policy loses none
+of the teardown guarantee a per-instance one has.
+
+## Next
+
+[Tools](03-tools.qmd) — the five-stage pipeline, and why a guard has no "allow".
+
+`ctx.tools` is a registry of callable tools plus a pipeline every call passes
+through. It exists because of one requirement: **add a rule about everyone's
+tools without touching any of them.**
+
+That is the difference between a plugin system and a folder of modules. If a
+security rule means editing twenty tool implementations, you do not have
+composability, you have a convention.
+
+## A tool is a plain object
+
+Duck-typed. Anything with `name`, `description`, and `execute`:
+
+```python
+class SearchTool:                     # imports nothing from plugkit
+    name = "search"
+    description = "Search the index."
+    parameters = {"type": "object", "properties": {"q": {"type": "string"}}}
+
+    def __init__(self, index):
+        self.index = index
+
+    def execute(self, arguments, execution):
+        return self.index.query(arguments["q"])
+```
+
+Register it from a plugin:
+
+```python
+def search_plugin(ctx, config=None):
+    ctx.tools.register(SearchTool(index))
+search_plugin.inject = ["tools", "index"]
+```
+
+Mount the registry before anything registers into it. `ToolsService` holds its
+tools, guards and approvers in extension points, so it injects `points`:
+
+```python
+from plugkit import PointsService, ToolsService
+
+await root.plugin(PointsService)
+await root.plugin(ToolsService)
+await root.plugin(search_plugin)
+```
+
+`register` is an effect, so the tool disappears when `search_plugin` unloads.
+You do not unregister it.
+
+Call it:
+
+```python
+result = await root.tools.execute("search", {"q": "kernel"})
+result.ok        # True
+result.value     # whatever execute returned
+```
+
+`execute` never raises. Failures come back as a `ToolResult` with a code —
+`UNKNOWN_TOOL`, `DENIED`, `BLOCKED`, `TOOL_ERROR`, `TOOL_TIMEOUT`, `ABORTED`.
+
+## The five stages
+
+Each stage is an extension point. The list names the event, its dispatch mode,
+and what a listener may return.
+
+```
+1. tools/pre-execute    waterfall    Allow | Deny | Ask
+2. ctx.tools.guard()    monotonic    a reason string, or None
+3. tools/execute        waterfall    wraps the call
+4. tools/post-execute   waterfall    Accept | Block
+5. tools/result         emit         observe only
+```
+
+Picking one:
+
+| You want to | Stage | Why not the others |
+|---|---|---|
+| ask a human first | 1 | the only stage with an `Ask` |
+| a rule nobody can override | 2 | guards cannot allow, only deny |
+| a timeout, a retry, a duration metric | 3 | the only stage holding the whole call |
+| change or reject a result | 4 | stage 5 is immutable |
+| log, audit, count | 5 | doing it in 4 races other listeners |
+
+### Stage 1 — allow, deny, or ask
+
+A **waterfall**: listeners wrap each other, like middleware, ending in the
+registry's own default.
+
+```python
+from plugkit import Deny
+
+
+def policy(ctx, config=None):
+    async def gate(execution, next_):
+        if execution.arguments.get("path", "").startswith("/etc"):
+            return Deny("no reads under /etc")
+        return await next_()          # don't forget this line
+    ctx.on("tools/pre-execute", gate)
+policy.inject = ["tools"]
+```
+
+`next_()` runs the rest of the chain, including the registry's default (allow).
+Not calling it vetoes everything after you.
+
+There is deliberately **no "rewrite the arguments" option**. By the time this
+stage runs, the arguments are already logged and on screen; letting a listener
+change them would make history, audit, display, and execution disagree.
+
+`Ask` **fails closed**. No approver registered, an approver that raises, or an
+approver returning anything but `True` all become a denial:
+
+```python
+from plugkit import Ask
+
+
+def approval(ctx, config=None):
+    ctx.on("tools/pre-execute", lambda e, next_: Ask("run this?") if e.tool.destructive else next_())
+    ctx.tools.set_approver(lambda execution, reason: ask_the_human(reason))
+approval.inject = ["tools"]
+```
+
+### Stage 2 — guards, and why they have no allow
+
+A guard inspects the call and either denies it or stays silent:
+
+```python
+def safety(ctx, config=None):
+    ctx.tools.guard(
+        lambda e: "refusing to delete the root filesystem"
+        if e.arguments.get("path") == "/" else None
+    )
+safety.inject = ["tools"]
+```
+
+Return a reason to deny, `None` to stay out of the way. **There is no allow
+return value.**
+
+If there were: two guards, one denies, one allows — whichever ran last wins. Mount
+order here depends on when dependencies became available, so a security rule
+would hold or not hold depending on how fast a database started.
+
+With no allow, a denial from any guard is final, regardless of order and
+regardless of what stage 1 decided:
+
+```python
+# stage 1 says allow. The guard still wins.
+result = await root.tools.execute("delete", {"path": "/"})
+result.ok                       # False
+result.error["message"]         # "refusing to delete the root filesystem"
+```
+
+This property has a name — **monotonic**: the check can only ever reduce
+permission. Any gate you add to this kernel should have it, and if you find
+yourself wanting an allow on a guard, you are building a stage-1 veto and should
+say so.
+
+### Stage 3 — wrapping the call
+
+The only stage where the call's beginning and end are in the same function, so
+timeouts, retries, and metrics live here.
+
+```python
+def metrics(ctx, config=None):
+    async def wrap(execution, next_):
+        start = time.monotonic()
+        result = await next_()
+        record(execution.name, time.monotonic() - start)
+        return result
+    ctx.on("tools/execute", wrap)
+metrics.inject = ["tools"]
+```
+
+`timeout_policy` ships as the reference implementation — it reads `timeout_s` off
+the tool itself:
+
+```python
+from plugkit import timeout_policy
+await root.plugin(timeout_policy)
+```
+
+::: {.callout-warning}
+## A timeout notifies; it does not kill
+
+Declaring `timeout_s` is a promise that your tool forwards cancellation to
+something that can stop. A body that ignores it will not stop when the
+deadline fires — you will get a `TOOL_TIMEOUT` result while the work continues.
+
+Registration order also picks the semantics. With a timeout and a retry wrapper
+both on `tools/execute`: timeout registered *outer* means the whole retry
+operation shares one clock; *inner* means each attempt gets its own.
+:::
+
+### Stage 4 — changing the result
+
+A post-execute listener receives the result and may replace or reject it:
+
+```python
+from plugkit import Accept
+
+
+def redact(ctx, config=None):
+    async def scrub(execution, result, next_):
+        if execution.name == "read_secrets":
+            return Accept.replacing("[redacted]")
+        return await next_()
+    ctx.on("tools/post-execute", scrub)
+redact.inject = ["tools"]
+```
+
+`Accept.replacing(value)` swaps the value; `Block(feedback)` rejects the result
+and hands the caller your feedback instead.
+
+### Stage 5 — observing
+
+Everything is frozen. A listener that raises here is logged and contained — it
+**cannot** change whether the call succeeded:
+
+```python
+def audit(ctx, config=None):
+    ctx.on("tools/result", lambda execution, result: write_audit_row(execution, result.ok))
+audit.inject = ["tools"]
+```
+
+Stage 5 fires on **every** outcome, including denials. An audit that only sees
+successes is not an audit.
+
+## Three plugins that never heard of each other
+
+Three plugins that have never heard of each other:
+
+```python
+await root.plugin(PointsService)   # tools holds its registries in points
+await root.plugin(ToolsService)
+await root.plugin(search_plugin)      # provides a tool
+await root.plugin(delete_plugin)      # provides another
+await root.plugin(safety)             # a rule over both
+await root.plugin(audit)              # a record of both
+await root.plugin(timeout_policy)     # a budget over both
+```
+
+`safety` was written without knowing `delete` exists. `delete` was written
+without knowing `safety` exists. Neither imports the other. Adding a fourth tool
+inherits the rule, the audit trail, and the budget for free — and unloading
+`safety` removes its rule cleanly, because that registration was an effect like
+any other.
+
+## Where the shape comes from
+
+This is DeepSeek Harness's tool pipeline, ported stage for stage. Its
+documentation calls it the widest and most useful extension surface it has, and
+because the event names and semantics match, dsh's writing about it applies here
+directly.
+
+## Next
+
+[Extension points](04-your-own-service.qmd) — how `ctx.tools` holds its tools,
+and how to build a collection others contribute to.
+
+- [`docs/design/kernel-architecture.qmd`](https://github.com/bayeslearner/plugkit/blob/main/docs/design/kernel-architecture.qmd) — the architecture anchor
+- `src/plugkit/tests/test_tools.py` — one test per stage, plus the properties above
+
+[Chapter 2](02-popo-components.qmd) covered `provide()`, which registers a plain
+class under a name — **one** provider, **one** name. This chapter covers the
+other direction: **many** plugins contributing to **one** role.
+
+## Three kinds of service
+
+| Kind | Example | Use |
+|---|---|---|
+| A component others **call** | a database, an HTTP client, a greeter | `provide()` — a plain class |
+| A collection others **add to** | routes, middleware, health checks, codecs | `ctx.points` |
+| A collection with **behaviour** | a tool registry that also runs a permission pipeline | `Service` subclass |
+
+Most of the second row does not need a class at all.
+
+## `ctx.points` — the extension point
+
+Mount `PointsService`, then any plugin can contribute to any named role:
+
+```python
+from plugkit import PointsService
+
+await root.plugin(PointsService)
+```
+
+```python
+def admin(ctx, config=None):
+    ctx.points.add("http.routes", admin_page, key="/admin", order=10)
+
+admin.inject = ["points"]
+```
+
+A **point** is a named role. A **contribution** is one plugin's entry in it. The
+point is never declared — it exists once something is contributed to it.
+
+`add` returns a disposer, and it is registered against **`admin`'s** fiber. Unload
+`admin` and the route goes. You write no teardown.
+
+The consumer reads the set:
+
+```python
+ctx.points.all("http.routes")               # every value, in order
+ctx.points.get("http.routes", "/admin")     # one, by key
+ctx.points.where("http.routes", method="GET")   # filtered on properties
+ctx.points.last("tools.approvers")          # the most recent
+ctx.points.names()                          # every point with something in it
+```
+
+and can be woken when it changes:
+
+```python
+ctx.points.on_change("http.routes", rebuild_router)
+```
+
+That disposer is owned by the **consumer**, so a consumer that unloads stops
+being called. Contributors and consumers each own their own half, and neither
+imports the other.
+
+### `last()` and the reason it exists
+
+For a role where only the newest contribution matters — the current approver, the
+active theme, the selected backend — use `last()`:
+
+```python
+ctx.points.add("tools.approvers", my_approver)
+ctx.points.last("tools.approvers")          # the newest
+```
+
+The obvious alternative is one variable, saved and restored on dispose. That is
+only correct if plugins unload in reverse mount order. They do not: unload is
+driven by dependencies disappearing, so an *older* registration can go first, and
+restoring its saved value would resurrect it over a newer one. `last()` reads by
+registration sequence and removes by identity, so no ordering assumption exists
+to break.
+
+This was a real bug in `ctx.tools.set_approver` before extension points existed.
+
+## When you still write a `Service`
+
+When the collection has behaviour attached — `ctx.tools` holds tools *and* runs
+the five-stage pipeline over them. Then you write a class, and hold the
+collection in a point rather than a private dict:
+
+```python
+from plugkit import Service
+
+
+class Router(Service):
+    provide = "router"
+    inject = ["points"]
+
+    def add(self, path: str, handler: object):
+        return self.ctx.points.add("http.routes", handler, key=path, unique=True)
+
+    async def dispatch(self, path: str, request):
+        handler = self.ctx.points.get("http.routes", path)
+        if handler is None:
+            return not_found(request)
+        return await handler(request)
+```
+
+`unique=True` rejects a second contribution under the same key, which is what you
+want for a route table and not what you want for middleware.
+
+## The rebinding rule
+
+Notice `self.ctx.points.add(...)` in `Router.add`, and that the contribution
+ends up owned by the *caller*. That works because of one property a `Service`
+subclass has and a plain class does not: **when another plugin reads it,
+`self.ctx` inside its methods is that plugin's context.**
+
+```python
+def admin(ctx, config=None):
+    ctx.router.add("/admin", admin_page)     # self.ctx is admin's context
+```
+
+Unload `admin` and `/admin` disappears, even though the point belongs to
+`PointsService` and the method belongs to `Router`. Without rebinding, every
+registry would have to track which plugin added what and clean up itself, and
+each would get it subtly wrong in its own way.
+
+`ctx.points.add`, `ctx.tools.register` and `ctx.reactive.effect` all work like
+this.
+
+## The rule this creates
+
+**Return an effect from any method that registers something.** A method that
+mutates the service's own state on behalf of a caller and returns nothing has
+created something nobody owns — the route from [chapter 0](00-why.qmd), one level
+down.
+
+```python
+def add(self, path, handler):
+    self._table[path] = handler          # nobody owns this
+```
+
+Using `ctx.points` makes this hard to get wrong, because `add` returns the
+disposer and there is no private dict to write to instead.
+
+## Callable data is not rebound
+
+The rebinding walks attribute access, so it distinguishes a *method* from *data
+that happens to be callable*. Storing a callback on the instance is fine:
+
+```python
+class Approvals(Service):
+    provide = "approvals"
+
+    def __init__(self, ctx, config=None):
+        super().__init__(ctx)
+        self._answer = None        # a callable held as data — not rebound
+```
+
+This was got wrong twice in this kernel's history. The discriminator is whether
+the name lives in the instance `__dict__`. You do not have to do anything; it is
+noted because the symptom, if it regresses, is a stored callback being invoked
+with an extra first argument.
+
+## Mounting it
+
+A `Service` subclass is a plugin. Mount it like any other:
+
+```python
+await root.plugin(Router)
+```
+
+`provide = "router"` is the class attribute that names it. Declare dependencies
+with `inject` on the class:
+
+```python
+class Router(Service):
+    provide = "router"
+    inject = ["points", "logger"]
+```
+
+## Choosing between the three
+
+| | |
+|---|---|
+| nothing registers into it | `provide()` — a plain class, no kernel import |
+| a collection, nothing more | `ctx.points` — no class at all |
+| a collection plus behaviour over it | a `Service` subclass holding its collection in a point |
+
+A `Service` subclass imports the kernel, which is the cost
+[chapter 2](02-popo-components.qmd) exists to avoid. Pay it only when there is
+behaviour to attach.
+
+## Where this sits among other systems
+
+The pattern has several names. OSGi calls it the **whiteboard** and recommends it
+over the listener pattern, because listeners leak — nobody unregisters them.
+Eclipse calls it an **extension point**. Spring spells it `List<Handler>`
+injection; .NET MEF spells it `ImportMany`.
+
+plugkit's version is small because fiber ownership already solves the leak that
+made OSGi write its recommendation. A contribution is removed when its
+contributor unloads, so there is no unregister for anyone to forget.
+
+## Next
+
+[Config and reactivity](05-config-and-reactivity.qmd) — values that change while
+the program runs.
+
+Two mechanisms handle change, at deliberately different granularity.
+
+| What changed | Mechanism | Why |
+|---|---|---|
+| a service **provider** was replaced | the fiber's epoch: unload and re-apply its dependents | the object identity changed, so a dependent holding the old one holds a stale reference |
+| a config **value** | one Signal per key: re-run the effects that read it | reloading a plugin to observe a new timeout is a sledgehammer |
+| a config value a **constructor argument** was built from | the binding restarts its own fiber | a constructor argument cannot be mutated, so a new object is the only correct answer |
+
+## `ctx.config`
+
+Mount `ConfigService` and read dotted keys:
+
+```python
+from plugkit import ConfigService
+
+await root.plugin(ConfigService, {"yaml": "app.yml", "dict": {"http": {"timeout": 30}}})
+root.config.get("http.timeout")            # 30
+root.config.get("http.retries", 3)         # 3 — the default, applied at read time
+root.config.require("http.host")           # KeyError if absent
+```
+
+Loading order is: YAML files in the order given, then `dict`. Then a layer above
+all of them holds anything set at runtime.
+
+```python
+root.config.set("http.timeout", 60)
+root.config.load_yaml("other.yml")         # does not revert the 60
+```
+
+`set()` writes to an override layer that every loader sits below, so reloading a
+file cannot undo a runtime value.
+
+### Loading from elsewhere
+
+```python
+root.config.load_yaml("prod.yml", required=True)
+root.config.load_dict({"http": {"timeout": 5}})
+root.config.load_env("db.password", "DATABASE_PASSWORD")
+root.config.load_pydantic(Settings())
+```
+
+`load_env` and `load_pydantic` need the `config` extra
+(`pip install "plugkit[config]"`), which brings in `dependency-injector`. Without
+it those raise a named error and the rest still works.
+
+### For tests
+
+```python
+with root.config.override({"http": {"timeout": 1}}):
+    ...        # timeout is 1 in here, restored on exit
+```
+
+Readers are woken in both directions, so an effect under test sees the override
+arrive and leave.
+
+## `ctx.reactive`
+
+Reading config is not enough on its own — you also want to *act* when it changes.
+Mount `ReactiveService` and register an effect:
+
+```python
+from plugkit import ReactiveService, plugin
+
+await root.plugin(ReactiveService)
+
+
+@plugin
+def http(ctx: HttpDeps, config=None) -> None:
+    ctx.reactive.effect(
+        lambda: ctx.client.set_timeout(ctx.config.get("http.timeout", 30))
+    )
+```
+
+The effect runs once immediately, then again on every change to anything it read.
+It is registered against `http`'s fiber, so it stops when `http` unloads. You
+write no teardown and no subscription bookkeeping.
+
+**One Signal per key.** `set("http.timeout", 60)` wakes the readers of
+`http.timeout` and nobody else. A single Signal over the whole config would wake
+every config reader on every write, which is the behaviour this design avoids.
+
+### `computed` for derived values
+
+```python
+base = ctx.reactive.computed(lambda: ctx.config.get("api.host") + "/v1")
+base.get()        # cached; recomputes only when api.host changes
+```
+
+### Signals without the kernel
+
+`plugkit.signals` imports nothing from the kernel and works in a plain script:
+
+```python
+from plugkit import Signal, Computed, Effect, batch
+
+a, b = Signal(1), Signal(2)
+total = Computed(lambda: a.get() + b.get())
+
+watcher = Effect(lambda: print(total.get()))     # prints 3
+
+with batch():
+    a.set(10)
+    b.set(20)                                    # prints 30 once, not twice
+
+watcher.dispose()
+```
+
+`ctx.reactive` is the plugin that binds this library to fiber lifetime. The
+library is the library.
+
+## Rebuilding a component on a config change
+
+`provide()` can read a constructor argument from config:
+
+```python
+from plugkit import provide
+
+provide(Database, "database", config={"dsn": ("db.dsn", "sqlite://")})
+```
+
+With `ReactiveService` mounted, changing `db.dsn` disposes the old `Database`,
+calls its `close()`, and constructs a new one. A constructor argument cannot be
+changed after construction, so a new object is the only honest response.
+
+Without `ReactiveService` the binding still works and does not rebuild. Reacting
+to config is opt-in.
+
+## Which to use
+
+| | |
+|---|---|
+| the value is read on every use | `ctx.config.get(...)` inside the method — no effect needed |
+| something must *happen* on change | `ctx.reactive.effect(...)` |
+| the value was a constructor argument | `provide(..., config={...})` and let it rebuild |
+
+## Next
+
+[Composition from a file](06-composition-from-a-file.qmd) — an application as
+YAML.
+
+Everything so far mounted plugins in Python. For an application whose shape
+differs per deployment, the list of plugins is itself configuration.
+
+## A plugin as a module
+
+A module is a plugin when it has `apply(ctx, config)`. It may also carry `name`
+and `inject`:
+
+```python
+# myapp/database.py
+name = "database"
+
+
+class Database:
+    def __init__(self, dsn: str) -> None:
+        self.dsn = dsn
+
+
+def apply(ctx, config=None):
+    ctx.provide("database", Database((config or {}).get("dsn", "sqlite://")))
+```
+
+```python
+# myapp/greeter.py
+name = "greeter"
+inject = ["database"]
+
+
+def apply(ctx, config=None):
+    prefix = (config or {}).get("prefix", "hello")
+    ctx.provide("greeter", lambda who: f"{prefix} {who} via {ctx.database.dsn}")
+```
+
+## The file
+
+```yaml
+# app.yml
+- id: db
+  name: myapp.database
+  config:
+    dsn: postgres://prod
+
+- id: greet
+  name: myapp.greeter
+  config:
+    prefix: hi
+```
+
+`name` is an importable module path. `id` labels the entry. `config` becomes the
+plugin's second argument.
+
+## Loading it
+
+```python
+from plugkit import Context, load_app
+
+root = Context()
+await load_app(root, "app.yml")
+
+root.greeter("world")        # 'hi world via postgres://prod'
+```
+
+## Order in the file means nothing
+
+Put the greeter first, before the database it needs:
+
+```yaml
+- id: greet
+  name: myapp.greeter
+- id: db
+  name: myapp.database
+```
+
+The result is identical. `inject` decides activation, so the greeter waits until
+the database exists. There is no boot sequence to get right, which is the point
+of listing plugins rather than calling them in order.
+
+## A missing dependency is not an error
+
+Delete the database entry entirely:
+
+```yaml
+- id: greet
+  name: myapp.greeter
+```
+
+Nothing raises. `greeter` stays `PENDING` and is not available. That is
+the correct behaviour for an optional feature whose backing service is not
+deployed in this environment.
+
+```python
+await load_app(root, "app.yml")
+"greeter" in root      # False
+```
+
+## Naming an attribute
+
+A module holding several plugins can name one directly:
+
+```yaml
+- name: myapp.plugins:database
+```
+
+That imports `myapp.plugins` and takes `database` off it.
+
+## Substituting a plugin
+
+`FileLoader.register` resolves a name without importing:
+
+```python
+from plugkit import FileLoader
+
+await root.plugin(FileLoader)
+root.loader.register("myapp.database", fake_database_module)
+await root.loader.create({"name": "myapp.database"})
+```
+
+::: {.callout-warning}
+## This does not reach entries inside an included file
+
+`register()` applies to entries created through `loader.create()`. Entries listed
+in a YAML file resolve through the include's own tree and fall through to the
+import path, so registering `myapp.database` will not substitute the `myapp.database`
+line in `app.yml`.
+
+To substitute a plugin the file names, give a module that name and put it on the
+import path ahead of the real one.
+:::
+
+## What this is under the hood
+
+`load_app` is three steps:
+
+```python
+await ctx.plugin(FileLoader)          # provides ctx.loader
+await settle()                        # let its child fibers register listeners
+loader.register("__include__", Include)
+await loader.create({"name": "__include__", "config": {"path": path}})
+```
+
+The `settle()` is required. The loader mounts child fibers that register
+`loader/entry-init`, and creating an entry before those exist raises
+`KeyError('_isolate')` — entry-init is what puts the isolate map on the entry's
+context. `load_app` handles it; the note is here because a hand-rolled version
+hits it.
+
+## Next
+
+[Testing](07-testing.qmd) — what components being plain objects buys you.
+
+Most of what you write needs no kernel in its tests.
+
+## Test the component directly
+
+A component bound with `provide()` is a plain class with a normal constructor.
+Construct it:
+
+```python
+def test_greeting():
+    greeter = Greeter(database=FakeDB(), prefix="hi")
+    assert greeter.hello("world") == "hi world"
+```
+
+No kernel, no container, no fixtures, no `async`. This is the whole reason
+[chapter 2](02-popo-components.qmd) separates the component from its
+registration. If a test of your business logic needs a kernel, something has
+leaked.
+
+## Test a plugin with a real context
+
+A plugin function does need a context, because taking one is what makes it a
+plugin. Build a root and mount it:
+
+```python
+import asyncio
+from plugkit import Context, provide
+
+
+async def test_admin_registers_its_route():
+    root = Context()
+    await root.plugin(provide(Server, "server"))
+    await root.plugin(admin_api)
+
+    assert "/admin" in root.server.routes
+```
+
+`pytest-asyncio` with `asyncio_mode = "auto"` in `pyproject.toml` lets you write
+`async def test_...` with no decorator. plugkit's own suite uses that.
+
+## Waiting correctly
+
+`await root.plugin(p)` waits for **p's own load**. When mounting one plugin
+unblocks another, await the second one's fiber:
+
+```python
+greeter = await root.plugin(provide(Greeter, "greeter", needs=["database"]))
+await root.plugin(provide(Database, "database"))
+await greeter                       # now the greeter has loaded
+```
+
+For a test touching several plugins, a settle helper is simpler than tracking
+each fiber:
+
+```python
+async def settle(n=15):
+    for _ in range(n):
+        await asyncio.sleep(0)
+```
+
+`await fiber.dispose()` needs no settle — it waits for the unload it cascades to
+dependents.
+
+## Substituting a dependency
+
+Services are found by name, so substitution is mounting a different class under
+the same name:
+
+```python
+async def test_with_a_fake_database():
+    root = Context()
+    await root.plugin(provide(FakeDatabase, "database"))     # not the real one
+    await root.plugin(provide(Greeter, "greeter", needs=["database"]))
+    await settle()
+
+    assert root.greeter.hello("x") == "hello x"
+```
+
+Nothing needs a mocking library and nothing patches an import.
+
+## Overriding config
+
+```python
+with root.config.override({"http": {"timeout": 1}}):
+    assert root.config.get("http.timeout") == 1
+assert root.config.get("http.timeout") == 30
+```
+
+Readers wake in both directions, so an effect under test sees the value arrive
+and leave.
+
+## Testing that teardown happened
+
+Assert that unload removed everything:
+
+```python
+async def test_unload_is_total():
+    root = Context()
+    await root.plugin(provide(Server, "server"))
+    fiber = await root.plugin(admin_api)
+    assert "/admin" in root.server.routes
+
+    await fiber.dispose()
+    assert "/admin" not in root.server.routes
+```
+
+If you write a plugin that registers something, write this test for it. It is
+the one that fails when someone later adds a second registration and forgets its
+disposer.
+
+## Observing a failure instead of raising
+
+`await root.plugin(p)` re-raises whatever `p` raised. Catch it, then read the
+state:
+
+```python
+from plugkit import FiberState
+
+fiber = root.plugin(might_fail)
+with pytest.raises(RuntimeError):
+    await fiber
+assert fiber.state is FiberState.FAILED
+```
+
+Do not reach for `await asyncio.sleep(0)` here. A failed load takes three ticks
+to settle — `LOADING`, then `UNLOADING`, then `FAILED` — and counting ticks is a
+test that breaks when the transition changes. Awaiting waits for the transition
+itself.
+
+## Testing a tool through the pipeline
+
+`ctx.tools.execute` never raises. Assert on the result:
+
+```python
+from plugkit import PointsService, ToolsService
+
+
+async def test_the_guard_denies():
+    root = Context()
+    await root.plugin(PointsService)
+    await root.plugin(ToolsService)
+    await root.plugin(register_delete_tool)
+    await root.plugin(safety_guard)
+    await settle()
+
+    result = await root.tools.execute("delete", {"path": "/"})
+    assert result.ok is False
+    assert result.error["code"] == "DENIED"
+```
+
+## Asking the system what it is doing
+
+When a test fails and the reason is not obvious, the usual cause is a plugin that
+never ran. `describe` returns a plain snapshot, and `format_tree` renders it:
+
+```python
+from plugkit import describe, format_tree
+
+print(format_tree(describe(root)))
+```
+
+```
+plugkit — 6 fibers, 4 services
+├─ [1] PointsService  ACTIVE    provides points
+├─ [2] db             ACTIVE    provides database
+├─ [3] ToolsService   ACTIVE    provides tools
+├─ [4] greeter        ACTIVE    provides greeter
+├─ [5] waiting        PENDING   waiting for: cache, queue
+└─ [6] broken         FAILED    ConnectionRefusedError: [Errno 61] Connection refused
+```
+
+Line 5 is the one that saves time. A `PENDING` plugin is the kernel working
+correctly — it waits for a service that is not there — but from outside it looks
+identical to a plugin that never mounted. The snapshot names what it is waiting
+for.
+
+`describe` is a plain function, not a service. You do not mount it, and it works
+on any context, including one written before this existed. That matters because
+you reach for it when something is already wrong.
+
+Assert on the snapshot directly when the shape is the thing under test:
+
+```python
+def by_name(snapshot, name):
+    return next(f for f in snapshot["fibers"] if f["name"] == name)
+
+
+async def test_the_greeter_waits_for_its_database():
+    root = Context()
+    await root.plugin(provide(Greeter, "greeter", needs=["database"]))
+    await settle()
+
+    entry = by_name(describe(root), "greeter")
+    assert entry["state"] == "PENDING"
+    assert entry["missing"] == ["database"]
+```
+
+Everything in a snapshot is a string, number, list or dict, so `json.dumps` works
+on it and a snapshot captured in CI renders the same later.
+
+### Telling it something it cannot know
+
+The kernel knows a fiber's state. It does not know a connection pool's size.
+Contribute a diagnostic:
+
+```python
+from plugkit import DIAGNOSTICS
+
+
+def database(ctx, config=None):
+    pool = Pool()
+    ctx.provide("database", pool)
+    ctx.points.add(DIAGNOSTICS, lambda: {"pool_size": pool.size}, key="database")
+
+database.inject = ["points"]
+```
+
+```python
+describe(root)["diagnostics"]["database"]      # {'pool_size': 4}
+```
+
+It needs `PointsService` mounted, it disappears when the plugin unloads, and a
+diagnostic that raises is reported as an error string rather than breaking the
+snapshot.
+
+## What plugkit's own suite does
+
+Four tests in plugkit's own suite are patterns you can copy:
+
+| Test | Pattern |
+|---|---|
+| `test_component_needs_no_kernel_at_all` | asserts the components in the file import nothing from plugkit |
+| `test_every_export_is_exercised_somewhere` | walks `__all__` and fails on a name no test mentions |
+| `test_readme_examples.py` | runs every README example and asserts the prose's claims |
+| `test_bare_install.py` | imports every module with the optional packages hidden |
+
+The third exists because the README once documented an API that did not exist. If
+your docs make a claim, run it.
+
+The fourth exists because the development environment has every optional package
+installed, so the suite cannot see an import that a plain `pip install` would
+break. It hides `yaml` and `watchdog` from a subprocess and imports the package
+as a bare user would.

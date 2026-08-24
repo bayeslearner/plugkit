@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.coverage
+.pytest_cache/
+.venv/
+docs/_site/
+docs/.quarto/
+.DS_Store
+.serena/
+.storage/
+.claude/scheduled_tasks.lock
+.claude/
+.vscode/
+guide-one.html

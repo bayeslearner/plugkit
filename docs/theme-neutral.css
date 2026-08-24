@@ -1,0 +1,128 @@
+/* plugkit docs — what both themes share.
+ *
+ * Layout, spacing and shape only. No colour. A rule here that names a colour is
+ * a rule in the wrong file: it would apply to both themes and one of them would
+ * be wrong. Colour lives in `theme-light.scss` and `theme-dark.scss`, each
+ * compiled only for the theme that names it in `_quarto.yml`.
+ */
+
+/* ── Code blocks: geometry ─────────────────────────────────────── */
+div.sourceCode,
+pre.sourceCode {
+  border-radius: 6px;
+  padding: 0.8em 1em;
+}
+
+code:not(.sourceCode) {
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+pre:not(.sourceCode) {
+  border-radius: 6px;
+  padding: 1em;
+}
+
+/* ── Mermaid diagrams: geometry ────────────────────────────────── */
+.mermaid {
+  border-radius: 8px;
+  padding: 1em;
+}
+
+.mermaid text,
+.mermaid .nodeLabel,
+.mermaid .edgeLabel,
+.mermaid .label,
+.mermaid .cluster-label,
+.mermaid span,
+.mermaid foreignObject div {
+  font-weight: 500;
+}
+
+.mermaid .cluster-label,
+.mermaid .cluster-label .nodeLabel,
+.mermaid .cluster-label foreignObject div {
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+.mermaid .cluster rect {
+  rx: 8px;
+}
+
+/* ── Side-by-side code triptych (consumer / provider / kernel) ─── */
+.triptych {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.6rem;
+  margin: 1.2em 0 1.6em 0;
+  align-items: stretch;
+}
+
+.triptych > .col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.triptych .col-head {
+  display: block;
+  font-family: monospace;
+  font-size: 0.85em;
+  padding: 0.25em 0;
+  margin-bottom: 0.35em;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+
+.triptych pre.sourceCode,
+.triptych div.sourceCode {
+  font-size: 0.74em !important;
+  margin: 0 !important;
+  height: 100% !important;
+  padding: 0.5em 0.7em !important;
+}
+
+@media (max-width: 980px) {
+  .triptych { grid-template-columns: 1fr; }
+}
+
+/* ── Numbered call-out badges used in the triptych prose ───────── */
+.cnum {
+  display: inline-block;
+  font-weight: 700;
+  border-radius: 50%;
+  min-width: 1.4em;
+  height: 1.4em;
+  line-height: 1.4em;
+  padding: 0 0.2em;
+  text-align: center;
+  font-family: monospace;
+  margin-right: 0.35em;
+  font-size: 0.85em;
+  vertical-align: baseline;
+}
+
+/* Defensive: if a long phrase is accidentally wrapped in .cnum, keep it
+   readable as a pill rather than a clipped circle. */
+.cnum:has(> :nth-child(2)),
+.cnum:not(:empty):not(:where(*:only-child)) {
+  border-radius: 0.7em;
+}
+
+/* ── Level tags for traits ─────────────────────────────────────── */
+.level-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 0.1em 0.5em;
+  border-radius: 4px;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+/* ── Callout blocks: geometry ──────────────────────────────────── */
+.callout {
+  border-radius: 6px;
+}

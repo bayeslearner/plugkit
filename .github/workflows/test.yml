@@ -1,0 +1,107 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Conformance — the gate that decides whether the port still holds
+        run: pytest src/plugkit/tests/test_conformance.py -v
+
+      - name: Full suite
+        run: pytest src/plugkit/tests -q
+
+  bare-install:
+    # `pyproject.toml` declares `dependencies = []`. This job is the only place
+    # that claim is tested against a real install: nothing here is installed
+    # except the built wheel, so a module-level `import yaml` — or a class whose
+    # base comes from an optional package — fails the build.
+    #
+    # Two such defects shipped before this job existed. The suite could not see
+    # them because every other environment installs the extras.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the wheel and nothing else
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+      - name: Show that the environment really is bare
+        run: pip list
+      - name: Import every module
+        run: |
+          python - <<'PY'
+          import importlib, pkgutil, sys
+          import plugkit
+
+          plugkit.Context()
+          failed = []
+          for info in pkgutil.walk_packages(plugkit.__path__, "plugkit."):
+              if ".tests" in info.name or info.name.endswith(".create"):
+                  continue
+              try:
+                  importlib.import_module(info.name)
+              except ImportError as exc:
+                  failed.append(f"{info.name}: {exc}")
+          if failed:
+              sys.exit("bare install cannot import:\n  " + "\n  ".join(failed))
+          print(f"plugkit {plugkit.__version__}: every module imports bare")
+          PY
+
+  without-dependency-injector:
+    # The `config` extra is the one whose absence changes behaviour at runtime
+    # rather than at import: `load_env` and `load_pydantic` raise a named error
+    # and everything else keeps working. The suite must pass either way.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install without the config extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio pyyaml watchdog
+      - name: Full suite
+        run: pytest src/plugkit/tests -q
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" pyright
+      - name: The typed-ctx claims must stay true
+        run: pytest src/plugkit/tests/test_typing.py -v
