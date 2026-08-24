@@ -57,6 +57,7 @@ class Context:
     # ------------------------------------------------------------------
 
     def extend(self, meta=None) -> "Context":
+        """A child context sharing this one's services, plus `meta` as its own."""
         cls = type(self)
         base = object.__new__(cls)
         base.__dict__["_parent"] = self
@@ -72,11 +73,17 @@ class Context:
         return base
 
     def isolate(self, name: str, label=None) -> "Context":
+        """A child context whose `name` resolves to its own service.
+
+        Everything mounted under it sees that instance; the rest of the tree
+        is unaffected. Pass `label` to share one isolate between subtrees.
+        """
         # JS: `Object.create(this[isolate])` — a live chain, not a copy
         shadow = ChainedDict({name: label if label is not None else unique_symbol(name)}, parent=self._effective_isolate())
         return self.extend({"_isolate": shadow})
 
     def intercept(self, name: str, config: Any) -> "Context":
+        """A child context that applies `config` to every read of `name`."""
         intercept = ChainedDict({name: config}, parent=self._effective_intercept())
         return self.extend({"_intercept": intercept})
 

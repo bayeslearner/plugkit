@@ -383,6 +383,7 @@ class Fiber:
             fiber = parent_fiber
 
     def assert_active(self) -> None:
+        """Raise unless this fiber may still register effects."""
         if self.uid is not None:
             return
         raise CordisError("INACTIVE_EFFECT")
@@ -427,6 +428,12 @@ class Fiber:
             _safe_collect(runner.collect, value)
 
     def effect(self, execute: Callable, label: str = "anonymous") -> FiberEffect:
+        """Run `execute` and own whatever undo it returns.
+
+        The unit the whole design rests on: `execute` performs a registration
+        and returns the disposer that reverses it, and this fiber calls that
+        disposer on unload. `label` is what `describe()` shows.
+        """
         self.assert_active()
 
         disposables: list = []
@@ -460,6 +467,7 @@ class Fiber:
         return wrapper
 
     def get_effects(self) -> list:
+        """The metadata of every effect this fiber currently holds."""
         result = []
         for d in self._disposables:
             meta = getattr(d, "__cordis_effect__", None)
@@ -592,6 +600,7 @@ class Fiber:
             self.ctx.logger.error(reason)
 
     async def await_(self):
+        """Wait until this fiber settles, re-raising whatever it failed with."""
         while self.inertia is not None:
             await self.inertia
         if self._error is not None:
@@ -603,6 +612,7 @@ class Fiber:
         return self.await_().__await__()
 
     def restart(self):
+        """Unload this fiber and load it again. Returns the task doing it."""
         fiber = self.ctx.fiber
         fiber.assert_active()
         fiber._set_epoch(INACTIVE)
@@ -610,6 +620,7 @@ class Fiber:
         return _start_now(fiber.await_())
 
     def update(self, config: Any, no_save: bool = False):
+        """Replace this fiber's config, letting listeners handle or veto it."""
         fiber = self.ctx.fiber
         fiber.assert_active()
         config = resolve_config(fiber.runtime, config)

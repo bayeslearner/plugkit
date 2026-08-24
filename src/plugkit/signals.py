@@ -522,13 +522,16 @@ def is_stale() -> bool:
 
     Useful inside an async effect body to short-circuit voluntarily:
 
-        @effect
-        async def index(self):
-            items = self.rt.items.get()
-            for item in items:
-                await process(item)
-                if is_stale():
-                    return  # newer items arrived; drop the rest
+        def indexer(ctx, config=None):
+            async def index():
+                for item in ctx.config.get("index.items", []):
+                    await process(item)
+                    if is_stale():
+                        return      # newer items arrived; drop the rest
+
+            ctx.reactive.effect(index)
+
+        indexer.inject = ["config", "reactive"]
 
     Returns ``False`` outside any effect, and ``False`` for sync effects
     (sync bodies cannot be superseded mid-execution under the global

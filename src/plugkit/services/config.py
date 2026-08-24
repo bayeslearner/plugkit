@@ -223,12 +223,18 @@ class ConfigService(Service):
     # ── loading ───────────────────────────────────────────────────────
 
     def load_dict(self, data: dict) -> None:
+        """Layer a literal dict over what is already loaded."""
         if self._di is not None:
             self._di.from_dict(data)
         self._loaded = _merge(self._loaded, data)
         self._republish()
 
     def load_yaml(self, path: str, *, required: bool = False) -> None:
+        """Layer a YAML file over what is already loaded.
+
+        A missing file is ignored unless `required`. Loading never reverts a
+        value written with `set()`, which lives in a layer above every loader.
+        """
         if self._di is not None:
             self._di.from_yaml(path, required=required)
             self._loaded = _merge(self._loaded, self._di() or {})

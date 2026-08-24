@@ -132,6 +132,11 @@ CONTEXT_MEMBERS = frozenset(
         "registry", "events", "logger", "baseUrl",
     }
 )
+"""Names that live on every `Context` as methods rather than as services.
+
+`@plugin` subtracts these from a Protocol's members, so a Protocol may describe
+the context calls a plugin makes without those becoming phantom dependencies.
+"""
 
 
 def _inject_from_annotation(target: Callable) -> list[str]:
@@ -256,7 +261,7 @@ def provide(
     close: Any = None,
     name: str | None = None,
     extra: Mapping[str, Any] | None = None,
-):
+) -> dict:
     """Wrap a plain class or factory as a plugin that registers one service.
 
         provide(PostgresDatabase, "database")

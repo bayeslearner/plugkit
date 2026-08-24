@@ -697,6 +697,14 @@ Everything above the kernel is plugkit's own, and none of it exists upstream:
 
 ## Development
 
+Rebuild the docs:
+
+```bash
+uv run --with quartodoc --extra dev python scripts/build-reference.py   # API reference
+uv run --with markdown --with pygments python scripts/build-guide.py    # one-page guide
+cd docs && quarto render                                                # the site
+```
+
 Run the test suite:
 
 ```bash

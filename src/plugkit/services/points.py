@@ -201,6 +201,7 @@ class PointsService(Service):
         return sorted(self._points)
 
     def count(self, point: str) -> int:
+        """How many contributions `point` holds. Reading tracks the point."""
         self._track(point)
         return len(self._points.get(point, ()))
 

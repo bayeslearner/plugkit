@@ -71,7 +71,7 @@ _CALLOUT = re.compile(
 )
 _CHAPTER_LINK = re.compile(r"\]\((\d\d)-[\w-]+\.qmd(#[\w-]*)?\)")
 _SIBLING_LINK = re.compile(r"\]\((?:\.\./)?((?:design|steering)/[\w-]+)\.(?:qmd|md)\)")
-_API_LINK = re.compile(r"\]\((?:\.\./)?api-reference\.qmd\)")
+_API_LINK = re.compile(r"\]\((?:\.\./)?(?:reference/index|api-reference)\.qmd\)")
 _LOCAL_ANCHOR = re.compile(r"\]\(#([\w-]+)\)")
 _PLACEHOLDER = re.compile(r"<p>\x00callout-(\d+)\x00</p>")
 
@@ -304,7 +304,7 @@ def collect() -> list[Chapter]:
     chapters = [
         Chapter.read(DOCS / "guide" / name, f"ch-{name[:2]}", name[:2]) for name in ORDER
     ]
-    chapters.append(Chapter.read(DOCS / "api-reference.qmd", "ch-api", "A"))
+    chapters.append(Chapter.read(DOCS / "reference" / "index.qmd", "ch-api", "A"))
     return chapters
 
 

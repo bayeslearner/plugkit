@@ -1,1 +1,6 @@
 /.quarto/
+
+**/*.quarto_ipynb
+
+# quartodoc's interlinks inventory: generated, and unused here
+objects.json

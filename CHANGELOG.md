@@ -82,6 +82,16 @@ so there is no alias.
 
 ### Documentation
 
+The API reference (`docs/reference/index.qmd`) is generated from signatures and
+docstrings by quartodoc, the standard Quarto mechanism, so it carries signatures,
+parameter descriptions and per-service method listings and lands in the same
+site, theme and search as the guide. It replaces a hand-built page that listed
+names and one line each. Generating it found twenty public methods with no
+docstring — absent from the page with no error, since quartodoc omits what it
+cannot read — a constant published carrying `frozenset`'s docstring, and an
+example written against a predecessor project's API. All fixed, and a test now
+fails on an undocumented public method.
+
 The guide also ships as one self-contained page, `docs/plugkit-guide.html`,
 generated from the chapters by `scripts/build-guide.py` — replacing two
 divergent one-page builds, one of which was hand-made and had gone stale. The
