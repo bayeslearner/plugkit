@@ -53,7 +53,7 @@ ctx.points.names()                          # every point with something in it
 and can be woken when it changes:
 
 ```python
-ctx.points.on_change("http.routes", rebuild_router)
+ctx.points.watch("http.routes", rebuild_router)
 ```
 
 That disposer is owned by the **consumer**, so a consumer that unloads stops

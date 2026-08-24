@@ -58,31 +58,52 @@ with root.config.override({"http": {"timeout": 1}}):
 Readers are woken in both directions, so an effect under test sees the override
 arrive and leave.
 
-## `ctx.reactive`
+## `ctx.config.watch` — being told a value changed
 
 Reading config is not enough on its own — you also want to *act* when it changes.
-Mount `ReactiveService` and register an effect:
+That is a subscription, and it needs nothing reactive:
 
 ```python
-from plugkit import ReactiveService, plugin
-
-await root.plugin(ReactiveService)
+from plugkit import plugin
 
 
 @plugin
 def http(ctx: HttpDeps, config=None) -> None:
-    ctx.reactive.effect(
-        lambda: ctx.client.set_timeout(ctx.config.get("http.timeout", 30))
-    )
+    client.set_timeout(ctx.config.get("http.timeout", 30))          # apply once
+    ctx.config.watch("http.timeout", lambda next_, prev: client.set_timeout(next_))
 ```
 
-The effect runs once immediately, then again on every change to anything it read.
-It is registered against `http`'s fiber, so it stops when `http` unloads. You
-write no teardown and no subscription bookkeeping.
+`watch` returns a disposer registered against `http`'s fiber, so the watcher
+stops when `http` unloads. You write no teardown.
 
-**One Signal per key.** `set("http.timeout", 60)` wakes the readers of
-`http.timeout` and nobody else. A single Signal over the whole config would wake
-every config reader on every write, which is the behaviour this design avoids.
+Three rules worth knowing:
+
+- **It does not fire on registration.** You have just read the value; applying it
+  once yourself, as above, is clearer than a first call you did not ask for.
+- **One key, one watcher.** `set("http.timeout", 60)` calls the watchers of
+  `http.timeout` and nobody else.
+- **An async callback is awaited, and one watcher never overlaps itself.** A
+  change landing while the previous invocation is still running waits for it.
+
+`ctx.points.watch` is the same method over a different source of change — the
+contributions to a point — and behaves identically, except that its callback
+takes no arguments because a point's value is a set you re-read.
+
+**`ReactiveService` is not required for any of this.** Signals are what the
+config service uses underneath; they are not something a caller has to adopt to
+hear about a change.
+
+## `ctx.reactive`
+
+The reactive service is for a different job: a value *derived* from several
+others, recomputed when any of them moves. Mount it and the derivation tracks its
+own inputs.
+
+```python
+from plugkit import ReactiveService
+
+await root.plugin(ReactiveService)
+```
 
 ### `computed` for derived values
 
@@ -134,9 +155,15 @@ to config is opt-in.
 
 | | |
 |---|---|
-| the value is read on every use | `ctx.config.get(...)` inside the method — no effect needed |
-| something must *happen* on change | `ctx.reactive.effect(...)` |
+| the value is read on every use | `ctx.config.get(...)` inside the method — nothing else needed |
+| something must *happen* on change | `ctx.config.watch(key, callback)` |
+| the set of contributions to a point changed | `ctx.points.watch(point, callback)` |
+| a value is derived from several others | `ctx.reactive.computed(...)` |
 | the value was a constructor argument | `provide(..., config={...})` and let it rebuild |
+
+Reach for `ctx.reactive.effect` when a body reads several sources and you would
+rather not enumerate them. For "this key changed, do this", `watch` says it
+plainly and costs no second concept.
 
 ## Next
 

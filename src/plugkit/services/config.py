@@ -27,10 +27,11 @@ and YAML; only `from_env`/`from_pydantic`/`override` need the package.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
-from ..signals import Signal
+from ..signals import Effect, Signal
 from ..cordis import Service
+from ._watch import Watcher
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +144,58 @@ class ConfigService(Service):
     def all(self) -> dict:
         """The whole materialised config. Reactive — wakes on any change."""
         return self._data.get()
+
+    def watch(
+        self, key: str, callback: Callable[[Any, Any], Any], default: Any = None
+    ) -> Callable[[], Any]:
+        """Call `callback(next, prev)` when the value behind `key` changes.
+
+        Returns a disposer owned by the *calling* plugin, so a watcher stops
+        when the plugin that registered it unloads. Nothing here requires
+        `ReactiveService`, and nothing about the Signal underneath reaches the
+        caller — hearing about a change should not cost you a second concept.
+
+            def http(ctx, config=None):
+                ctx.config.watch("http.timeout", lambda next_, prev: client.set(next_))
+            http.inject = ["config"]
+
+        `callback` does **not** run on registration: the caller has just read the
+        value, and a first application it did not ask for is a surprise. Apply it
+        yourself and then watch, which is what the reference's consumers do.
+
+        An async callback is awaited, and invocations of one watcher are
+        serialized — the next change waits for the current one to settle rather
+        than entering the callback twice.
+
+        `default` is applied to both values the way `get()` applies it, so the
+        absent-key sentinel never reaches a caller.
+        """
+        signal = self.signal_for(key)
+        logger = getattr(self.ctx, "logger", None)
+
+        def execute():
+            watcher = Watcher(callback, f"config key {key!r}", logger)
+            previous: list[Any] = []
+
+            def run():
+                raw = signal.get()  # the tracking read; must happen on every run
+                value = default if raw is MISSING else raw
+                if not previous:
+                    previous.append(value)
+                    return
+                prior = previous[0]
+                previous[0] = value
+                watcher.fire(value, prior)
+
+            effect = Effect(run)
+
+            def dispose():
+                watcher.dispose()
+                effect.dispose()
+
+            return dispose
+
+        return self.ctx.effect(execute, f"ctx.config.watch({key!r})")
 
     def signal_for(self, key: str) -> Signal:
         """The Signal behind one dotted key, created on first read.

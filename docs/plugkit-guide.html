@@ -1495,7 +1495,7 @@ point is never declared — it exists once something is contributed to it.</p>
 </code></pre></div>
 
 <p>and can be woken when it changes:</p>
-<div class="codehilite"><pre><span></span><code><span class="n">ctx</span><span class="o">.</span><span class="n">points</span><span class="o">.</span><span class="n">on_change</span><span class="p">(</span><span class="s2">&quot;http.routes&quot;</span><span class="p">,</span> <span class="n">rebuild_router</span><span class="p">)</span>
+<div class="codehilite"><pre><span></span><code><span class="n">ctx</span><span class="o">.</span><span class="n">points</span><span class="o">.</span><span class="n">watch</span><span class="p">(</span><span class="s2">&quot;http.routes&quot;</span><span class="p">,</span> <span class="n">rebuild_router</span><span class="p">)</span>
 </code></pre></div>
 
 <p>That disposer is owned by the <strong>consumer</strong>, so a consumer that unloads stops
@@ -1698,27 +1698,44 @@ it those raise a named error and the rest still works.</p>
 
 <p>Readers are woken in both directions, so an effect under test sees the override
 arrive and leave.</p>
-<h2 id="ch-05-ctxreactive"><code>ctx.reactive</code></h2>
+<h2 id="ch-05-ctxconfigwatch-being-told-a-value-changed"><code>ctx.config.watch</code> — being told a value changed</h2>
 <p>Reading config is not enough on its own — you also want to <em>act</em> when it changes.
-Mount <code>ReactiveService</code> and register an effect:</p>
-<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">plugkit</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReactiveService</span><span class="p">,</span> <span class="n">plugin</span>
-
-<span class="k">await</span> <span class="n">root</span><span class="o">.</span><span class="n">plugin</span><span class="p">(</span><span class="n">ReactiveService</span><span class="p">)</span>
+That is a subscription, and it needs nothing reactive:</p>
+<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">plugkit</span><span class="w"> </span><span class="kn">import</span> <span class="n">plugin</span>
 
 
 <span class="nd">@plugin</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">http</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">HttpDeps</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">ctx</span><span class="o">.</span><span class="n">reactive</span><span class="o">.</span><span class="n">effect</span><span class="p">(</span>
-        <span class="k">lambda</span><span class="p">:</span> <span class="n">ctx</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">set_timeout</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;http.timeout&quot;</span><span class="p">,</span> <span class="mi">30</span><span class="p">))</span>
-    <span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">set_timeout</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;http.timeout&quot;</span><span class="p">,</span> <span class="mi">30</span><span class="p">))</span>          <span class="c1"># apply once</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">watch</span><span class="p">(</span><span class="s2">&quot;http.timeout&quot;</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">next_</span><span class="p">,</span> <span class="n">prev</span><span class="p">:</span> <span class="n">client</span><span class="o">.</span><span class="n">set_timeout</span><span class="p">(</span><span class="n">next_</span><span class="p">))</span>
 </code></pre></div>
 
-<p>The effect runs once immediately, then again on every change to anything it read.
-It is registered against <code>http</code>'s fiber, so it stops when <code>http</code> unloads. You
-write no teardown and no subscription bookkeeping.</p>
-<p><strong>One Signal per key.</strong> <code>set("http.timeout", 60)</code> wakes the readers of
-<code>http.timeout</code> and nobody else. A single Signal over the whole config would wake
-every config reader on every write, which is the behaviour this design avoids.</p>
+<p><code>watch</code> returns a disposer registered against <code>http</code>'s fiber, so the watcher
+stops when <code>http</code> unloads. You write no teardown.</p>
+<p>Three rules worth knowing:</p>
+<ul>
+<li><strong>It does not fire on registration.</strong> You have just read the value; applying it
+  once yourself, as above, is clearer than a first call you did not ask for.</li>
+<li><strong>One key, one watcher.</strong> <code>set("http.timeout", 60)</code> calls the watchers of
+  <code>http.timeout</code> and nobody else.</li>
+<li><strong>An async callback is awaited, and one watcher never overlaps itself.</strong> A
+  change landing while the previous invocation is still running waits for it.</li>
+</ul>
+<p><code>ctx.points.watch</code> is the same method over a different source of change — the
+contributions to a point — and behaves identically, except that its callback
+takes no arguments because a point's value is a set you re-read.</p>
+<p><strong><code>ReactiveService</code> is not required for any of this.</strong> Signals are what the
+config service uses underneath; they are not something a caller has to adopt to
+hear about a change.</p>
+<h2 id="ch-05-ctxreactive"><code>ctx.reactive</code></h2>
+<p>The reactive service is for a different job: a value <em>derived</em> from several
+others, recomputed when any of them moves. Mount it and the derivation tracks its
+own inputs.</p>
+<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">plugkit</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReactiveService</span>
+
+<span class="k">await</span> <span class="n">root</span><span class="o">.</span><span class="n">plugin</span><span class="p">(</span><span class="n">ReactiveService</span><span class="p">)</span>
+</code></pre></div>
+
 <h3 id="ch-05-computed-for-derived-values"><code>computed</code> for derived values</h3>
 <div class="codehilite"><pre><span></span><code><span class="n">base</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">reactive</span><span class="o">.</span><span class="n">computed</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">ctx</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;api.host&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="s2">&quot;/v1&quot;</span><span class="p">)</span>
 <span class="n">base</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>        <span class="c1"># cached; recomputes only when api.host changes</span>
@@ -1765,11 +1782,19 @@ to config is opt-in.</p>
 <tbody>
 <tr>
 <td>the value is read on every use</td>
-<td><code>ctx.config.get(...)</code> inside the method — no effect needed</td>
+<td><code>ctx.config.get(...)</code> inside the method — nothing else needed</td>
 </tr>
 <tr>
 <td>something must <em>happen</em> on change</td>
-<td><code>ctx.reactive.effect(...)</code></td>
+<td><code>ctx.config.watch(key, callback)</code></td>
+</tr>
+<tr>
+<td>the set of contributions to a point changed</td>
+<td><code>ctx.points.watch(point, callback)</code></td>
+</tr>
+<tr>
+<td>a value is derived from several others</td>
+<td><code>ctx.reactive.computed(...)</code></td>
 </tr>
 <tr>
 <td>the value was a constructor argument</td>
@@ -1777,6 +1802,9 @@ to config is opt-in.</p>
 </tr>
 </tbody>
 </table>
+<p>Reach for <code>ctx.reactive.effect</code> when a body reads several sources and you would
+rather not enumerate them. For "this key changed, do this", <code>watch</code> says it
+plainly and costs no second concept.</p>
 <h2 id="ch-05-next">Next</h2>
 <p><a href="#ch-06">Composition from a file</a> — an application as
 YAML.</p>

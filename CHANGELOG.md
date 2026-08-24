@@ -33,7 +33,7 @@ Each is an ordinary plugin with no privileged status.
 - `ctx.points` — extension points: many plugins filling one named role. A
   contribution is removed when the *contributing* plugin unloads, and a consumer
   can read the set (`all`, `get`, `where`, `last`, `entries`) or be woken when it
-  changes (`on_change`). `ctx.tools` holds its tools, guards and approvers here
+  changes (`watch`). `ctx.tools` holds its tools, guards and approvers here
   rather than in three hand-rolled registries.
 - `ctx.config` — YAML, dict, env and pydantic loading. One Signal per dotted key,
   so a write wakes only the readers of that key. Runtime `set()` outranks every
@@ -68,6 +68,17 @@ diagnostic the kernel cannot know through the `diagnostics` point.
 the harness tree. Every README and guide example is executed by the suite,
 `test_docs_consistency.py` checks the claims that are not code, and
 `test_typing.py` runs pyright over the typed-context patterns.
+
+### Change notification
+
+`ctx.config.watch(key, callback)` and `ctx.points.watch(point, callback)` — a
+callback plus a disposer owned by the plugin that registered it. Neither
+requires `ReactiveService`; signals are the mechanism underneath and not
+something a caller adopts to hear about a change. The config watcher passes
+`(next, prev)`, does not fire on registration, awaits an async callback, and
+never enters one watcher twice at once. Shaped after the harness's
+`settings.watch`. `points.on_change` is now `points.watch`; 0.1.0 is unreleased,
+so there is no alias.
 
 ### Documentation
 
