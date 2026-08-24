@@ -209,22 +209,6 @@ provide(Server, "server", close="stop")     # name a different method
 provide(Cache, "cache", close=False)       # nothing to tear down
 ```
 
-## Construction that needs an await
-
-A factory may be `async def`, and it may return an async context manager — the
-shape most asyncio clients ship. `provide()` awaits it, and enters the manager:
-
-```python
-async def connect(dsn="postgres://localhost/app"):
-    return await asyncpg.connect(dsn)
-
-provide(connect, "database", config={"dsn": ("db.dsn", "postgres://localhost/app")})
-```
-
-The service is the connection, not the coroutine, and the plugin waiting on
-`database` waits exactly as it would for a synchronous one. On unload the same
-teardown rules apply, `aclose` and `__aexit__` included.
-
 ## A `ctx` your type checker understands
 
 Cordis resolves by name only — `reflect.get(name: string)` is the whole lookup.

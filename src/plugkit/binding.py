@@ -206,36 +206,6 @@ def _resolve_config(config: Any) -> dict[str, tuple[str, Any]]:
     return out
 
 
-def _explicit_teardown(obj: Any, close: Any) -> tuple[Any, Callable[[], Any] | None] | None:
-    """The part of teardown resolution that never needs to await.
-
-    `None` means "nothing here decided it" — the caller goes on to the context
-    manager protocol, which is where sync and async differ.
-    """
-    if close is False:
-        return obj, None
-    if isinstance(close, str):
-        method = getattr(obj, close, None)
-        if method is None:
-            raise AttributeError(f"{type(obj).__name__} has no method {close!r} to close with")
-        return obj, method
-    for name in ("close", "aclose", "shutdown", "dispose"):
-        method = getattr(obj, name, None)
-        if callable(method):
-            return obj, method
-    return None
-
-
-def _entered(obj: Any, resource: Any) -> Any:
-    if resource is None:
-        raise TypeError(
-            f"{type(obj).__name__} entered and returned None, so there is no "
-            f"component to register. Return the resource, or name the teardown "
-            f"with close=."
-        )
-    return resource
-
-
 def _setup_teardown(obj: Any, close: Any) -> tuple[Any, Callable[[], Any] | None]:
     """`(component_to_register, teardown_or_None)`.
 
@@ -248,52 +218,33 @@ def _setup_teardown(obj: Any, close: Any) -> tuple[Any, Callable[[], Any] | None
     An explicit `close=` and a `close`/`aclose`/`shutdown`/`dispose` method both
     win over the protocol, so a component carrying both is not entered.
     """
-    decided = _explicit_teardown(obj, close)
-    if decided is not None:
-        return decided
+    if close is False:
+        return obj, None
+    if isinstance(close, str):
+        method = getattr(obj, close, None)
+        if method is None:
+            raise AttributeError(f"{type(obj).__name__} has no method {close!r} to close with")
+        return obj, method
+    for name in ("close", "aclose", "shutdown", "dispose"):
+        method = getattr(obj, name, None)
+        if callable(method):
+            return obj, method
     if hasattr(obj, "__enter__") and hasattr(obj, "__exit__"):
-        return _entered(obj, obj.__enter__()), lambda: obj.__exit__(None, None, None)
+        entered = obj.__enter__()
+        if entered is None:
+            raise TypeError(
+                f"{type(obj).__name__}.__enter__() returned None, so there is no "
+                f"component to register. Return the resource, or name the teardown "
+                f"with close=."
+            )
+        return entered, lambda: obj.__exit__(None, None, None)
+    if hasattr(obj, "__aenter__"):
+        raise TypeError(
+            f"{type(obj).__name__} is an async context manager, and entering it "
+            f"needs an await that construction does not have. Name the teardown "
+            f"with close=\"aclose\" (or whichever method), or close=False."
+        )
     return obj, None
-
-
-async def _setup_teardown_async(obj: Any, close: Any) -> tuple[Any, Callable[[], Any] | None]:
-    """`_setup_teardown` for a component that had to be awaited into existence.
-
-    The async context manager is the shape almost every asyncio client ships
-    (`httpx.AsyncClient`, `asyncpg` pools, `aiobotocore`), so entering it is the
-    same non-negotiable as entering a sync one: `__aexit__` on something never
-    entered is the same broken promise.
-    """
-    decided = _explicit_teardown(obj, close)
-    if decided is not None:
-        return decided
-    if hasattr(obj, "__aenter__") and hasattr(obj, "__aexit__"):
-        resource = _entered(obj, await obj.__aenter__())
-        return resource, lambda: obj.__aexit__(None, None, None)
-    if hasattr(obj, "__enter__") and hasattr(obj, "__exit__"):
-        return _entered(obj, obj.__enter__()), lambda: obj.__exit__(None, None, None)
-    return obj, None
-
-
-def _register(ctx, setup, service_name: str, config_spec) -> Callable[[], Any] | None:
-    """Register the constructed component and return the binding's disposer."""
-    component, closer = setup
-    ctx.provide(service_name, component)
-    _watch_config(ctx, config_spec)
-
-    if closer is None:
-        return None
-
-    def dispose():
-        return closer()
-
-    return dispose
-
-
-async def _register_async(ctx, made, service_name: str, config_spec, close):
-    if inspect.isawaitable(made):
-        made = await made
-    return _register(ctx, await _setup_teardown_async(made, close), service_name, config_spec)
 
 
 def provide(
@@ -382,22 +333,18 @@ def provide(
                 )
             kwargs.update(plugin_config)
 
-        made = factory(**kwargs)
+        component, closer = _setup_teardown(factory(**kwargs), close)
+        ctx.provide(service_name, component)
 
-        # An `async def` factory, or a factory returning an async context
-        # manager, finishes on the async path. Returning the coroutine rather
-        # than awaiting it here is deliberate: the fiber awaits an awaitable
-        # effect and collects what it returned as the disposer, so this stays
-        # one code path with two endings instead of two plugins.
-        #
-        # Getting this wrong was not a missing feature. `provide()` used to
-        # register the coroutine object itself: the service existed, the fiber
-        # went ACTIVE, and the only signal was a RuntimeWarning about a
-        # coroutine that was never awaited — the identical failure this project
-        # names as reason #1 not to build on iPOPO.
-        if inspect.isawaitable(made) or hasattr(made, "__aenter__"):
-            return _register_async(ctx, made, service_name, config_spec, close)
-        return _register(ctx, _setup_teardown(made, close), service_name, config_spec)
+        _watch_config(ctx, config_spec)
+
+        if closer is None:
+            return None
+
+        def dispose():
+            return closer()
+
+        return dispose
 
     plugin = {"name": name or service_name, "inject": inject, "apply": apply}
     # carried for tests and diagnostics; the kernel only reads name/inject/apply

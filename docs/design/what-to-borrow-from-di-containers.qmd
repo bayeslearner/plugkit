@@ -29,14 +29,12 @@ any price.
 
 Nothing on this list is worth building twice.
 
-## Fixed, because it was never a borrow
+## Worth shipping, in this order
 
-**Async construction.** This page originally listed `Coroutine` and async
-`Resource` as the top thing to take from `dependency-injector`. That was the
-wrong frame. plugkit already claims async construction — the README's case
-against iPOPO opens with *its lifecycle callbacks cannot be `async`*, and
-[Why not build on iPOPO](why-not-ipopo.qmd) reproduces the exact warning iPOPO
-emits — while `provide()` did this:
+### 1. Async construction — this one is a defect, not a wish
+
+`dependency-injector` has `Coroutine` and async `Resource`. plugkit has neither,
+and the way it lacks them is the problem:
 
 ```python
 async def connect(dsn="..."):        # asyncpg, httpx, aiobotocore — the normal shape
@@ -46,28 +44,18 @@ await root.plugin(provide(connect, "db"))
 root.db          # <coroutine object connect> — and a RuntimeWarning, nothing else
 ```
 
-Not a gap in the feature list: the same defect, in the same words, inside the
-binding layer. The service registered, the fiber went ACTIVE, `describe()`
-reported a healthy system, and the only signal was a warning about a coroutine
-nobody awaited.
+The service registers successfully and is a coroutine object. Every dependent
+gets it, nothing raises, and the failure appears later as an attribute error on
+something that looked constructed.
 
-`provide()` awaits an awaitable factory now and enters an async context manager,
-so `aclose` and `__aexit__` join the teardown rules
-(`test_an_async_factory_is_awaited`,
-`test_an_async_context_manager_is_entered_and_exited`). The mechanism was already
-there — the fiber awaits an awaitable returned from `apply` and takes what it
-returned as the disposer — which is why this cost a dozen lines and no new
-concept.
+This is already half-solved next door: `_setup_teardown` refuses an async context
+manager with a message naming the fix, precisely so it cannot fail quietly, and
+the kernel already awaits an awaitable returned from a plugin's `apply`
+(`src/plugkit/cordis/fiber.py`). What is missing is `provide()` awaiting its
+factory. The smallest change on this page and the only one that closes a way to
+be silently wrong.
 
-The lesson worth keeping is about *how* it hid. Nothing raised, because a service
-is registered by name and never checked against a type. The kernel cannot know
-that `db` was meant to be a connection, so an error at mount time is the only
-place a wrong value can be caught — and the check has to be "was this awaited",
-not "is this the right type".
-
-## Worth shipping, in this order
-
-### 1. `Selector` — the implementation named by a config value
+### 2. `Selector` — the implementation named by a config value
 
 ```python
 provide_selected("database", key="db.kind", options={"pg": PostgresDatabase, "sqlite": SqliteDatabase})
@@ -80,7 +68,7 @@ than in a container: the losing implementation is not just unused, it is
 — and the machinery to do it is the config-watch restart `provide()` already
 performs. A container cannot make that offer, because it has no lifetime to end.
 
-### 2. `Factory` — promoted from example to shipped
+### 3. `Factory` — promoted from example to shipped
 
 `plugkit.examples.alternative_binding.provide_factory` already exists and already
 has tests: it registers a maker instead of an instance, and — the part
@@ -103,33 +91,6 @@ guarantee here rests on the kernel seeing them all.
 
 **Cython-compiled providers, container specialization.** Performance engineering
 for a container's hot path. There is no idea in it to take.
-
-### `@inject` is one word for two opposite things
-
-The refusal above is easy to misread, because plugkit has `inject` all over it —
-`fn.inject = [...]`, `needs=[...]`, `@plugin`, and a vendored `@Inject("foo")`
-decorator for `Service` classes. None of those are the thing being refused.
-
-| | plugkit's `inject` | `dependency-injector`'s `@inject` |
-|---|---|---|
-| what it annotates | the **plugin** — the unit of lifetime | any **function or method** |
-| when it resolves | before the plugin runs; the fiber stays `PENDING` until every name exists | at each call, from a container |
-| what the kernel does with it | decides when to activate, refuses reads of undeclared names, rebuilds the fiber when a provider is replaced | nothing — there is no lifetime to manage |
-| where it appears | the composition root (`provide(..., needs=[...])`) | inside the component's own signature |
-
-plugkit's list is a *declaration of dependency edges the kernel owns*. Take it
-away and dependency-driven activation stops being possible: nothing knows when a
-plugin may start or whose replacement should reload it. That is why reading a
-service you did not declare raises even when the service exists.
-
-`dependency-injector`'s decorator is a *call-site lookup*. It is a fine thing in
-a container and unusable here for the reason given above — and it is the one that
-lands in your class, which is the part [Plain components](../guide/02-popo-components.qmd)
-refuses.
-
-`Inject` (capital) is vendored Cordis surface for `Service` subclasses, which are
-the shipped services rather than application code. Nothing you write needs it:
-use `needs=` on `provide()`, or `@plugin`.
 
 ## Left open on purpose
 
