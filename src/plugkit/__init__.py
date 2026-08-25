@@ -135,4 +135,8 @@ __all__ = [
 #   EventsService  RegistryService  ReflectService  LoggerService  Logger
 #   Impl  DisposableList  is_bailed  Policy
 
-__version__ = "0.1.0"
+#: The version, and the one place it is written. `pyproject.toml` reads it from
+#: here (`[tool.hatch.version]`), so `plugkit.__version__` and the installed
+#: distribution's metadata cannot disagree — they did, at 0.1.0 against 0.3.0,
+#: for two releases, which is a trap for anyone gating a feature on the string.
+__version__ = "0.3.1"

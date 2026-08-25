@@ -3,6 +3,24 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.3.1] — 2026-08-24
+
+### Fixed
+
+`plugkit.__version__` said `0.1.0` on 0.2.0 and 0.3.0 — a hand-maintained string
+beside the `version =` in `pyproject.toml` that the bumps updated instead. Anyone
+gating a feature on it ("does this plugkit have `config.watch`?") got the wrong
+answer. `pyproject.toml` now derives the version *from* the module
+(`[tool.hatch.version]`), so the two cannot disagree, and
+`test_the_version_is_stated_once` checks the wiring and the changelog heading.
+
+### Packaging
+
+plugkit is distributed as a GitHub release rather than on PyPI. The tag workflow
+builds the sdist and wheel, runs `twine check` over them, and attaches them to
+the release, so a consumer can install a wheel by URL without git or a source
+build. The PyPI job is removed rather than left failing.
+
 ## [0.3.0] — 2026-08-24
 
 ### Packaging

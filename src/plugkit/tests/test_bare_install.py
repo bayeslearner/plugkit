@@ -242,3 +242,46 @@ def test_declared_python_matches_the_classifiers():
         f"classifiers advertise {below}, which requires-python "
         f"{project['requires-python']!r} refuses to install on"
     )
+
+
+def test_the_version_is_stated_once():
+    """`plugkit.__version__` and the installed metadata cannot disagree.
+
+    They did, for two releases: the module said 0.1.0 while the distribution
+    said 0.3.0, because the string was hand-maintained beside a `version =` in
+    `pyproject.toml` that the bumps updated instead. Anyone gating a feature on
+    `__version__` — "does this plugkit have the watcher API?" — got the wrong
+    answer. `pyproject.toml` now reads the version from the module, so this test
+    is checking that the wiring is still in place rather than that a human
+    remembered.
+    """
+    import importlib.metadata as metadata
+    import tomllib
+    from pathlib import Path
+
+    import plugkit
+
+    repo = Path(__file__).resolve().parents[3]
+    project = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert "version" in project.get("dynamic", []), (
+        "pyproject.toml pins a literal version again; it must read the module's"
+    )
+
+    try:
+        installed = metadata.version("plugkit")
+    except metadata.PackageNotFoundError:  # a source tree that was never installed
+        installed = None
+    if installed is not None:
+        assert plugkit.__version__ == installed, (
+            f"plugkit.__version__ is {plugkit.__version__}, the installed "
+            f"distribution is {installed}"
+        )
+
+    latest = next(
+        line for line in (repo / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+        if line.startswith("## [")
+    )
+    assert plugkit.__version__ in latest, (
+        f"the changelog's newest section is {latest!r}, "
+        f"but the package is {plugkit.__version__}"
+    )

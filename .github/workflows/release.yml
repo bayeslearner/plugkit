@@ -1,0 +1,48 @@
+name: Release
+
+# plugkit is distributed as a GitHub release, not on PyPI. A tag builds the
+# sdist and wheel and attaches them to the release, so a consumer can install a
+# real wheel by URL — no git on the host, no build from source, and an artifact
+# that outlives the workflow's retention window.
+#
+# The PyPI half of this workflow is deliberately gone rather than disabled: it
+# needed a trusted publisher that does not exist, so every tag left a failed run
+# behind. Add it back the day the project wants an index.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # attaching assets to the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Check the metadata a consumer will read
+        run: |
+          python -m pip install --upgrade twine
+          twine check dist/*
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "plugkit ${TAG#v}" --notes-from-tag
+          gh release upload "$TAG" dist/* --clobber
