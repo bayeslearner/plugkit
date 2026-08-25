@@ -220,3 +220,9 @@ rather than derived here.
 liveness rules. Ten new tests. One deviation from the reference, forced by the
 language: upstream's watcher is registered on a settings *entry* object, while
 config here is key-addressed, so the key is the first argument.
+
+**2026-08-24** — Correction to a premise in R2.1 and in the introduction: 0.1.0
+was *not* unreleased. It was tagged at `8d5ccbc` earlier the same day, before
+this spec was written, so `points.on_change` had shipped. The decision does not
+change — no alias — but its justification does: this is a breaking change
+against a tagged version, carried by the 0.2.0 bump rather than by being free.

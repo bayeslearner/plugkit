@@ -353,6 +353,123 @@ async def test_an_async_only_context_manager_says_what_to_do():
         await fiber
 
 
+# ── construction that needs an await: the init hook ───────────────────────────
+
+
+class Pool:
+    """A plain class whose readiness needs an await. Imports nothing."""
+
+    def __init__(self, dsn="sqlite://"):
+        self.dsn = dsn
+        self.connected = False
+        self.closed = False
+
+    async def connect(self):
+        await asyncio.sleep(0)
+        self.connected = True
+
+    def close(self):
+        self.closed = True
+
+
+async def test_the_init_hook_runs_after_the_service_is_registered():
+    """Cordis registers from the constructor and awaits the init hook after.
+
+    `service.ts` registers the instance synchronously; `fiber.ts` then runs the
+    init hook and awaits it. `provide(init=...)` is that order for a plain class.
+    """
+    root = Context()
+    fiber = await root.plugin(provide(Pool, "pool", init="connect"))
+    await settle()
+
+    assert root.pool.connected is True, "the init hook did not run"
+
+    pool = root.pool
+    await fiber.dispose()
+    await settle()
+    assert pool.closed is True, "init= displaced the ordinary teardown"
+
+
+async def test_a_dependent_does_not_see_a_half_built_service():
+    """The property `test_pending_inject` holds upstream: injection waits for init.
+
+    The service is registered before the hook runs, so the guarantee cannot come
+    from registration order — it comes from the fiber still loading, which is
+    what makes the name unresolvable to anyone injecting it.
+    """
+    release = asyncio.Event()
+    seen = []
+
+    class Slow:
+        def __init__(self):
+            self.ready = False
+
+        async def start(self):
+            await release.wait()
+            self.ready = True
+
+    root = Context()
+    # Not awaited: awaiting this mount would wait for the init hook itself, and
+    # the point of the test is what everyone *else* sees while it runs.
+    root.plugin(provide(Slow, "slow", init="start"))
+
+    def dependent(ctx, config=None):
+        seen.append(ctx.slow.ready)
+
+    dependent.inject = ["slow"]
+    await root.plugin(dependent)
+    await settle()
+    assert seen == [], "a dependent ran while the service was still initialising"
+
+    release.set()
+    await settle()
+    assert seen == [True], "the dependent did not run once init finished"
+
+
+async def test_a_sync_init_hook_is_allowed():
+    class Cursor:
+        def __init__(self):
+            self.opened = False
+
+        def open(self):
+            self.opened = True
+
+    root = Context()
+    await root.plugin(provide(Cursor, "cursor", init="open"))
+    await settle()
+    assert root.cursor.opened is True
+
+
+async def test_a_failing_init_hook_fails_the_fiber():
+    class Broken:
+        async def start(self):
+            raise RuntimeError("no connection")
+
+    root = Context()
+    fiber = root.plugin(provide(Broken, "broken", init="start"))
+    with pytest.raises(RuntimeError, match="no connection"):
+        await fiber
+
+
+async def test_an_async_factory_is_refused_and_says_what_to_do():
+    """Registering the coroutine was the silent failure; refusing is the loud one."""
+
+    async def connect(dsn="sqlite://"):
+        return Database(dsn)
+
+    root = Context()
+    fiber = root.plugin(provide(connect, "db"))
+    with pytest.raises(TypeError, match="init="):
+        await fiber
+
+
+async def test_a_bad_init_name_is_loud():
+    root = Context()
+    fiber = root.plugin(provide(Database, "database", init="nope"))
+    with pytest.raises(AttributeError, match="nope"):
+        await fiber
+
+
 async def test_mount_config_cannot_shadow_an_injected_service():
     """A mount config naming an injected service is a composition mistake.
 

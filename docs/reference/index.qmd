@@ -207,6 +207,7 @@ provide(
     needs=None,
     config=None,
     close=None,
+    init=None,
     name=None,
     extra=None,
 )
@@ -237,15 +238,16 @@ implementation, which is what makes swapping implementations possible:
 
 ### Parameters {.doc-section .doc-section-parameters}
 
-| Name         | Type                        | Description                                                                                                                                                                   | Default    |
-|--------------|-----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
-| factory      | Callable\[..., Any\]        | the component — a plain class or any callable. Never sees `ctx`.                                                                                                              | _required_ |
-| service_name | str                         | the name to register under. Other plugins ask for this string.                                                                                                                | _required_ |
-| needs        | Any                         | services to pass to the constructor. List, dict, Protocol, or str. A list means "the kwarg and the service share a name"; use a dict (`{"db": "database"}`) when they differ. | `None`     |
-| config       | Mapping\[str, Any\] \| None | constructor kwargs read from `ctx.config`, as `{kwarg: key}` or `{kwarg: (key, default)}`.                                                                                    | `None`     |
-| close        | Any                         | teardown method name, or False to skip. Auto-detected by default.                                                                                                             | `None`     |
-| name         | str \| None                 | plugin name shown in fiber diagnostics. Defaults to `service_name`.                                                                                                           | `None`     |
-| extra        | Mapping\[str, Any\] \| None | literal constructor kwargs, passed through untouched.                                                                                                                         | `None`     |
+| Name         | Type                        | Description                                                                                                                                                                                                                                  | Default    |
+|--------------|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| factory      | Callable\[..., Any\]        | the component — a plain class or any callable. Never sees `ctx`.                                                                                                                                                                             | _required_ |
+| service_name | str                         | the name to register under. Other plugins ask for this string.                                                                                                                                                                               | _required_ |
+| needs        | Any                         | services to pass to the constructor. List, dict, Protocol, or str. A list means "the kwarg and the service share a name"; use a dict (`{"db": "database"}`) when they differ.                                                                | `None`     |
+| config       | Mapping\[str, Any\] \| None | constructor kwargs read from `ctx.config`, as `{kwarg: key}` or `{kwarg: (key, default)}`.                                                                                                                                                   | `None`     |
+| close        | Any                         | teardown method name, or False to skip. Auto-detected by default.                                                                                                                                                                            | `None`     |
+| init         | str \| None                 | the name of a method to run once the service is registered. It may be async; the fiber waits for it, and dependents do not see the service until it settles. This is where construction that needs an await goes — see the module docstring. | `None`     |
+| name         | str \| None                 | plugin name shown in fiber diagnostics. Defaults to `service_name`.                                                                                                                                                                          | `None`     |
+| extra        | Mapping\[str, Any\] \| None | literal constructor kwargs, passed through untouched.                                                                                                                                                                                        | `None`     |
 
 ### Returns {.doc-section .doc-section-returns}
 

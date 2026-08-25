@@ -3,9 +3,71 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [0.1.0] — unreleased
+## [0.2.0] — 2026-08-24
 
-First release.
+### Added
+
+`provide(..., init="connect")` — a method run once the service is registered and
+awaited by the fiber, which is where construction that needs an await belongs.
+Dependents do not see the service until it settles. The shape is Cordis's
+`[Service.init]`, which DSH's webserver, sqlite persistence and workspace
+services all use.
+
+### Change notification
+
+`ctx.config.watch(key, callback)` and `ctx.points.watch(point, callback)` — a
+callback plus a disposer owned by the plugin that registered it. Neither
+requires `ReactiveService`; signals are the mechanism underneath and not
+something a caller adopts to hear about a change. The config watcher passes
+`(next, prev)`, does not fire on registration, awaits an async callback, and
+never enters one watcher twice at once. Shaped after the harness's
+`settings.watch`. `points.on_change` is now `points.watch`, with no alias — which
+is a breaking change against 0.1.0, and the reason this is 0.2.0.
+
+### Removed
+
+- `Signal.value` and `Computed.value`, property aliases for `get()` (and, on
+  `Signal`, for `set()`). One way to read a signal.
+- `ConfigService.signal_for` is now `_signal_for`. `watch` is the supported way
+  to hear about a change, and a public accessor handing out the Signal was a
+  door back to the mechanism it hides.
+
+Both were duplication the generated API reference made visible, and both are
+breaking against 0.1.0. Pre-1.0 and with one known downstream, replacing beats
+carrying two spellings forward.
+
+### Documentation
+
+The API reference (`docs/reference/index.qmd`) is generated from signatures and
+docstrings by quartodoc, the standard Quarto mechanism, so it carries signatures,
+parameter descriptions and per-service method listings and lands in the same
+site, theme and search as the guide. It replaces a hand-built page that listed
+names and one line each. Generating it found twenty public methods with no
+docstring — absent from the page with no error, since quartodoc omits what it
+cannot read — a constant published carrying `frozenset`'s docstring, and an
+example written against a predecessor project's API. All fixed, and a test now
+fails on an undocumented public method.
+
+The guide also ships as one self-contained page, `docs/plugkit-guide.html`,
+generated from the chapters by `scripts/build-guide.py` — replacing two
+divergent one-page builds, one of which was hand-made and had gone stale. The
+API reference emits real tables; without a header row pandoc rendered every row
+as prose with literal `|` in it. Two design notes added: signals versus plain
+objects, and what is worth borrowing from a DI container.
+
+### Fixed
+
+- `provide()` refuses an `async def` factory, naming `init=` in the message.
+  It used to register the coroutine object as the service: the fiber went
+  `ACTIVE`, `describe()` reported a healthy system, and the only signal was a
+  `RuntimeWarning`. Construction stays synchronous, as it is in Cordis, where
+  a service registers itself from its constructor and everything needing an
+  await goes in an init hook.
+
+## [0.1.0] — 2026-08-24
+
+First release. Tagged at `8d5ccbc` so downstreams could pin the kernel; it
+has `points.on_change` rather than `points.watch`, and no `ctx.config.watch`.
 
 ### The kernel
 
@@ -68,47 +130,6 @@ diagnostic the kernel cannot know through the `diagnostics` point.
 the harness tree. Every README and guide example is executed by the suite,
 `test_docs_consistency.py` checks the claims that are not code, and
 `test_typing.py` runs pyright over the typed-context patterns.
-
-### Change notification
-
-`ctx.config.watch(key, callback)` and `ctx.points.watch(point, callback)` — a
-callback plus a disposer owned by the plugin that registered it. Neither
-requires `ReactiveService`; signals are the mechanism underneath and not
-something a caller adopts to hear about a change. The config watcher passes
-`(next, prev)`, does not fire on registration, awaits an async callback, and
-never enters one watcher twice at once. Shaped after the harness's
-`settings.watch`. `points.on_change` is now `points.watch`; 0.1.0 is unreleased,
-so there is no alias.
-
-### Removed
-
-- `Signal.value` and `Computed.value`, property aliases for `get()` (and, on
-  `Signal`, for `set()`). One way to read a signal.
-- `ConfigService.signal_for` is now `_signal_for`. `watch` is the supported way
-  to hear about a change, and a public accessor handing out the Signal was a
-  door back to the mechanism it hides.
-
-Both were duplication the generated API reference made visible. 0.1.0 is
-unreleased, so neither leaves a shim behind.
-
-### Documentation
-
-The API reference (`docs/reference/index.qmd`) is generated from signatures and
-docstrings by quartodoc, the standard Quarto mechanism, so it carries signatures,
-parameter descriptions and per-service method listings and lands in the same
-site, theme and search as the guide. It replaces a hand-built page that listed
-names and one line each. Generating it found twenty public methods with no
-docstring — absent from the page with no error, since quartodoc omits what it
-cannot read — a constant published carrying `frozenset`'s docstring, and an
-example written against a predecessor project's API. All fixed, and a test now
-fails on an undocumented public method.
-
-The guide also ships as one self-contained page, `docs/plugkit-guide.html`,
-generated from the chapters by `scripts/build-guide.py` — replacing two
-divergent one-page builds, one of which was hand-made and had gone stale. The
-API reference emits real tables; without a header row pandoc rendered every row
-as prose with literal `|` in it. Two design notes added: signals versus plain
-objects, and what is worth borrowing from a DI container.
 
 ### Requires
 

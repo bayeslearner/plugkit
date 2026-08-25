@@ -209,6 +209,45 @@ provide(Server, "server", close="stop")     # name a different method
 provide(Cache, "cache", close=False)       # nothing to tear down
 ```
 
+## Construction that needs an await
+
+It does not happen in the factory. A factory is called synchronously, and an
+`async def` one is refused — it would register a coroutine object as the
+service. Readiness that needs an await is a second phase, named with `init=`:
+
+```python
+class Pool:                          # still a plain class
+    def __init__(self, dsn):
+        self.dsn, self.conn = dsn, None
+
+    async def connect(self):
+        self.conn = await asyncpg.connect(self.dsn)
+
+    async def aclose(self):
+        await self.conn.close()
+
+
+provide(Pool, "pool", config={"dsn": ("db.dsn", "postgres:///app")}, init="connect")
+```
+
+The service is registered first, then the hook runs. Nothing sees the half-built
+object in between: a fiber that is still loading does not resolve for anyone
+injecting it, so a dependent simply waits, exactly as it waits for a service that
+has not arrived yet.
+
+This is Cordis's own shape. A service there registers itself from its
+constructor — which in JavaScript cannot be async — and everything needing an
+await goes in an init hook the fiber awaits. The class stays plain either way:
+`connect` is an ordinary method with an ordinary name.
+
+::: {.callout-note}
+## Teardown does not move
+
+`init=` names the *setup* half only. Unload still goes through `close`/`aclose`
+or whatever `close=` names, so a component that connects in `init` and closes in
+`aclose` needs no other wiring.
+:::
+
 ## A `ctx` your type checker understands
 
 Cordis resolves by name only — `reflect.get(name: string)` is the whole lookup.
