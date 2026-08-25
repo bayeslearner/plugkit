@@ -658,15 +658,19 @@ There is no privileged tier.
 | `services.supervision` | `ctx.supervisor` — restart strategies for failed fibers |
 | `services.loader` | `ctx.loader` — mount an application from a YAML file |
 
-Two services need a third-party package. Install them as extras:
+Three extras, each installing something the package imports:
 
 ```bash
+pip install "plugkit[yaml]"      # pyyaml, for YAML config and composition files
 pip install "plugkit[config]"    # dependency-injector, for env and pydantic config
 pip install "plugkit[hmr]"       # watchdog, for hot module replacement
 ```
 
-Both extras degrade rather than fail. Without `config`, `ConfigService` still
-loads dicts and YAML. The test suite runs in both configurations.
+Each degrades rather than fails. Without `config`, `ConfigService` still loads
+dicts and YAML; without `yaml`, it still loads dicts, and a YAML path raises a
+named `ImportError` rather than failing obscurely. The test suite runs in every
+configuration, and `test_no_phantom_extras` fails if an extra ever installs
+something no module imports.
 
 ## Provenance
 

@@ -123,7 +123,7 @@ def test_reading_yaml_without_pyyaml_names_the_extra():
             _yaml()
         except ImportError as exc:
             assert "pyyaml" in str(exc), exc
-            assert "plugkit[providers]" in str(exc), exc
+            assert "plugkit[yaml]" in str(exc), exc
             print("OK")
         else:
             raise AssertionError("expected ImportError")
@@ -160,3 +160,85 @@ def test_the_walk_actually_reaches_the_modules_that_broke():
     }
     assert "plugkit.cordis.include" in found
     assert "plugkit.cordis.hmr" in found
+
+
+# ── every extra installs something the package imports ───────────────────
+
+
+#: Distribution name -> the module it provides, where they differ.
+_MODULE = {
+    "pyyaml": "yaml",
+    "dependency-injector": "dependency_injector",
+}
+
+#: Extras that carry test tooling rather than package dependencies.
+_TOOLING = {"dev"}
+
+
+def test_no_phantom_extras():
+    """An extra must install something `src/plugkit` actually imports.
+
+    `plugkit[rest]` used to install fastapi and uvicorn, `plugkit[cli]` click,
+    `plugkit[tracing]` three opentelemetry packages, and `plugkit[mcp]` nothing
+    at all — while no module imported any of them. Extras are public API: a
+    consumer who reads `[rest]` and installs it has been told this package does
+    something with a web framework, and it does not.
+    """
+    import re
+    import tomllib
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    config = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = config["project"].get("optional-dependencies", {})
+
+    sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (repo / "src/plugkit").rglob("*.py")
+        if "tests" not in path.parts
+    )
+
+    phantom = []
+    for extra, requirements in extras.items():
+        if extra in _TOOLING:
+            continue
+        if not requirements:
+            phantom.append(f"{extra}: installs nothing")
+            continue
+        for requirement in requirements:
+            distribution = re.split(r"[<>=!\[ ]", requirement, maxsplit=1)[0]
+            if distribution == "plugkit":  # the `all` aggregate
+                continue
+            module = _MODULE.get(distribution, distribution.replace("-", "_"))
+            if not re.search(rf"^\s*(?:import|from)\s+{re.escape(module)}\b", sources, re.M):
+                phantom.append(f"{extra}: nothing imports {module} ({distribution})")
+
+    assert not phantom, (
+        "extras with nothing behind them:\n  " + "\n  ".join(phantom)
+    )
+
+
+def test_declared_python_matches_the_classifiers():
+    """PyPI renders the classifiers; pip enforces `requires-python`.
+
+    They said different things at the first upload: `>=3.13` with classifiers
+    advertising 3.11 and 3.12, so the project page offered interpreters that
+    `pip install` then refused.
+    """
+    import tomllib
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    project = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    floor = tuple(int(part) for part in project["requires-python"].lstrip(">=").split("."))
+    advertised = [
+        tuple(int(part) for part in line.rsplit(" :: ", 1)[1].split("."))
+        for line in project["classifiers"]
+        if line.startswith("Programming Language :: Python :: 3.")
+    ]
+    below = [".".join(map(str, version)) for version in advertised if version < floor]
+    assert not below, (
+        f"classifiers advertise {below}, which requires-python "
+        f"{project['requires-python']!r} refuses to install on"
+    )

@@ -90,9 +90,11 @@ same set CI installs (`pip install -e ".[dev]"` in `.github/workflows/test.yml`)
 so the local gate and the CI gate are the same gate.
 
 Test config (`asyncio_mode`, `pythonpath`) is in `pyproject.toml`. Optional
-extras: `config` (dependency-injector), `hmr` (watchdog). Both degrade rather
-than fail, and the suite passes with and without them — `without-dependency-injector`
-and `bare-install` in the CI workflow are the jobs that hold that claim up.
+extras: `yaml` (pyyaml), `config` (dependency-injector), `hmr` (watchdog). Each
+degrades rather than fails, and the suite passes with and without them —
+`without-dependency-injector` and `bare-install` in the CI workflow are the jobs
+that hold that claim up. **An extra must install something a module imports**;
+`test_no_phantom_extras` deleted five that did not.
 
 ## Working rules
 

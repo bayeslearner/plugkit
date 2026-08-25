@@ -3,6 +3,31 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.3.0] — 2026-08-24
+
+### Packaging
+
+Five extras installed things no module imports, and one of them installed
+nothing at all. `rest` (fastapi, uvicorn), `cli` (click), `tracing` (three
+opentelemetry packages) and `mcp` (empty) are **removed**, and `providers` is
+renamed **`yaml`**, which is what it installs and why. Extras are public API: a
+consumer who reads `[rest]` and installs it has been told this package does
+something with a web framework, and it does not.
+
+The remaining three each install something a module imports — `yaml` (pyyaml,
+for `load_yaml` and composition files), `config` (dependency-injector, for
+`load_env`/`load_pydantic`/`override`), `hmr` (watchdog). `test_no_phantom_extras`
+fails if that stops being true.
+
+### Fixed
+
+- The classifiers advertised Python 3.11 and 3.12 while `requires-python` is
+  `>=3.13`, so the PyPI page would have offered interpreters pip then refuses.
+  Removed, and `test_declared_python_matches_the_classifiers` holds the two
+  together.
+- `include.py` told a user without pyyaml to `pip install "plugkit[providers]"`,
+  an extra that no longer exists. It now names `plugkit[yaml]`.
+
 ## [0.2.0] — 2026-08-24
 
 ### Added
