@@ -340,12 +340,6 @@ Reading tracks the current consumer. Writing notifies all dependents.
     v = counter.get()    # tracks caller if inside Effect/Computed
     v = counter.peek()   # read without tracking
 
-### Attributes
-
-| Name | Description |
-| --- | --- |
-| `value` | Property alias for get(). |
-
 ### Methods
 
 | Name | Description |
@@ -599,7 +593,6 @@ Config keys accepted at mount time:
 | [peek](#plugkit.ConfigService.peek) | Read without registering a reactive dependency. |
 | [require](#plugkit.ConfigService.require) | Read a dotted key, raising if it is absent. Reactive. |
 | [set](#plugkit.ConfigService.set) | Set a dotted key and wake every reactive reader of it. |
-| [signal_for](#plugkit.ConfigService.signal_for) | The Signal behind one dotted key, created on first read. |
 | [watch](#plugkit.ConfigService.watch) | Call `callback(next, prev)` when the value behind `key` changes. |
 
 #### all { #plugkit.ConfigService.all }
@@ -693,17 +686,6 @@ Set a dotted key and wake every reactive reader of it.
 
 Writes to the override layer, so a later `load_yaml` or `load_env` does
 not revert it.
-
-#### signal_for { #plugkit.ConfigService.signal_for }
-
-```python
-ConfigService.signal_for(key)
-```
-
-The Signal behind one dotted key, created on first read.
-
-Holds `MISSING` when the key is absent, so "unset" and "set to None"
-stay distinguishable.
 
 #### watch { #plugkit.ConfigService.watch }
 

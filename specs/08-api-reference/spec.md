@@ -158,12 +158,17 @@ Findings the generated page surfaced, beyond the missing docstrings:
   one. A wrong example in a reference is worse than no example, and nothing but
   publishing it would have found it.
 - `CONTEXT_MEMBERS` was published carrying `frozenset`'s docstring.
-- `Signal.value` is a property alias for `get()` — duplicate surface, and the one
-  anchor the generator links without emitting. Left alone here; it is an API
-  decision, not a docs one.
-- `ConfigService.signal_for` hands a caller the raw `Signal`, which is the
-  implementation detail `07-change-notification` just finished hiding behind
-  `watch`. Also an API decision, also left alone.
+- `Signal.value` was a property alias for `get()`, and `Computed.value` the same
+  — two spellings of one read. **Removed.** The dangling anchor went with it: the
+  member table linked `value` and the single-page style emitted no section for
+  it, so the reference's one dead link was a symptom of the duplication rather
+  than a rendering bug.
+- `ConfigService.signal_for` handed a caller the raw `Signal`, which is the
+  implementation detail `07-change-notification` had just finished hiding behind
+  `watch`. **Now `_signal_for`.** Nothing outside the service called it.
+
+Both were surfaced by the generated page and decided as API questions: one way
+to read a signal, and no public door back to the mechanism `watch` hides.
 
 ## Log
 

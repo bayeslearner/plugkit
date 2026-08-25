@@ -2672,21 +2672,6 @@ v = counter.get()    # tracks caller if inside Effect/Computed
 v = counter.peek()   # read without tracking
 </code></pre></div>
 
-<h3 id="ch-api-attributes">Attributes</h3>
-<table>
-<thead>
-<tr>
-<th>Name</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>value</code></td>
-<td>Property alias for get().</td>
-</tr>
-</tbody>
-</table>
 <h3 id="ch-api-methods_3">Methods</h3>
 <table>
 <thead>
@@ -2965,10 +2950,6 @@ required  bool — raise if a YAML path is missing (default False)
 <td>Set a dotted key and wake every reactive reader of it.</td>
 </tr>
 <tr>
-<td><a href="#plugkit.ConfigService.signal_for">signal_for</a></td>
-<td>The Signal behind one dotted key, created on first read.</td>
-</tr>
-<tr>
 <td><a href="#plugkit.ConfigService.watch">watch</a></td>
 <td>Call <code>callback(next, prev)</code> when the value behind <code>key</code> changes.</td>
 </tr>
@@ -3032,13 +3013,6 @@ effect under test sees the override arrive and leave.</p>
 <p>Set a dotted key and wake every reactive reader of it.</p>
 <p>Writes to the override layer, so a later <code>load_yaml</code> or <code>load_env</code> does
 not revert it.</p>
-<h4 id="plugkit.ConfigService.signal_for">signal_for</h4>
-<div class="codehilite"><pre><span></span><code><span class="n">ConfigService</span><span class="o">.</span><span class="n">signal_for</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</code></pre></div>
-
-<p>The Signal behind one dotted key, created on first read.</p>
-<p>Holds <code>MISSING</code> when the key is absent, so "unset" and "set to None"
-stay distinguishable.</p>
 <h4 id="plugkit.ConfigService.watch">watch</h4>
 <div class="codehilite"><pre><span></span><code><span class="n">ConfigService</span><span class="o">.</span><span class="n">watch</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>

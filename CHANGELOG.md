@@ -80,6 +80,17 @@ never enters one watcher twice at once. Shaped after the harness's
 `settings.watch`. `points.on_change` is now `points.watch`; 0.1.0 is unreleased,
 so there is no alias.
 
+### Removed
+
+- `Signal.value` and `Computed.value`, property aliases for `get()` (and, on
+  `Signal`, for `set()`). One way to read a signal.
+- `ConfigService.signal_for` is now `_signal_for`. `watch` is the supported way
+  to hear about a change, and a public accessor handing out the Signal was a
+  door back to the mechanism it hides.
+
+Both were duplication the generated API reference made visible. 0.1.0 is
+unreleased, so neither leaves a shim behind.
+
 ### Documentation
 
 The API reference (`docs/reference/index.qmd`) is generated from signatures and

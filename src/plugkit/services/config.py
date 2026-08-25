@@ -122,12 +122,12 @@ class ConfigService(Service):
         The default is applied at read time rather than stored, so two callers
         reading the same key with different defaults do not fight.
         """
-        value = self.signal_for(key).get()
+        value = self._signal_for(key).get()
         return default if value is MISSING else value
 
     def require(self, key: str) -> Any:
         """Read a dotted key, raising if it is absent. Reactive."""
-        value = self.signal_for(key).get()
+        value = self._signal_for(key).get()
         if value is MISSING:
             raise KeyError(f"required config key {key!r} is not set")
         return value
@@ -170,7 +170,7 @@ class ConfigService(Service):
         `default` is applied to both values the way `get()` applies it, so the
         absent-key sentinel never reaches a caller.
         """
-        signal = self.signal_for(key)
+        signal = self._signal_for(key)
         logger = getattr(self.ctx, "logger", None)
 
         def execute():
@@ -197,7 +197,7 @@ class ConfigService(Service):
 
         return self.ctx.effect(execute, f"ctx.config.watch({key!r})")
 
-    def signal_for(self, key: str) -> Signal:
+    def _signal_for(self, key: str) -> Signal:
         """The Signal behind one dotted key, created on first read.
 
         Holds `MISSING` when the key is absent, so "unset" and "set to None"
