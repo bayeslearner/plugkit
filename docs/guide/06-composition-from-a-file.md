@@ -151,4 +151,4 @@ hits it.
 
 ## Next
 
-[Testing](07-testing.qmd) — what components being plain objects buys you.
+[Testing](07-testing.md) — what components being plain objects buys you.

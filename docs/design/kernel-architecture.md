@@ -127,18 +127,7 @@ was built to be judged on.
 
 A fiber is in one of six states. The transitions are driven by one value.
 
-```{mermaid}
-stateDiagram-v2
-    [*] --> PENDING: mounted
-    PENDING --> LOADING: every injected service present
-    LOADING --> ACTIVE: apply() returned
-    LOADING --> FAILED: apply() raised
-    ACTIVE --> UNLOADING: a dependency left, or restart()
-    FAILED --> LOADING: supervisor revived it
-    UNLOADING --> PENDING: disposers ran
-    UNLOADING --> DISPOSED: disposed for good
-    DISPOSED --> [*]
-```
+![Fiber state machine: PENDING, LOADING, ACTIVE, FAILED, UNLOADING, DISPOSED](fiber-states.svg)
 
 **The epoch** is that one value: a digest of the *identities of the fibers
 providing* each injected service. Not the values — the providers. When any
@@ -212,4 +201,4 @@ adding an allow to a guard, you are building a veto stage and should say so.
   `inject`. This is what makes the epoch trustworthy — a hidden dependency would
   not be in the digest, so its replacement would not reload the dependent.
 - **No compatibility shim for any other framework.** Comparisons live in
-  [what-it-does-not-replace](what-it-does-not-replace.qmd), not here.
+  [what-it-does-not-replace](what-it-does-not-replace.md), not here.

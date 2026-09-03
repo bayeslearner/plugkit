@@ -9,7 +9,7 @@ fixing first.
 
 | | |
 |---|---|
-| `.github/workflows/publish-pypi.yml` | correct as written. Triggers on `v*` tags **and** `workflow_dispatch`. Uses trusted publishing — `id-token: write`, no token. |
+| the PyPI publish workflow | correct as written. Triggers on `v*` tags **and** `workflow_dispatch`. Uses trusted publishing — `id-token: write`, no token. **Superseded 2026-08-24**: trusted publishing was never configured on PyPI, so every tag left a failed run; the file is now `.github/workflows/release.yml`, which builds and attaches artifacts to the GitHub release and does not publish. |
 | GitHub `pypi` environment | exists on `bayeslearner/plugkit`, no protection rules, so a run will not wait for approval |
 | Repo secrets | none, and none needed |
 | Build | `python -m build` succeeds; `twine check` passes both artifacts |
@@ -141,7 +141,7 @@ repeats it verbatim and continues. An editing artefact from this session.
 
 ### 5. A dangling cross-reference, and a missing chapter
 
-`docs/guide/01-first-plugin.qmd:245` — *"That is also how supervision sees
+`docs/guide/01-first-plugin.md:245` — *"That is also how supervision sees
 failures"* links to the **tools** chapter. There is no supervision chapter.
 `SupervisorService` is exported and in the README table but appears nowhere in
 the eight guide chapters.

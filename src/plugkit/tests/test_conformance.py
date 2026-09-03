@@ -197,7 +197,7 @@ async def test_disposal_ordering_sync_versus_async():
 # ── the three properties an agent runtime needs ─────────────────────────
 #
 # Each is something iPOPO, the closest prior art in Python, cannot do. They are
-# asserted here because docs/design/why-not-ipopo.qmd rests on them.
+# asserted here because docs/design/why-not-ipopo.md rests on them.
 
 
 async def test_a_plugin_body_may_be_async():

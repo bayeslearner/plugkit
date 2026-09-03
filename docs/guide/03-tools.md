@@ -256,8 +256,8 @@ directly.
 
 ## Next
 
-[Extension points](04-your-own-service.qmd) — how `ctx.tools` holds its tools,
+[Extension points](04-your-own-service.md) — how `ctx.tools` holds its tools,
 and how to build a collection others contribute to.
 
-- [`docs/design/kernel-architecture.qmd`](https://github.com/bayeslearner/plugkit/blob/main/docs/design/kernel-architecture.qmd) — the architecture anchor
+- [Kernel architecture](../design/kernel-architecture.md) — the architecture anchor
 - `src/plugkit/tests/test_tools.py` — one test per stage, plus the properties above

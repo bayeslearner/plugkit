@@ -94,7 +94,7 @@ pre:not(.sourceCode) {
 
 /* ── Mermaid diagrams: high contrast ─────────────────────────────
  * One central place for ALL mermaid theming. Do NOT add inline
- * %%{init: {'theme':...}}%% blocks in .qmd files — they fight these
+ * %%{init: {'theme':...}}%% blocks in .md files — they fight these
  * rules and produce inconsistent colors per-page (recurring bug).
  */
 .mermaid {

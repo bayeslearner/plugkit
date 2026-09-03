@@ -36,7 +36,7 @@ def _yaml():
         except ImportError as exc:  # pragma: no cover - covered by test_bare_install
             raise ImportError(
                 "reading or writing a YAML plugin tree needs pyyaml — "
-                'install it with `pip install "plugkit[providers]"`'
+                'install it with `pip install "plugkit[yaml]"`'
             ) from exc
 
         class _CordisYamlLoader(yaml.SafeLoader):

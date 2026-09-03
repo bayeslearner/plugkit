@@ -3,7 +3,7 @@ title: "Extension points and your own services"
 subtitle: "Many plugins filling one role"
 ---
 
-[Chapter 2](02-popo-components.qmd) covered `provide()`, which registers a plain
+[Chapter 2](02-popo-components.md) covered `provide()`, which registers a plain
 class under a name — **one** provider, **one** name. This chapter covers the
 other direction: **many** plugins contributing to **one** role.
 
@@ -53,7 +53,7 @@ ctx.points.names()                          # every point with something in it
 and can be woken when it changes:
 
 ```python
-ctx.points.on_change("http.routes", rebuild_router)
+ctx.points.watch("http.routes", rebuild_router)
 ```
 
 That disposer is owned by the **consumer**, so a consumer that unloads stops
@@ -130,7 +130,7 @@ this.
 
 **Return an effect from any method that registers something.** A method that
 mutates the service's own state on behalf of a caller and returns nothing has
-created something nobody owns — the route from [chapter 0](00-why.qmd), one level
+created something nobody owns — the route from [chapter 0](00-why.md), one level
 down.
 
 ```python
@@ -186,7 +186,7 @@ class Router(Service):
 | a collection plus behaviour over it | a `Service` subclass holding its collection in a point |
 
 A `Service` subclass imports the kernel, which is the cost
-[chapter 2](02-popo-components.qmd) exists to avoid. Pay it only when there is
+[chapter 2](02-popo-components.md) exists to avoid. Pay it only when there is
 behaviour to attach.
 
 ## Where this sits among other systems
@@ -202,5 +202,5 @@ contributor unloads, so there is no unregister for anyone to forget.
 
 ## Next
 
-[Config and reactivity](05-config-and-reactivity.qmd) — values that change while
+[Config and reactivity](05-config-and-reactivity.md) — values that change while
 the program runs.

@@ -7,7 +7,7 @@ subtitle: "How signals.py works inside: five data structures, the tracking mecha
 be used in a plain script. `ReactiveService` is the separate plugin that binds it
 to fiber lifetime, so a subscription is disposed with the plugin that created it.
 
-Using it needs none of this page — [Config and reactivity](../guide/05-config-and-reactivity.qmd)
+Using it needs none of this page — [Config and reactivity](../guide/05-config-and-reactivity.md)
 covers that. Read this to understand why `ctx.reactive.effect` tracks its
 dependencies without being told, how `batch()` coalesces writes, and what breaks
 if you mutate a dict in place.
@@ -406,5 +406,5 @@ further and cancels the in-flight task at supersede time, so the body sees
 
 ## See also
 
-- [Config and reactivity](../guide/05-config-and-reactivity.qmd) — using this from a plugin
+- [Config and reactivity](../guide/05-config-and-reactivity.md) — using this from a plugin
 - [Python `contextvars` docs](https://docs.python.org/3/library/contextvars.html)

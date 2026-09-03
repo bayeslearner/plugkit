@@ -221,37 +221,37 @@ def test_a_contribution_is_frozen():
 # ── R4: wake when the set changes ─────────────────────────────────────
 
 
-async def test_on_change_fires_when_a_contribution_arrives():
+async def test_watch_fires_when_a_contribution_arrives():
     root = await a_root()
     seen = []
-    root.points.on_change("p", lambda: seen.append(root.points.count("p")))
+    root.points.watch("p", lambda: seen.append(root.points.count("p")))
 
     root.points.add("p", 1)
     assert seen == [1]
 
 
-async def test_on_change_fires_when_a_contribution_leaves():
+async def test_watch_fires_when_a_contribution_leaves():
     root = await a_root()
     dispose = root.points.add("p", 1)
     seen = []
-    root.points.on_change("p", lambda: seen.append(root.points.count("p")))
+    root.points.watch("p", lambda: seen.append(root.points.count("p")))
 
     dispose()
     assert seen == [0]
 
 
-async def test_on_change_does_not_fire_on_registration():
+async def test_watch_does_not_fire_on_registration():
     root = await a_root()
     root.points.add("p", 1)
     seen = []
-    root.points.on_change("p", lambda: seen.append("fired"))
+    root.points.watch("p", lambda: seen.append("fired"))
     assert seen == []
 
 
-async def test_on_change_is_per_point():
+async def test_watch_is_per_point():
     root = await a_root()
     seen = []
-    root.points.on_change("watched", lambda: seen.append(1))
+    root.points.watch("watched", lambda: seen.append(1))
 
     root.points.add("ignored", "x")
     assert seen == []
@@ -259,12 +259,12 @@ async def test_on_change_is_per_point():
     assert seen == [1]
 
 
-async def test_on_change_dies_with_the_consumer():
+async def test_watch_dies_with_the_consumer():
     root = await a_root()
     seen = []
 
     def consumer(ctx, config=None):
-        ctx.points.on_change("p", lambda: seen.append(1))
+        ctx.points.watch("p", lambda: seen.append(1))
 
     consumer.inject = ["points"]
     fiber = await root.plugin(consumer)
@@ -341,6 +341,28 @@ async def test_a_key_must_be_a_string():
     root = await a_root()
     with pytest.raises(TypeError, match="key"):
         root.points.add("p", "v", key=42)
+
+
+async def test_an_async_watcher_is_serialized():
+    """Same rule as `ctx.config.watch`: one watcher is never entered twice at once."""
+    root = await a_root()
+    running = 0
+    overlaps = []
+
+    async def slow():
+        nonlocal running
+        running += 1
+        if running > 1:
+            overlaps.append(root.points.count("p"))
+        await asyncio.sleep(0.01)
+        running -= 1
+
+    root.points.watch("p", slow)
+    root.points.add("p", 1)
+    root.points.add("p", 2)
+    await asyncio.sleep(0.1)
+
+    assert overlaps == [], "a watcher was entered while already running"
 
 
 # ── the facility is domain-blind ──────────────────────────────────────

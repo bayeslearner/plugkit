@@ -58,7 +58,7 @@ component from a live program. And `import` is permanent — `sys.modules` cache
 modules and the language has no unload — so ecosystems built around load-once
 rather than solving retraction. [`iPOPO`](https://ipopo.readthedocs.io), a port
 of OSGi, is the main exception, and
-[it has its own limits](docs/design/why-not-ipopo.qmd) — its lifecycle callbacks
+[it has its own limits](docs/design/why-not-ipopo.md) — its lifecycle callbacks
 cannot be `async`, and it does not undo a component's effects either.
 
 ## Why one rule is enough to build on
@@ -203,12 +203,12 @@ startup. Choose plugkit when it is not.
 plugkit does not supersede `dependency-injector`, `pluggy` or `iPOPO`. It ships
 *fewer* features than any of them and replaces one thing: who owns a component's
 side effects. [What plugkit does not
-replace](docs/design/what-it-does-not-replace.qmd) is the feature-by-feature
+replace](docs/design/what-it-does-not-replace.md) is the feature-by-feature
 version.
 
 `iPOPO` deserves a longer answer, since it is the closest prior art and a fair
 reader will ask why not just use it.
-[Why not build on iPOPO](docs/design/why-not-ipopo.qmd) tests four things: an
+[Why not build on iPOPO](docs/design/why-not-ipopo.md) tests four things: an
 `async def` lifecycle callback is never awaited and leaves the component INVALID;
 `@Invalidate` does not undo a component's side effects either; the registry is
 framework-global with no scoped views; and its listeners cannot wrap or veto one
@@ -658,15 +658,19 @@ There is no privileged tier.
 | `services.supervision` | `ctx.supervisor` — restart strategies for failed fibers |
 | `services.loader` | `ctx.loader` — mount an application from a YAML file |
 
-Two services need a third-party package. Install them as extras:
+Three extras, each installing something the package imports:
 
 ```bash
+pip install "plugkit[yaml]"      # pyyaml, for YAML config and composition files
 pip install "plugkit[config]"    # dependency-injector, for env and pydantic config
 pip install "plugkit[hmr]"       # watchdog, for hot module replacement
 ```
 
-Both extras degrade rather than fail. Without `config`, `ConfigService` still
-loads dicts and YAML. The test suite runs in both configurations.
+Each degrades rather than fails. Without `config`, `ConfigService` still loads
+dicts and YAML; without `yaml`, it still loads dicts, and a YAML path raises a
+named `ImportError` rather than failing obscurely. The test suite runs in every
+configuration, and `test_no_phantom_extras` fails if an extra ever installs
+something no module imports.
 
 ## Provenance
 
@@ -697,6 +701,14 @@ Everything above the kernel is plugkit's own, and none of it exists upstream:
 
 ## Development
 
+Rebuild the docs:
+
+```bash
+uv run --with quartodoc --extra dev python scripts/build-reference.py   # API reference
+uv run --with markdown --with pygments python scripts/build-guide.py    # one-page guide
+cd docs && quarto render                                                # the site
+```
+
 Run the test suite:
 
 ```bash
@@ -707,7 +719,8 @@ uv run --extra dev --with pyright pytest src/plugkit/tests/test_typing.py
 `--extra dev` carries pytest and `pyyaml`; without it the loader and config-YAML
 tests cannot run. It is the set CI installs.
 
-- Architecture: [`docs/design/kernel-architecture.qmd`](docs/design/kernel-architecture.qmd)
+- The whole guide on one page: [`docs/plugkit-guide.html`](docs/plugkit-guide.html)
+- Architecture: [`docs/design/kernel-architecture.md`](docs/design/kernel-architecture.md)
 - Project pillars: [`docs/steering/pillars.md`](docs/steering/pillars.md)
 - Current sprint: the head of [`specs/`](specs/)
 

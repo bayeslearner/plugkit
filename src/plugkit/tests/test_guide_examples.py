@@ -57,13 +57,13 @@ async def test_the_reading_api_the_chapter_shows():
     assert root.points.names() == ["http.routes"]
 
 
-async def test_on_change_wakes_the_consumer_and_dies_with_it():
+async def test_watch_wakes_the_consumer_and_dies_with_it():
     root = Context()
     await root.plugin(PointsService)
     rebuilds = []
 
     def router(ctx, config=None):
-        ctx.points.on_change("http.routes", lambda: rebuilds.append(1))
+        ctx.points.watch("http.routes", lambda: rebuilds.append(1))
 
     router.inject = ["points"]
     fiber = await root.plugin(router)
@@ -198,6 +198,41 @@ async def test_an_effect_reruns_only_for_the_key_it_read():
     root.config.set("http.timeout", 60)
     assert timeouts == [30, 60]
     assert hosts == ["a"], "an unrelated reader re-ran"
+
+
+async def test_the_watch_example_applies_once_then_follows():
+    """The chapter's `watch` block: apply once yourself, then be told about changes."""
+    from plugkit import ConfigService
+
+    timeouts = []
+
+    class Client:
+        def set_timeout(self, seconds):
+            timeouts.append(seconds)
+
+    client = Client()
+    root = Context()
+    await root.plugin(ConfigService, {"dict": {"http": {"timeout": 30}}})
+    await settle()
+
+    def http(ctx, config=None):
+        client.set_timeout(ctx.config.get("http.timeout", 30))
+        ctx.config.watch("http.timeout", lambda next_, prev: client.set_timeout(next_))
+
+    http.inject = ["config"]
+    fiber = await root.plugin(http)
+    await settle()
+    assert timeouts == [30], "the chapter's explicit first application did not happen"
+
+    root.config.set("http.timeout", 60)
+    await settle()
+    assert timeouts == [30, 60]
+
+    await fiber.dispose()
+    await settle()
+    root.config.set("http.timeout", 90)
+    await settle()
+    assert timeouts == [30, 60], "the watcher outlived the plugin, as the chapter denies"
 
 
 async def test_config_override_restores(tmp_path):

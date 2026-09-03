@@ -100,6 +100,7 @@ class FileLoader(Loader):
         self.data = self.root.data
 
     async def read(self, data: list) -> None:
+        """Apply a parsed composition — the entries a config file listed."""
         self.data = data
         await self.root.update(data)
         await self.await_()

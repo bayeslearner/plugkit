@@ -136,4 +136,4 @@ async def main():
 
 You have now seen the whole loop: build a fiber, keep your classes plain, add
 tools, extend the kernel, compose from a file, and restart what fails. The
-[Testing](07-testing.qmd) chapter turns it into a suite.
+[Testing](07-testing.md) chapter turns it into a suite.

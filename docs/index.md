@@ -34,21 +34,25 @@ root.greeter.hello("world")          # "hello world"
 
 | | |
 |---|---|
-| [Why plugkit exists](guide/00-why.qmd) | the route that outlives the component that added it, and the invariant that fixes it |
-| [Your first plugin](guide/01-first-plugin.qmd) | inject, effects, and watching unload be total |
-| [Plain components](guide/02-popo-components.qmd) | `provide()`, and a `ctx` your type checker understands |
-| [Tools and permission](guide/03-tools.qmd) | the five-stage pipeline, and why a guard has no allow |
-| [Extension points](guide/04-your-own-service.qmd) | many plugins filling one role, and the rebinding rule |
-| [Config and reactivity](guide/05-config-and-reactivity.qmd) | values that change while the program runs |
-| [Composition from a file](guide/06-composition-from-a-file.qmd) | an application as a YAML list |
-| [Testing](guide/07-testing.qmd) | what plain components buy you |
-| [Supervision](guide/08-supervision.qmd) | what to do about `FAILED` |
-| [API reference](api-reference.qmd) | every public name in one line |
+| [Why plugkit exists](guide/00-why.md) | the route that outlives the component that added it, and the invariant that fixes it |
+| [Your first plugin](guide/01-first-plugin.md) | inject, effects, and watching unload be total |
+| [Plain components](guide/02-popo-components.md) | `provide()`, and a `ctx` your type checker understands |
+| [Tools and permission](guide/03-tools.md) | the five-stage pipeline, and why a guard has no allow |
+| [Extension points](guide/04-your-own-service.md) | many plugins filling one role, and the rebinding rule |
+| [Config and reactivity](guide/05-config-and-reactivity.md) | values that change while the program runs |
+| [Composition from a file](guide/06-composition-from-a-file.md) | an application as a YAML list |
+| [Testing](guide/07-testing.md) | what plain components buy you |
+| [Supervision](guide/08-supervision.md) | what to do about `FAILED` |
+| [API reference](reference/index.md) | every public name, with its signature |
+
+Every chapter and the API reference also exist as
+[one self-contained page](plugkit-guide.html) — one file, no assets, readable
+offline.
 
 ## Before you adopt it
 
 plugkit ships fewer features than `dependency-injector`, `pluggy` or `iPOPO`. It
-replaces one thing in each: who owns a component's side effects. [What plugkit does not replace](design/what-it-does-not-replace.qmd)
+replaces one thing in each: who owns a component's side effects. [What plugkit does not replace](design/what-it-does-not-replace.md)
 compares them feature by feature.
 
 ## The one idea

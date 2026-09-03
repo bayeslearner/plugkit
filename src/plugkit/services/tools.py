@@ -107,6 +107,7 @@ class ToolResult:
 
     @staticmethod
     def failure(code: str, message: str) -> "ToolResult":
+        """A failed result carrying a machine-readable code and a message."""
         return ToolResult(ok=False, error={"code": code, "message": message})
 
 
@@ -141,6 +142,7 @@ class Accept:
 
     @staticmethod
     def replacing(value: Any) -> "Accept":
+        """Accept the call but hand back `value` instead of what it returned."""
         return Accept(value=value, replaced=True)
 
 
@@ -261,12 +263,15 @@ class ToolsService(Service):
     # ── inspection ────────────────────────────────────────────────────
 
     def get(self, name: str) -> Any | None:
+        """The tool registered under `name`, or None."""
         return self.ctx.points.get(self.TOOLS, name)
 
     def list(self) -> list:
+        """Every registered tool, in contribution order."""
         return self.ctx.points.all(self.TOOLS)
 
     def names(self) -> list[str]:
+        """Every registered tool's name, sorted."""
         return sorted(tool.name for tool in self.list())
 
     # ── the pipeline ──────────────────────────────────────────────────

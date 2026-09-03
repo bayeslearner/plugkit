@@ -5,7 +5,7 @@ subtitle: "The closest prior art in Python, tested against what an agent runtime
 
 [iPOPO](https://ipopo.readthedocs.io) is a Python implementation of OSGi. It is
 the closest thing in Python to what plugkit does, it is older, larger and better
-tested, and [What plugkit does not replace](what-it-does-not-replace.qmd) says it
+tested, and [What plugkit does not replace](what-it-does-not-replace.md) says it
 exceeds plugkit in most dimensions.
 
 So it is a fair question why an agent runtime would not use it. Four
@@ -112,7 +112,7 @@ through it by convention, which leaves the gate bypassable from any caller that
 does not use it.
 
 Cordis has five dispatch modes; `waterfall` is the one that makes
-[the tool pipeline](../guide/03-tools.qmd) possible without a bespoke chain.
+[the tool pipeline](../guide/03-tools.md) possible without a bespoke chain.
 
 ## Where this leaves iPOPO
 

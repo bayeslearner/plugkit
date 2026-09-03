@@ -48,6 +48,19 @@ class Greeter:
         return f"{self.prefix} {name}"
 
 
+class Timeouts:
+    """Holds reactive state. Still imports nothing: `reactive` is a parameter."""
+
+    def __init__(self, reactive, seconds=30):
+        self.seen = []
+        self.seconds = reactive.signal(seconds)
+        self._reactive = reactive
+        reactive.effect(lambda: self.seen.append(self.seconds.get()))
+
+    def follow(self, sink):
+        self._reactive.effect(lambda: sink.append(self.seconds.get()))
+
+
 class GreeterDeps(Protocol):
     database: Database
     cache: Cache
@@ -204,6 +217,55 @@ async def test_binding_works_without_reactive_mounted():
     assert root.database.dsn == "one://", "rebuilt without ReactiveService mounted"
 
 
+async def test_a_plain_component_registers_fiber_owned_effects():
+    """Reactive state reaches a plain class without marking the class up.
+
+    `reactive` arrives as an ordinary constructor argument, and what the class
+    stores is a view already addressed to the binding's fiber — so an effect it
+    registers later, from a method, is owned by that fiber too. Unload stops
+    both, and registering afterwards raises instead of leaking.
+    """
+    root = Context()
+    await root.plugin(ReactiveService)
+    fiber = await root.plugin(provide(Timeouts, "timeouts", needs=["reactive"]))
+    await settle()
+
+    timeouts = root.timeouts
+    assert timeouts.seen == [30], "the effect made in __init__ did not run"
+
+    late = []
+    timeouts.follow(late)
+    timeouts.seconds.set(45)
+    await settle()
+    assert timeouts.seen == [30, 45]
+    assert late == [30, 45], "an effect registered from a method did not follow"
+
+    await fiber.dispose()
+    await settle()
+    timeouts.seconds.set(99)
+    await settle()
+    assert timeouts.seen == [30, 45], "an effect outlived the fiber that owned it"
+    assert late == [30, 45], "the method's effect outlived the fiber"
+
+    with pytest.raises(Exception, match="inactive"):
+        timeouts.follow([])
+
+
+def test_a_component_holding_signals_still_needs_no_kernel():
+    """The stand-in for `reactive` in a unit test is two lines of stdlib."""
+    import types
+
+    from plugkit import Effect, Signal
+
+    seen = []
+    timeouts = Timeouts(types.SimpleNamespace(signal=Signal, effect=Effect), seconds=5)
+    timeouts.follow(seen)
+    timeouts.seconds.set(7)
+
+    assert timeouts.seen == [5, 7]
+    assert seen == [5, 7]
+
+
 async def test_a_context_manager_component_is_entered():
     """Teardown must go through the protocol setup went through.
 
@@ -288,6 +350,123 @@ async def test_an_async_only_context_manager_says_what_to_do():
     root = Context()
     fiber = root.plugin(provide(AsyncPool, "pool"))
     with pytest.raises(TypeError, match="close="):
+        await fiber
+
+
+# ── construction that needs an await: the init hook ───────────────────────────
+
+
+class Pool:
+    """A plain class whose readiness needs an await. Imports nothing."""
+
+    def __init__(self, dsn="sqlite://"):
+        self.dsn = dsn
+        self.connected = False
+        self.closed = False
+
+    async def connect(self):
+        await asyncio.sleep(0)
+        self.connected = True
+
+    def close(self):
+        self.closed = True
+
+
+async def test_the_init_hook_runs_after_the_service_is_registered():
+    """Cordis registers from the constructor and awaits the init hook after.
+
+    `service.ts` registers the instance synchronously; `fiber.ts` then runs the
+    init hook and awaits it. `provide(init=...)` is that order for a plain class.
+    """
+    root = Context()
+    fiber = await root.plugin(provide(Pool, "pool", init="connect"))
+    await settle()
+
+    assert root.pool.connected is True, "the init hook did not run"
+
+    pool = root.pool
+    await fiber.dispose()
+    await settle()
+    assert pool.closed is True, "init= displaced the ordinary teardown"
+
+
+async def test_a_dependent_does_not_see_a_half_built_service():
+    """The property `test_pending_inject` holds upstream: injection waits for init.
+
+    The service is registered before the hook runs, so the guarantee cannot come
+    from registration order — it comes from the fiber still loading, which is
+    what makes the name unresolvable to anyone injecting it.
+    """
+    release = asyncio.Event()
+    seen = []
+
+    class Slow:
+        def __init__(self):
+            self.ready = False
+
+        async def start(self):
+            await release.wait()
+            self.ready = True
+
+    root = Context()
+    # Not awaited: awaiting this mount would wait for the init hook itself, and
+    # the point of the test is what everyone *else* sees while it runs.
+    root.plugin(provide(Slow, "slow", init="start"))
+
+    def dependent(ctx, config=None):
+        seen.append(ctx.slow.ready)
+
+    dependent.inject = ["slow"]
+    await root.plugin(dependent)
+    await settle()
+    assert seen == [], "a dependent ran while the service was still initialising"
+
+    release.set()
+    await settle()
+    assert seen == [True], "the dependent did not run once init finished"
+
+
+async def test_a_sync_init_hook_is_allowed():
+    class Cursor:
+        def __init__(self):
+            self.opened = False
+
+        def open(self):
+            self.opened = True
+
+    root = Context()
+    await root.plugin(provide(Cursor, "cursor", init="open"))
+    await settle()
+    assert root.cursor.opened is True
+
+
+async def test_a_failing_init_hook_fails_the_fiber():
+    class Broken:
+        async def start(self):
+            raise RuntimeError("no connection")
+
+    root = Context()
+    fiber = root.plugin(provide(Broken, "broken", init="start"))
+    with pytest.raises(RuntimeError, match="no connection"):
+        await fiber
+
+
+async def test_an_async_factory_is_refused_and_says_what_to_do():
+    """Registering the coroutine was the silent failure; refusing is the loud one."""
+
+    async def connect(dsn="sqlite://"):
+        return Database(dsn)
+
+    root = Context()
+    fiber = root.plugin(provide(connect, "db"))
+    with pytest.raises(TypeError, match="init="):
+        await fiber
+
+
+async def test_a_bad_init_name_is_loud():
+    root = Context()
+    fiber = root.plugin(provide(Database, "database", init="nope"))
+    with pytest.raises(AttributeError, match="nope"):
         await fiber
 
 

@@ -49,7 +49,7 @@ undo of what a component did, so teardown is a promise each component makes
 individually and the framework cannot check it.
 
 Nor is it a defect in the invented framework: every real one named above behaves
-this way. [Why not build on iPOPO](../design/why-not-ipopo.qmd) runs this exact
+this way. [Why not build on iPOPO](../design/why-not-ipopo.md) runs this exact
 test against iPOPO, where the route survives `@Invalidate`.
 
 ## The one idea in plugkit
@@ -153,7 +153,7 @@ greeter = provide(Greeter, "greeter", needs=["database"], config={"prefix": "gre
 ```
 
 `Greeter` is testable as `Greeter(database=FakeDB(), prefix="hi")`. No kernel, no
-container, no fixtures. That is [chapter 2](02-popo-components.qmd).
+container, no fixtures. That is [chapter 2](02-popo-components.md).
 
 ## Where this design comes from
 
@@ -191,6 +191,6 @@ one described above, and is the reason the other three are possible.
 
 ## What to read next
 
-- [First plugin](01-first-plugin.qmd) — inject, effects, and watching unload be total
-- [Plain components](02-popo-components.qmd) — `provide()`, and a typed `ctx`
-- [Tools](03-tools.qmd) — the five-stage pipeline, and why a guard has no "allow"
+- [First plugin](01-first-plugin.md) — inject, effects, and watching unload be total
+- [Plain components](02-popo-components.md) — `provide()`, and a typed `ctx`
+- [Tools](03-tools.md) — the five-stage pipeline, and why a guard has no "allow"

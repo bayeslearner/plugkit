@@ -54,7 +54,7 @@ published the diagram's source as text with no error. Reproduced in a 6-line
 standalone file; confirmed it predated the theme work.
 
 Fix: ```` ```{mermaid} ```` (executable form), which requires `.qmd` →
-`docs/design/kernel-architecture.qmd` became `.qmd`. Every reference updated
+`docs/design/kernel-architecture.md` became `.qmd`. Every reference updated
 (README, CLAUDE.md, `_quarto.yml`, guide 03). The `anchors:
 [kernel-architecture]` slugs are NOT paths and were untouched. A test in
 `test_docs_consistency.py` enforces it **scoped to rendered docs only** —

@@ -49,7 +49,7 @@ Now `greeter` does not run when you mount it. It runs when a service named
 
 `fn.inject = [...]` is the primitive spelling, used here because it shows the
 list plainly. It runs correctly and pyright rejects it — you cannot assign
-arbitrary attributes to a function. [Chapter 2](02-popo-components.qmd)
+arbitrary attributes to a function. [Chapter 2](02-popo-components.md)
 introduces `@plugin`, which carries the list and can derive it from a Protocol,
 and `provide()`, which derives it from `needs`. Both are what you use in real
 code.
@@ -255,11 +255,11 @@ that changes.
 
 `FAILED` is also what `SupervisorService` watches. Mounting it gives failed fibers
 a restart strategy — `one_for_one`, `one_for_all` or `rest_for_one`, with backoff
-— built on this state and nothing else. The whole [supervision chapter](08-supervision.qmd)
+— built on this state and nothing else. The whole [supervision chapter](08-supervision.md)
 teaches what to do about `FAILED`.
 :::
 
 ## Next
 
-[Plain components](02-popo-components.qmd) — how to keep your own classes free of
+[Plain components](02-popo-components.md) — how to keep your own classes free of
 all of this.

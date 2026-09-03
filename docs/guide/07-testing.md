@@ -17,7 +17,7 @@ def test_greeting():
 ```
 
 No kernel, no container, no fixtures, no `async`. This is the whole reason
-[chapter 2](02-popo-components.qmd) separates the component from its
+[chapter 2](02-popo-components.md) separates the component from its
 registration. If a test of your business logic needs a kernel, something has
 leaked.
 

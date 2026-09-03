@@ -23,7 +23,7 @@ adopt.
 | **Adoptability** | 🟢 strong | `binding.provide()` keeps components POPO; `test_component_needs_no_kernel_at_all` is the guard [src:src/plugkit/tests/test_binding.py] |
 | **Conformance** | 🟡 partial | 17 assertions cover the load-bearing semantics. Of DeepSeek Harness's 58 service keys, one is implemented (`ctx.tools`) [src:src/plugkit/services/tools.py] |
 | **Teaching** | 🟢 strong | The guide runs from why it exists through supervision, every example executed by `test_guide_examples.py` and `test_readme_examples.py`, and `test_docs_consistency.py` holds each page to importing what it names and the API reference to `__all__` [src:src/plugkit/tests/test_docs_consistency.py] |
-| **Packaging** | 🟡 partial | One package, `plugkit` 0.1.0, with honest `config`/`hmr` extras. Unreleased; the PyPI name is claimed but nothing is published. The vendored kernel is a fork, not a dependency [src:src/plugkit/VENDORED.md] |
+| **Packaging** | 🟢 | One package, `plugkit`, with three extras that each install something a module imports — `yaml`, `config`, `hmr` — held by `test_no_phantom_extras`. Distributed as a GitHub release, not on PyPI: the tag workflow attaches the sdist and wheel, and downstreams pin the tag. The vendored kernel is a fork, not a dependency [src:src/plugkit/VENDORED.md] |
 
 ## The honest read
 
@@ -47,6 +47,6 @@ holds.
 **Scope is deliberately narrow.** plugkit is a kernel plus five services. It has
 no auth, credentials, storage, tracing or transport layer, and adding them is not
 the plan — those belong to whatever is built on top.
-`docs/design/what-it-does-not-replace.qmd` states this against
+`docs/design/what-it-does-not-replace.md` states this against
 `dependency-injector`, `pluggy` and `iPOPO`. Any claim that plugkit supersedes
 them is false and must not appear in the docs.

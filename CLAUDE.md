@@ -37,7 +37,7 @@ anything that mirrors a dsh subsystem.
 ## Required reading (session start)
 
 1. `docs/steering/pillars.md` — what this project lives or dies on
-2. `docs/design/kernel-architecture.qmd` — the anchor every sprint conforms to
+2. `docs/design/kernel-architecture.md` — the anchor every sprint conforms to
 3. The head of the sprint queue in `specs/` — the lowest-numbered spec that is
    not CLOSED. That is where work is.
 
@@ -48,7 +48,7 @@ anything that mirrors a dsh subsystem.
 | sprints | `specs/<NN-name>/spec.md` |
 | pillars, long-lived intent | `docs/steering/` |
 | stable cross-cutting design (the anchors) | `docs/design/` |
-| the user-facing book | `docs/guide/`, `docs/index.qmd` |
+| the user-facing book | `docs/guide/`, `docs/index.md` |
 | dated, time-bound records | `docs/history/` |
 | what was vendored, why, and every change made to it | `src/plugkit/VENDORED.md` |
 
@@ -90,9 +90,11 @@ same set CI installs (`pip install -e ".[dev]"` in `.github/workflows/test.yml`)
 so the local gate and the CI gate are the same gate.
 
 Test config (`asyncio_mode`, `pythonpath`) is in `pyproject.toml`. Optional
-extras: `config` (dependency-injector), `hmr` (watchdog). Both degrade rather
-than fail, and the suite passes with and without them — `without-dependency-injector`
-and `bare-install` in the CI workflow are the jobs that hold that claim up.
+extras: `yaml` (pyyaml), `config` (dependency-injector), `hmr` (watchdog). Each
+degrades rather than fails, and the suite passes with and without them —
+`without-dependency-injector` and `bare-install` in the CI workflow are the jobs
+that hold that claim up. **An extra must install something a module imports**;
+`test_no_phantom_extras` deleted five that did not.
 
 ## Working rules
 

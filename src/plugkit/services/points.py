@@ -38,6 +38,7 @@ from typing import Any, Callable
 
 from ..cordis import Service
 from ..signals import Effect, Signal
+from ._watch import Watcher
 
 __all__ = ["PointsService", "Contribution"]
 
@@ -200,6 +201,7 @@ class PointsService(Service):
         return sorted(self._points)
 
     def count(self, point: str) -> int:
+        """How many contributions `point` holds. Reading tracks the point."""
         self._track(point)
         return len(self._points.get(point, ()))
 
@@ -217,17 +219,26 @@ class PointsService(Service):
 
     # ── reacting ──────────────────────────────────────────────────────
 
-    def on_change(self, point: str, callback: Callable[[], Any]) -> Callable[[], Any]:
+    def watch(self, point: str, callback: Callable[[], Any]) -> Callable[[], Any]:
         """Run `callback` when the contributions to `point` change.
 
         Returns a disposer owned by the *calling* plugin, so a consumer that
         unloads stops being called. `callback` does not run on registration —
         the caller has just read the current set, and an effect that fires once
         at registration is the behaviour `ctx.reactive.effect` already provides.
+
+        The callback takes no arguments, unlike `ctx.config.watch`'s
+        `(next, prev)`: a point's value is a set the caller re-reads with
+        `all()` or `where()`, and there is no single new value to hand over.
+
+        An async callback is awaited, and invocations of one watcher are
+        serialized rather than overlapping.
         """
         signal = self._signal(point)
+        logger = getattr(self.ctx, "logger", None)
 
         def execute():
+            watcher = Watcher(callback, f"point {point!r}", logger)
             first = True
 
             def run():
@@ -236,11 +247,17 @@ class PointsService(Service):
                 if first:
                     first = False
                     return
-                callback()
+                watcher.fire()
 
-            return Effect(run).dispose
+            effect = Effect(run)
 
-        return self.ctx.effect(execute, f"ctx.points.on_change({point!r})")
+            def dispose():
+                watcher.dispose()
+                effect.dispose()
+
+            return dispose
+
+        return self.ctx.effect(execute, f"ctx.points.watch({point!r})")
 
     # ── internals ─────────────────────────────────────────────────────
 

@@ -159,7 +159,7 @@ refusing rather than by choosing a better silent default.
 
 ```mermaid
 graph TB
-    A[docs: README, CLAUDE.md, guide/*.qmd, steering/*.md, CHANGELOG.md] --> B[test_docs_consistency.py]
+    A[docs: README, CLAUDE.md, guide/*.md, steering/*.md, CHANGELOG.md] --> B[test_docs_consistency.py]
     C[src/plugkit/**] --> B
     B --> D{claim holds?}
     D -->|no| E[FAIL, naming file:line]

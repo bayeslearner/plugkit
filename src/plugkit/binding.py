@@ -58,6 +58,34 @@ Cordis-correct outcome, since a constructor argument cannot be changed in place.
 On unload the binding calls `close()` or `aclose()` if the object has one, or
 `__exit__`/`__aexit__` if it is a context manager. Name a different method with
 `close="shutdown"`, or pass `close=False` to disable.
+
+## Construction that needs an await
+
+It does not happen in the factory. Cordis registers a service from its
+constructor (`vendor/cordis/src/service.ts`), which in JavaScript cannot be
+async, and everything needing an await goes in a separate init hook that the
+fiber awaits — `host/webserver`, `session-persistence-sqlite` and `workspace` in
+DeepSeek Harness are all written that way. `provide()` follows it:
+
+    class Pool:                      # still a plain class
+        def __init__(self, dsn):
+            self.dsn, self.conn = dsn, None
+
+        async def connect(self):
+            self.conn = await asyncpg.connect(self.dsn)
+
+        async def aclose(self):
+            await self.conn.close()
+
+    provide(Pool, "pool", config={"dsn": "db.dsn"}, init="connect")
+
+The service is registered first and the hook runs after, exactly as upstream
+orders it. Nothing observes the half-built object: a fiber that is still loading
+does not resolve for anyone injecting it.
+
+An `async def` factory is refused, with a message naming `init=`. It used to be
+accepted, registering the coroutine object as the service — the same silent
+failure this project cites as reason #1 not to build on iPOPO.
 """
 
 from __future__ import annotations
@@ -132,6 +160,11 @@ CONTEXT_MEMBERS = frozenset(
         "registry", "events", "logger", "baseUrl",
     }
 )
+"""Names that live on every `Context` as methods rather than as services.
+
+`@plugin` subtracts these from a Protocol's members, so a Protocol may describe
+the context calls a plugin makes without those becoming phantom dependencies.
+"""
 
 
 def _inject_from_annotation(target: Callable) -> list[str]:
@@ -247,6 +280,59 @@ def _setup_teardown(obj: Any, close: Any) -> tuple[Any, Callable[[], Any] | None
     return obj, None
 
 
+def _refuse_coroutine(made: Any, label: str) -> None:
+    """Reject a factory that must be awaited, naming the hook that is for it.
+
+    Construction is synchronous, as it is in Cordis: `service.ts` registers the
+    instance from the constructor, and a JavaScript constructor cannot be async.
+    Anything needing an await is a separate phase — the init hook, which the
+    fiber awaits and which holds dependents until it settles. Awaiting the
+    factory here would be a second mechanism for the job the reference does with
+    one, so this refuses instead.
+
+    The coroutine is closed rather than dropped, so the caller sees this error
+    and not a `RuntimeWarning` about a coroutine nobody awaited.
+    """
+    if not inspect.isawaitable(made):
+        return
+    closer = getattr(made, "close", None)
+    if callable(closer):
+        closer()
+    raise TypeError(
+        f"the factory for {label!r} returned a coroutine, and construction here is "
+        f"synchronous. Construct the object without awaiting, and name the part "
+        f'that needs an await with init="connect" (or whichever method): it runs '
+        f"after the service is registered, and dependents wait for it."
+    )
+
+
+def _init_hook(obj: Any, init: Any, label: str) -> Callable[[], Any] | None:
+    """The bound init method named by `init=`, or None."""
+    if init is None:
+        return None
+    if not isinstance(init, str):
+        raise TypeError(f'init= takes a method name, got {init!r}. Try init="connect".')
+    method = getattr(obj, init, None)
+    if not callable(method):
+        raise AttributeError(
+            f"{type(obj).__name__} has no method {init!r} to initialise {label!r} with"
+        )
+    return method
+
+
+async def _initialised(started: Any, dispose: Callable[[], Any] | None):
+    """Await the init hook, then hand the fiber the binding's disposer.
+
+    The fiber awaits an awaitable effect and collects what it returned, so
+    returning this from `apply` keeps the fiber `LOADING` until the component is
+    ready. A dependent cannot see the service meanwhile: `reflect._get_impl`
+    refuses to resolve a name whose fiber is not ACTIVE, which is the guarantee
+    the vendored `test_pending_inject` holds the reference to.
+    """
+    await started
+    return dispose
+
+
 def provide(
     factory: Callable[..., Any],
     service_name: str,
@@ -254,9 +340,10 @@ def provide(
     needs: Any = None,
     config: Mapping[str, Any] | None = None,
     close: Any = None,
+    init: str | None = None,
     name: str | None = None,
     extra: Mapping[str, Any] | None = None,
-):
+) -> dict:
     """Wrap a plain class or factory as a plugin that registers one service.
 
         provide(PostgresDatabase, "database")
@@ -289,6 +376,10 @@ def provide(
         config: constructor kwargs read from `ctx.config`, as `{kwarg: key}` or
             `{kwarg: (key, default)}`.
         close: teardown method name, or False to skip. Auto-detected by default.
+        init: the name of a method to run once the service is registered. It may
+            be async; the fiber waits for it, and dependents do not see the
+            service until it settles. This is where construction that needs an
+            await goes — see the module docstring.
         name: plugin name shown in fiber diagnostics. Defaults to `service_name`.
         extra: literal constructor kwargs, passed through untouched.
 
@@ -333,16 +424,29 @@ def provide(
                 )
             kwargs.update(plugin_config)
 
-        component, closer = _setup_teardown(factory(**kwargs), close)
+        label = name or service_name
+        made = factory(**kwargs)
+        _refuse_coroutine(made, label)
+
+        component, closer = _setup_teardown(made, close)
         ctx.provide(service_name, component)
 
         _watch_config(ctx, config_spec)
 
-        if closer is None:
-            return None
+        dispose = None
+        if closer is not None:
 
-        def dispose():
-            return closer()
+            def dispose():
+                return closer()
+
+        # The init hook runs *after* the service is registered, which is the
+        # order `service.ts` and `fiber.ts` establish: register in the
+        # constructor, then run the init hook and await it.
+        started = _init_hook(component, init, label)
+        if started is not None:
+            result = started()
+            if inspect.isawaitable(result):
+                return _initialised(result, dispose)
 
         return dispose
 

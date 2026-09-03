@@ -56,7 +56,7 @@ and semantic compatibility with a large TypeScript codebase whose documentation
 then applies here.
 
 Those four are also the reason an agent runtime cannot be built on it.
-[Why not build on iPOPO](why-not-ipopo.qmd) tests each one.
+[Why not build on iPOPO](why-not-ipopo.md) tests each one.
 
 ## `pluggy` — a different job
 

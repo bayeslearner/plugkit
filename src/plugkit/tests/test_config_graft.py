@@ -111,3 +111,136 @@ async def test_config_reads_survive_plugin_reload():
         root.config.set("n", value)
     await settle()
     assert applies == ["apply"], "a config change reloaded the plugin"
+
+
+# ── 07: change notification is a watcher, not an effect ──────────────────
+
+
+async def test_watch_calls_back_with_next_and_prev():
+    """The shape the reference settles on: `watch(cb(next, prev)) -> disposer`."""
+    root = await boot(dict={"http": {"timeout": 30}})
+    seen = []
+    root.config.watch("http.timeout", lambda next_, prev: seen.append((next_, prev)))
+
+    root.config.set("http.timeout", 60)
+    await settle()
+    assert seen == [(60, 30)]
+
+    root.config.set("http.timeout", 90)
+    await settle()
+    assert seen == [(60, 30), (90, 60)]
+
+
+async def test_watch_does_not_fire_on_registration():
+    """The caller just read the value; a first application it did not ask for is a surprise."""
+    root = await boot(dict={"http": {"timeout": 30}})
+    seen = []
+    root.config.watch("http.timeout", lambda next_, prev: seen.append(next_))
+    await settle()
+    assert seen == []
+
+
+async def test_watch_is_per_key():
+    root = await boot(dict={"a": 1, "b": 2})
+    seen = []
+    root.config.watch("a", lambda next_, prev: seen.append(next_))
+
+    root.config.set("b", 20)
+    await settle()
+    assert seen == [], "a write to another key woke this watcher"
+
+    root.config.set("a", 10)
+    await settle()
+    assert seen == [10]
+
+
+async def test_watch_needs_no_reactive_service():
+    """Hearing about a change must not cost the caller a second concept."""
+    root = Context()
+    await root.plugin(ConfigService, {"dict": {"http": {"timeout": 30}}})
+    await settle()
+
+    seen = []
+    root.config.watch("http.timeout", lambda next_, prev: seen.append(next_))
+    root.config.set("http.timeout", 60)
+    await settle()
+    assert seen == [60]
+
+
+async def test_watch_dies_with_the_plugin_that_registered_it():
+    root = await boot(dict={"http": {"timeout": 30}})
+    seen = []
+
+    def consumer(ctx, config=None):
+        ctx.config.watch("http.timeout", lambda next_, prev: seen.append(next_))
+
+    consumer.inject = ["config"]
+    fiber = await root.plugin(consumer)
+    await settle()
+
+    root.config.set("http.timeout", 60)
+    await settle()
+    assert seen == [60]
+
+    await fiber.dispose()
+    await settle()
+    root.config.set("http.timeout", 90)
+    await settle()
+    assert seen == [60], "a watcher outlived the plugin that registered it"
+
+
+async def test_an_absent_key_reaches_the_callback_as_its_default():
+    """The MISSING sentinel is an internal; a caller must never see it."""
+    root = await boot(dict={})
+    seen = []
+    root.config.watch("http.timeout", lambda next_, prev: seen.append((next_, prev)), 30)
+
+    root.config.set("http.timeout", 60)
+    await settle()
+    assert seen == [(60, 30)]
+
+
+async def test_async_callbacks_are_serialized_per_watcher():
+    """One watcher never runs twice at once — the reference chains a tail per watcher."""
+    root = await boot(dict={"n": 0})
+    running = 0
+    overlaps = []
+    order = []
+
+    async def slow(next_, prev):
+        nonlocal running
+        running += 1
+        if running > 1:
+            overlaps.append(next_)
+        await asyncio.sleep(0.01)
+        order.append(next_)
+        running -= 1
+
+    root.config.watch("n", slow)
+    root.config.set("n", 1)
+    root.config.set("n", 2)
+    root.config.set("n", 3)
+    await asyncio.sleep(0.1)
+
+    assert overlaps == [], f"a watcher was entered while already running: {overlaps}"
+    assert order == [1, 2, 3], "serialized invocations lost their order"
+
+
+async def test_a_raising_watcher_does_not_break_the_write():
+    """A config write is not where an unrelated plugin's bug should surface."""
+    root = await boot(dict={"n": 0})
+    seen = []
+
+    def boom(next_, prev):
+        raise RuntimeError("watcher is broken")
+
+    root.config.watch("n", boom)
+    root.config.watch("n", lambda next_, prev: seen.append(next_))
+
+    root.config.set("n", 1)
+    await settle()
+    assert seen == [1], "a raising watcher stopped the watchers after it"
+
+    root.config.set("n", 2)
+    await settle()
+    assert seen == [1, 2], "a raising watcher stopped being called after failing"

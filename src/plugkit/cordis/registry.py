@@ -40,6 +40,7 @@ class Inject:
 
     @staticmethod
     def resolve(inject, result: Optional[dict] = None):
+        """Flatten a class's `inject` declaration, parents included, to {name: config}."""
         if result is None:
             result = {}
         if not inject:

@@ -27,10 +27,11 @@ and YAML; only `from_env`/`from_pydantic`/`override` need the package.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
-from ..signals import Signal
+from ..signals import Effect, Signal
 from ..cordis import Service
+from ._watch import Watcher
 
 log = logging.getLogger(__name__)
 
@@ -121,12 +122,12 @@ class ConfigService(Service):
         The default is applied at read time rather than stored, so two callers
         reading the same key with different defaults do not fight.
         """
-        value = self.signal_for(key).get()
+        value = self._signal_for(key).get()
         return default if value is MISSING else value
 
     def require(self, key: str) -> Any:
         """Read a dotted key, raising if it is absent. Reactive."""
-        value = self.signal_for(key).get()
+        value = self._signal_for(key).get()
         if value is MISSING:
             raise KeyError(f"required config key {key!r} is not set")
         return value
@@ -144,7 +145,59 @@ class ConfigService(Service):
         """The whole materialised config. Reactive — wakes on any change."""
         return self._data.get()
 
-    def signal_for(self, key: str) -> Signal:
+    def watch(
+        self, key: str, callback: Callable[[Any, Any], Any], default: Any = None
+    ) -> Callable[[], Any]:
+        """Call `callback(next, prev)` when the value behind `key` changes.
+
+        Returns a disposer owned by the *calling* plugin, so a watcher stops
+        when the plugin that registered it unloads. Nothing here requires
+        `ReactiveService`, and nothing about the Signal underneath reaches the
+        caller — hearing about a change should not cost you a second concept.
+
+            def http(ctx, config=None):
+                ctx.config.watch("http.timeout", lambda next_, prev: client.set(next_))
+            http.inject = ["config"]
+
+        `callback` does **not** run on registration: the caller has just read the
+        value, and a first application it did not ask for is a surprise. Apply it
+        yourself and then watch, which is what the reference's consumers do.
+
+        An async callback is awaited, and invocations of one watcher are
+        serialized — the next change waits for the current one to settle rather
+        than entering the callback twice.
+
+        `default` is applied to both values the way `get()` applies it, so the
+        absent-key sentinel never reaches a caller.
+        """
+        signal = self._signal_for(key)
+        logger = getattr(self.ctx, "logger", None)
+
+        def execute():
+            watcher = Watcher(callback, f"config key {key!r}", logger)
+            previous: list[Any] = []
+
+            def run():
+                raw = signal.get()  # the tracking read; must happen on every run
+                value = default if raw is MISSING else raw
+                if not previous:
+                    previous.append(value)
+                    return
+                prior = previous[0]
+                previous[0] = value
+                watcher.fire(value, prior)
+
+            effect = Effect(run)
+
+            def dispose():
+                watcher.dispose()
+                effect.dispose()
+
+            return dispose
+
+        return self.ctx.effect(execute, f"ctx.config.watch({key!r})")
+
+    def _signal_for(self, key: str) -> Signal:
         """The Signal behind one dotted key, created on first read.
 
         Holds `MISSING` when the key is absent, so "unset" and "set to None"
@@ -170,12 +223,18 @@ class ConfigService(Service):
     # ── loading ───────────────────────────────────────────────────────
 
     def load_dict(self, data: dict) -> None:
+        """Layer a literal dict over what is already loaded."""
         if self._di is not None:
             self._di.from_dict(data)
         self._loaded = _merge(self._loaded, data)
         self._republish()
 
     def load_yaml(self, path: str, *, required: bool = False) -> None:
+        """Layer a YAML file over what is already loaded.
+
+        A missing file is ignored unless `required`. Loading never reverts a
+        value written with `set()`, which lives in a layer above every loader.
+        """
         if self._di is not None:
             self._di.from_yaml(path, required=required)
             self._loaded = _merge(self._loaded, self._di() or {})
