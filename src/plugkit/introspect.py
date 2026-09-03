@@ -33,7 +33,12 @@ __all__ = ["describe", "format_tree", "DIAGNOSTICS"]
 
 #: The point `describe` collects extra per-plugin facts from. A plugin knows
 #: things the kernel cannot — a pool's size, a queue's depth, a token's expiry.
-DIAGNOSTICS = "diagnostics"  #: the extension point name `describe()` reads for diagnostics
+DIAGNOSTICS = "diagnostics"
+"""The extension point `describe()` collects extra per-plugin facts from.
+
+A plugin knows things the kernel cannot — a pool's size, a queue's depth, a
+token's expiry. Contribute a callable to this point and `describe()` calls it.
+"""
 
 
 def _state_name(fiber: Any) -> str:

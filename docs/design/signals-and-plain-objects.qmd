@@ -1,0 +1,139 @@
+---
+title: "Signals and plain objects"
+subtitle: "Can a component hold reactive state without importing a framework — and why the kernel keeps signals at all"
+---
+
+Signals predate `provide()`. They arrived when a component was a class covered in
+decorators, so "the component uses a Signal" and "the component imports the
+reactive library" were the same sentence. Then components became plain objects,
+and the question came back open: does reactive state drag the framework into a
+class that had just been freed of it?
+
+It does not, and this page is the demonstration — followed by the argument for
+keeping signals, which is the part worth re-reading whenever the kernel looks
+like it could be smaller.
+
+## A plain class holds signals, with nothing declared
+
+`reactive` is a service, so it arrives the way every other service arrives: as a
+constructor argument named in `needs`.
+
+```python
+# services/timeouts.py — imports nothing, declares nothing, inherits nothing
+class Timeouts:
+    def __init__(self, reactive, seconds=30):
+        self.seconds = reactive.signal(seconds)
+        self._reactive = reactive
+
+    def follow(self, client):
+        self._reactive.effect(lambda: client.set_timeout(self.seconds.get()))
+```
+
+```python
+# app.py — the only file that knows a kernel exists
+from plugkit import ReactiveService, provide
+
+await root.plugin(ReactiveService)
+await root.plugin(
+    provide(Timeouts, "timeouts", needs=["reactive"], config={"seconds": ("http.timeout", 30)})
+)
+```
+
+No decorator, no base class, no annotation, no `plugkit` import in the component.
+The class is testable with a two-line stand-in, because `reactive` is a parameter
+rather than an ambient facility:
+
+```python
+import types
+from plugkit import Effect, Signal
+
+reactive = types.SimpleNamespace(signal=Signal, effect=Effect)
+timeouts = Timeouts(reactive, seconds=5)
+```
+
+## The effects still die with the plugin
+
+This is the part that would be easy to get wrong, and it works because of the
+rebinding rule: reading a service through a context returns a view whose methods
+are bound to the *reading* context. `provide()` reads `ctx.reactive` inside the
+binding's own fiber, so the object the component stores on `self` is already
+addressed to that fiber.
+
+The consequence is stronger than it first looks. An effect the component
+registers minutes later, from an ordinary method, is still owned by the fiber
+that constructed the component — `follow()` above needs no lifetime plumbing.
+
+Unload is total in both directions:
+
+- effects registered in `__init__` and effects registered from a method both stop
+  when the fiber unloads;
+- registering after the fiber is gone does not leak, it raises —
+  `CordisError: cannot create effect on inactive context`.
+
+`test_binding.py::test_a_plain_component_registers_fiber_owned_effects` is that
+property.
+
+## The one thing a plain class cannot do
+
+Create a *fiber-owned* effect having received nothing. This works, and is fully
+plain:
+
+```python
+from plugkit.signals import Effect        # a standalone library, imports no kernel
+```
+
+but the `Effect` it makes belongs to whoever wrote the line, and the class must
+dispose it in `close()`. That is not a gap to be closed. Ownership has to come
+from somewhere, and the only honest way to get it is to be handed the owner — a
+component that received nothing has nothing to attribute its registrations to.
+Every alternative is an ambient registry, which is the leak this project exists
+to delete.
+
+So, three levels, all of them plain:
+
+| what the class receives | what it can do | who disposes |
+|---|---|---|
+| nothing; `Signal` imported directly | hold reactive state | the class, in `close()` |
+| `reactive` in its constructor | signals, computeds and effects | the fiber, automatically |
+| nothing; `config={...}` on `provide()` | be rebuilt when a value changes | the fiber, automatically |
+
+The third row is worth noticing: a component with no reactive awareness at all
+still participates, because the binding watches the config keys its constructor
+arguments came from and restarts the fiber when one changes.
+
+## Why the kernel keeps signals
+
+The vendored Cordis has exactly one notion of change: a fiber's epoch. Replace a
+service *provider* and every dependent is torn down and re-applied. That is
+correct when an object's identity changed — a dependent holding the old instance
+holds a stale reference — and it is the wrong instrument for a value:
+
+- **Granularity.** Reloading a plugin to observe a new timeout discards live
+  connections, in-flight work and every other registration the plugin made, to
+  propagate one integer. One Signal per config key wakes the readers of that key
+  and nobody else.
+- **The alternative is the leak.** Without signals, "tell me when this changes"
+  becomes a callback list on some service — a subscription whose undo nobody
+  holds. That is precisely the defect the whole kernel exists to make impossible,
+  and it would arrive by the back door.
+- **It makes the coarse mechanism usable.** `provide(config={...})` restarts a
+  binding when the value behind a constructor argument changes. What tells it
+  which bindings care is one Signal per key. Without that, the choice is polling
+  or restarting everything.
+- **It costs the kernel nothing.** `src/plugkit/signals.py` imports nothing from
+  the kernel and `ReactiveService` is an ordinary plugin with no privileged
+  status; a composition that never mounts it never pays for it — bindings still
+  work, they just do not rebuild. Deleting the library would not shrink the
+  kernel by a line. It would move the same work into every application, minus the
+  ownership.
+
+The two mechanisms are not rivals at different quality levels. They answer
+different questions — *identity changed* versus *a value changed* — and each is
+the wrong answer to the other one.
+
+## Related
+
+- [Config and reactivity](../guide/05-config-and-reactivity.qmd) — how to use it
+- [The reactive engine](reactive-engine.qmd) — how `signals.py` works inside
+- [Plain components](../guide/02-popo-components.qmd) — the rebinding rule this
+  page leans on

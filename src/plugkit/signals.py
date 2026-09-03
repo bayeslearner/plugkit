@@ -188,16 +188,6 @@ class Signal(Generic[T]):
             for consumer in snapshot:
                 consumer._notify()
 
-    @property
-    def value(self) -> T:
-        """Property alias for get()."""
-        return self.get()
-
-    @value.setter
-    def value(self, v: T) -> None:
-        """Property alias for set()."""
-        self.set(v)
-
     def __repr__(self) -> str:
         return f"Signal({self._value!r})"
 
@@ -330,10 +320,6 @@ class Computed(_Consumer, Generic[T]):
             self._disposed = True
             self._untrack_all()
             self._subscribers.clear()
-
-    @property
-    def value(self) -> T:
-        return self.get()
 
     def __repr__(self) -> str:
         return f"Computed({self._value!r}, dirty={self._dirty})"
@@ -522,13 +508,16 @@ def is_stale() -> bool:
 
     Useful inside an async effect body to short-circuit voluntarily:
 
-        @effect
-        async def index(self):
-            items = self.rt.items.get()
-            for item in items:
-                await process(item)
-                if is_stale():
-                    return  # newer items arrived; drop the rest
+        def indexer(ctx, config=None):
+            async def index():
+                for item in ctx.config.get("index.items", []):
+                    await process(item)
+                    if is_stale():
+                        return      # newer items arrived; drop the rest
+
+            ctx.reactive.effect(index)
+
+        indexer.inject = ["config", "reactive"]
 
     Returns ``False`` outside any effect, and ``False`` for sync effects
     (sync bodies cannot be superseded mid-execution under the global

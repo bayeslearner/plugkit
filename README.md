@@ -658,15 +658,19 @@ There is no privileged tier.
 | `services.supervision` | `ctx.supervisor` — restart strategies for failed fibers |
 | `services.loader` | `ctx.loader` — mount an application from a YAML file |
 
-Two services need a third-party package. Install them as extras:
+Three extras, each installing something the package imports:
 
 ```bash
+pip install "plugkit[yaml]"      # pyyaml, for YAML config and composition files
 pip install "plugkit[config]"    # dependency-injector, for env and pydantic config
 pip install "plugkit[hmr]"       # watchdog, for hot module replacement
 ```
 
-Both extras degrade rather than fail. Without `config`, `ConfigService` still
-loads dicts and YAML. The test suite runs in both configurations.
+Each degrades rather than fails. Without `config`, `ConfigService` still loads
+dicts and YAML; without `yaml`, it still loads dicts, and a YAML path raises a
+named `ImportError` rather than failing obscurely. The test suite runs in every
+configuration, and `test_no_phantom_extras` fails if an extra ever installs
+something no module imports.
 
 ## Provenance
 
@@ -697,6 +701,14 @@ Everything above the kernel is plugkit's own, and none of it exists upstream:
 
 ## Development
 
+Rebuild the docs:
+
+```bash
+uv run --with quartodoc --extra dev python scripts/build-reference.py   # API reference
+uv run --with markdown --with pygments python scripts/build-guide.py    # one-page guide
+cd docs && quarto render                                                # the site
+```
+
 Run the test suite:
 
 ```bash
@@ -707,6 +719,7 @@ uv run --extra dev --with pyright pytest src/plugkit/tests/test_typing.py
 `--extra dev` carries pytest and `pyyaml`; without it the loader and config-YAML
 tests cannot run. It is the set CI installs.
 
+- The whole guide on one page: [`docs/plugkit-guide.html`](docs/plugkit-guide.html)
 - Architecture: [`docs/design/kernel-architecture.qmd`](docs/design/kernel-architecture.qmd)
 - Project pillars: [`docs/steering/pillars.md`](docs/steering/pillars.md)
 - Current sprint: the head of [`specs/`](specs/)

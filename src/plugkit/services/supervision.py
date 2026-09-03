@@ -102,6 +102,7 @@ class SupervisorService(Service):
         return self.ctx.effect(execute, f"ctx.supervisor.supervise({fiber.name})")
 
     def policy_for(self, fiber) -> Policy | None:
+        """The policy supervising `fiber`, or None if nothing supervises it."""
         entry = self._policies.get(id(fiber))
         return entry[1] if entry else None
 
