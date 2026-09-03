@@ -1,0 +1,12 @@
+{
+  "version": 3,
+  "sourceFile": "CLAUDE.md",
+  "revisions": [
+    {
+      "revision": 0,
+      "snapshotFile": "CLAUDE.rev0.md",
+      "annotationsFile": "rev0.json",
+      "createdAt": "2026-09-02T06:56:25.550Z"
+    }
+  ]
+}

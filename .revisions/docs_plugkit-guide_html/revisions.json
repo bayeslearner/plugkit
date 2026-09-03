@@ -1,0 +1,12 @@
+{
+  "version": 3,
+  "sourceFile": "docs/plugkit-guide.html",
+  "revisions": [
+    {
+      "revision": 0,
+      "snapshotFile": "plugkit-guide.rev0.html",
+      "annotationsFile": "rev0.json",
+      "createdAt": "2026-09-01T23:00:27.552Z"
+    }
+  ]
+}
