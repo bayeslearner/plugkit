@@ -14,3 +14,6 @@ docs/.quarto/
 .claude/scheduled_tasks.lock
 .claude/
 .vscode/
+
+# Snapshots written by a Markdown review tool; git history is the record.
+.revisions/
